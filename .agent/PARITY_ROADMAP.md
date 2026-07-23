@@ -60,6 +60,16 @@ del singolo slot = f(|velocità del suo spring|). Naturalmente:
 
 Questo **sostituisce** anche `inputActivity` (diventa emergente) e **abilita lo stagger** (B).
 
+**Evidenza (confronto frame ref vs nostro, spam veloce):** il ref differenzia il blur per
+cifra — unità molto sfocate, decine poco, e lo smear è grigio "spalmato" ma **leggibile**,
+ogni cifra nella sua colonna. Il nostro `inputActivity` uniforme mette **tutte** le cifre
+changed al blur massimo → due colonne scure adiacenti si **fondono in un blob nero**
+illeggibile. È la prova concreta che serve il blur per-cifra (A).
+
+> **Mitigazione immediata (1 riga, prima di A):** abbassare il tetto del blur sostenuto in
+> `drawPerGlyph`, es. `max(velocityBlur, inputActivity * 0.5f)` (nuovo knob `sustainedBlurCeiling`),
+> così durante lo spam non satura in blob nero e resta leggibile. Palliativo finché non c'è A.
+
 **Nodi implementativi (non banali):**
 - **Chiave stabile per slot = ancorata a DESTRA (`index_from_right`).** NON l'indice
   nell'array (cambia con la lunghezza). Convenzione:
@@ -121,6 +131,25 @@ micro-oscillazioni orizzontali sulle cifre che dovrebbero restare ferme. `tnum` 
 larghezza tabulare), **non interpolare X**: fissarla. Interpolare la X solo per lo shift globale
 dovuto alla comparsa di un separatore/segno a sinistra. In pratica: calcolare le posizioni slot
 right-aligned e tenerle stabili; muovere solo l'origine complessiva.
+
+### F. Scala di profondità / cylinder roll (tocco finale) — richiesto dall'utente
+**Cosa.** In SwiftUI la cifra non trasla solo in 2D: la **uscente** scala `1.0 → ~0.85` mentre
+sale/scende e sfoca; la **entrante** nasce a `~0.85` e torna a `1.0` agganciandosi alla baseline.
+Più un leggero **squash/stretch verticale** legato alla velocità/overshoot della molla (si stira
+in moto, si contrae all'atterraggio). L'insieme **Blur + Scale-down + Alpha** fa percepire la
+cifra come un oggetto che ruota su un cilindro 3D dietro lo schermo / si allontana in profondità.
+Oggi la scala X/Y resta `1.0` → il moto sembra una **ghigliottina 2D** e il blur pare un
+"difetto di rendering" invece di una rotazione.
+
+**Soluzione.** Scala basata sul progress, pivot al centro:
+- `outgoingScale = lerp(1.0, 0.85, progress)` sul layer OLD;
+- `incomingScale = lerp(0.85, 1.0, progress)` sul layer NEW;
+- opzionale squash/stretch: `scaleY` leggermente ≠ `scaleX`, legato a `|springVelocity|`.
+
+Implementazione **pulita e cheap**: i layer directional-blur sono già `RenderNode` separati
+(old/new) → usare `node.setScaleY(...)` / `setScaleX(...)` + `setPivotX/Y` (pivot = centro della
+regione changed). **Niente transform per-glifo in `onDraw`.** Con le molle per-slot (A) la scala
+diventa per-cifra. Costo/rischio basso: 2 setter sui nodi esistenti.
 
 ### E. Rifiniture / decisioni aperte
 - **`animationDuration` → deprecare (DECISO).** In SwiftUI `.numericText()` non è a tempo: è
