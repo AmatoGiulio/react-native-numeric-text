@@ -1,6 +1,5 @@
 package com.numerictext
 
-import android.graphics.Color
 import com.facebook.react.module.annotations.ReactModule
 import com.facebook.react.uimanager.SimpleViewManager
 import com.facebook.react.uimanager.ThemedReactContext
@@ -18,21 +17,77 @@ class NumericTextViewManager : SimpleViewManager<NumericTextView>(),
     mDelegate = NumericTextViewManagerDelegate(this)
   }
 
-  override fun getDelegate(): ViewManagerDelegate<NumericTextView>? {
-    return mDelegate
-  }
+  override fun getDelegate(): ViewManagerDelegate<NumericTextView>? = mDelegate
 
-  override fun getName(): String {
-    return NAME
-  }
+  override fun getName(): String = NAME
 
-  public override fun createViewInstance(context: ThemedReactContext): NumericTextView {
+  override fun createViewInstance(context: ThemedReactContext): NumericTextView {
     return NumericTextView(context)
   }
 
-  @ReactProp(name = "color")
-  override fun setColor(view: NumericTextView?, color: Int?) {
-    view?.setBackgroundColor(color ?: Color.TRANSPARENT)
+  @ReactProp(name = "value")
+  override fun setValue(view: NumericTextView?, value: Double) {
+    view?.setValue(value)
+  }
+
+  @ReactProp(name = "direction")
+  override fun setDirection(view: NumericTextView?, direction: String?) {
+    view?.setDirection(direction ?: "automatic")
+  }
+
+  @ReactProp(name = "locale")
+  override fun setLocale(view: NumericTextView?, locale: String?) {
+    view?.setLocale(locale ?: "en-US")
+  }
+
+  @ReactProp(name = "animationDuration")
+  override fun setAnimationDuration(view: NumericTextView?, value: Double) {
+    view?.setAnimationDuration(value)
+  }
+
+  @ReactProp(name = "useGrouping")
+  override fun setUseGrouping(view: NumericTextView?, value: Boolean) {
+    view?.setUseGrouping(value)
+  }
+
+  @ReactProp(name = "minimumFractionDigits")
+  override fun setMinimumFractionDigits(view: NumericTextView?, value: Int) {
+    view?.setMinimumFractionDigits(value)
+  }
+
+  @ReactProp(name = "maximumFractionDigits")
+  override fun setMaximumFractionDigits(view: NumericTextView?, value: Int) {
+    view?.setMaximumFractionDigits(value)
+  }
+
+  @ReactProp(name = "reduceMotion")
+  override fun setReduceMotion(view: NumericTextView?, mode: String?) {
+    view?.setReduceMotion(mode ?: "system")
+  }
+
+  @ReactProp(name = "fontSize")
+  override fun setFontSize(view: NumericTextView?, value: Float) {
+    view?.setFontSize(value)
+  }
+
+  @ReactProp(name = "fontWeight")
+  override fun setFontWeight(view: NumericTextView?, weight: String?) {
+    view?.setFontWeight(weight ?: "normal")
+  }
+
+  @ReactProp(name = "textColor")
+  override fun setTextColor(view: NumericTextView?, color: Int?) {
+    view?.setTextColor(color ?: android.graphics.Color.BLACK)
+  }
+
+  @ReactProp(name = "debugTransitionStrategy")
+  override fun setDebugTransitionStrategy(view: NumericTextView?, strategy: String?) {
+    view?.setDebugTransitionStrategy(strategy ?: "")
+  }
+
+  @ReactProp(name = "debugManualProgress")
+  override fun setDebugManualProgress(view: NumericTextView?, progress: Double) {
+    view?.setDebugManualProgress(progress.toFloat())
   }
 
   companion object {
