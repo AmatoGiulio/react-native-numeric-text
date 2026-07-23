@@ -61,16 +61,30 @@ del singolo slot = f(|velocità del suo spring|). Naturalmente:
 Questo **sostituisce** anche `inputActivity` (diventa emergente) e **abilita lo stagger** (B).
 
 **Nodi implementativi (non banali):**
-- Stato per-slot che sopravvive tra i frame/piani: mappare gli slot per *posizione logica*
-  (es. "unità", "decine", "separatore migliaia") non per indice nell'array (l'array cambia con
-  la lunghezza). Serve una chiave stabile per slot.
-- Il renderer batcha oggi tutti gli slot changed in 1 `RenderNode` con 1 raggio di blur:
-  per-slot blur → o N RenderNode (uno per slot, con proprio `RenderEffect`) o raggruppare per
-  raggio simile. Perf: poche cifre changed, accettabile; misurare.
-- Gestire nascita/morte slot (cambio lunghezza) con molle che entrano/escono.
+- **Chiave stabile per slot = ancorata a DESTRA (`index_from_right`).** NON l'indice
+  nell'array (cambia con la lunghezza). Convenzione:
+  ```
+  position_0 → sempre unità
+  position_1 → sempre decine
+  position_2 → sempre centinaia
+  position_3 → migliaia / primo separatore
+  ...
+  ```
+  Così le molle delle posizioni basse (0..k) mantengono la loro fisica indipendente anche
+  quando cambia la lunghezza. Un **nuovo slot che nasce a sinistra** (es. decine di migliaia in
+  `9,999 → 10,000`) parte con `scale/alpha = 0`, target `1.0`, **senza disturbare** le molle
+  0..k già in moto. Uno slot che muore (decremento di lunghezza) fa il percorso inverso.
+- **Perf — pool di `RenderNode` a livello di vista.** Il renderer batcha oggi tutti gli slot
+  changed in 1 `RenderNode`; per-slot blur → più nodi. **MAI** `RenderNode()` o
+  `RenderEffect.createBlurEffect()` dentro `onDraw`/`drawPerGlyph`: allocare/riciclare i nodi
+  come campi della vista (pool indicizzato per `index_from_right`), e per-frame **aggiornare
+  solo i parametri** (`setPosition`, re-record, `setRenderEffect` col nuovo raggio). Valutare
+  anche il raggruppamento di slot con raggio simile in un solo nodo. Profilare `onDraw`.
+- Gestire nascita/morte slot (cambio lunghezza) con molle che entrano/escono (vedi sopra).
 
 > Stima: è un refactor del driver + renderer. Da fare con un test di logica per lo scheduler
-> per-slot (matching + retarget) prima di cablare il disegno.
+> per-slot (matching per `index_from_right` + retarget + nascita/morte) prima di cablare il
+> disegno. `inputActivity` diventa emergente e va rimosso.
 
 ### B. Staggering / cascata (#5) — richiesto dall'utente
 **Cosa.** Ritardo progressivo **destra→sinistra**, ~**10–15 ms per cifra**, così un cambio
@@ -109,9 +123,10 @@ dovuto alla comparsa di un separatore/segno a sinistra. In pratica: calcolare le
 right-aligned e tenerle stabili; muovere solo l'origine complessiva.
 
 ### E. Rifiniture / decisioni aperte
-- **`animationDuration` ignorato:** ora il timing lo detta `springStiffness`. Decidere se
-  rimappare il prop `animationDuration` → stiffness (`k ≈ (4/(ratio·durata))²`) o deprecarlo a
-  favore di prop spring espliciti (`stiffness`, `dampingRatio`).
+- **`animationDuration` → deprecare (DECISO).** In SwiftUI `.numericText()` non è a tempo: è
+  guidata interamente dalla molla di sistema. Per la parità 1:1: **ignorare/deprecare
+  `animationDuration`** (tenerlo solo come eventuale fallback se la fisica è disabilitata) ed
+  esporre invece prop **espliciti `stiffness` e `dampingRatio`**. Non rimappare durata→stiffness.
 - **Direzione (segno):** NON è un bug — i test `newOffset_*` provano incremento=dal basso (su),
   decremento=dall'alto (giù). Se on-device sembra invertito, è un solo cambio di segno di
   `currentDirection`, ma prima verificare con incremento singolo lento.
