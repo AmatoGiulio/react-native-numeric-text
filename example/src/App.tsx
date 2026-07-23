@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useRef, useEffect } from 'react';
 import { View, Text, Pressable, ScrollView, StyleSheet } from 'react-native';
 import { NumericText } from 'react-native-numeric-text';
 
@@ -30,9 +30,20 @@ export default function App() {
     undefined
   );
 
-  const update = useCallback((next: number) => {
-    setValue(next);
+  // Press-and-hold auto-repeat, so +/- can reproduce the fast-spam (rapid roll) behaviour.
+  const holdRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const startHold = useCallback((dir: number) => {
+    setValue((v) => v + dir);
+    if (holdRef.current) clearInterval(holdRef.current);
+    holdRef.current = setInterval(() => setValue((v) => v + dir), 30);
   }, []);
+  const stopHold = useCallback(() => {
+    if (holdRef.current) {
+      clearInterval(holdRef.current);
+      holdRef.current = null;
+    }
+  }, []);
+  useEffect(() => () => stopHold(), [stopHold]);
 
   const runStress = useCallback(() => {
     setValue(100);
@@ -72,15 +83,17 @@ export default function App() {
       <View style={styles.buttonsRow}>
         <Pressable
           style={styles.circleBtn}
-          onPress={() => update(value - 1)}
-          accessibilityLabel="Decrement"
+          onPressIn={() => startHold(-1)}
+          onPressOut={stopHold}
+          accessibilityLabel="Decrement (hold to repeat)"
         >
           <Text style={styles.circleBtnText}>−</Text>
         </Pressable>
         <Pressable
           style={styles.circleBtn}
-          onPress={() => update(value + 1)}
-          accessibilityLabel="Increment"
+          onPressIn={() => startHold(1)}
+          onPressOut={stopHold}
+          accessibilityLabel="Increment (hold to repeat)"
         >
           <Text style={styles.circleBtnText}>+</Text>
         </Pressable>

@@ -53,6 +53,26 @@ class NumericTextView(context: Context) : View(context) {
   private var currentDirection: Int = 1
   private var animationProgress: Float = 1f
   private var animator: ValueAnimator? = null
+
+  // Spring driver state. `springValue` is the progress (0→1, may overshoot >1 for the
+  // bounce); `springVelocity` is preserved across retargets for inertia continuity.
+  private var springValue: Float = 1f
+  private var springVelocity: Float = 0f
+  private var lastTickNanos: Long = 0L
+  private var lastValueChangeNanos: Long = 0L
+  // 0→1 "burst activity": rises when values arrive faster than a transition can settle, so
+  // the changing digits stay blurred during a rapid hold (like SwiftUI) and only sharpen
+  // once input stops. Unchanged digits are anchors and stay sharp regardless.
+  private var inputActivity: Float = 0f
+  private val burstGapSeconds: Float = 0.15f   // inputs closer than this count as a burst
+  private val activityDecaySeconds: Float = 0.18f // how long blur lingers after input stops
+  // Knobs — tune against iOS. dampingRatio < 1 gives the snappy overshoot; stiffness sets
+  // how fast it settles (~4/(ratio·√stiffness) seconds).
+  private val springStiffness: Float = 320f
+  private val springDampingRatio: Float = 0.7f
+  // Velocity (progress units/s) that maps to full blur. Higher spring velocity — e.g. an
+  // inherited rapid-hold — pushes blur toward max, like SwiftUI.
+  private val blurVelocityRef: Float = 8f
   private var formatter: NumberFormat? = null
   private var currentFormatterLocale: Locale? = null
   private var currentGroupSep: Char = ','
@@ -91,7 +111,7 @@ class NumericTextView(context: Context) : View(context) {
   // Two central visual knobs — tune against on-device iOS comparison.
   // travelFactor: vertical roll as a fraction of line-height. The SwiftUI roll is subtle;
   //   most of the "motion" read comes from the blur, not the travel.
-  private val travelFactor = 0.32f
+  private val travelFactor = 0.42f
   // blurFactor: peak blur radius as a fraction of line-height. This is the dominant effect.
   private val blurFactor = 0.18f
   // Extra height (per side, × line-height) reserved so the blur/roll can breathe.
@@ -108,7 +128,7 @@ class NumericTextView(context: Context) : View(context) {
   override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
     val fm = textPaint.fontMetrics
     val textHeight = fm.descent - fm.ascent
-    val desiredWidth = if (animator != null && activePlan != null && animationProgress < 1f) {
+    val desiredWidth = if (animator != null && activePlan != null) {
       ceil(max(activePlan!!.oldWidth, activePlan!!.newWidth) + paddingLeft + paddingRight).toInt()
     } else {
       val t = if (settledText.isNotEmpty()) settledText else "0"
@@ -158,7 +178,8 @@ class NumericTextView(context: Context) : View(context) {
 
     val progress = resolveProgress()
     val scrubbing = debugManualProgress >= 0f
-    val settledLike = progress >= 1f || animator == null
+    // Key off the animator, not the progress value — the spring overshoots past 1 mid-bounce.
+    val settledLike = animator == null
 
     // Per-glyph is the default, faithful path.
     if (resolveStrategy() == TransitionStrategy.PER_GLYPH) {
@@ -340,20 +361,30 @@ class NumericTextView(context: Context) : View(context) {
 
   private fun drawPerGlyph(canvas: Canvas, plan: TransitionPlan, progress: Float) {
     val bl = baselineY(height / 2f)
-    val hProg = TransitionLogic.layoutInterpolation(progress)
+    // `progress` (spring value) can overshoot >1 for the bounce; clamp for layout/alpha,
+    // use raw for the vertical offset so the new glyph springs slightly past its baseline.
+    val pClamped = progress.coerceIn(0f, 1f)
+    val hProg = TransitionLogic.layoutInterpolation(pClamped)
 
     val oldLeftView = (width - plan.oldWidth) / 2f
     val newLeftView = (width - plan.newWidth) / 2f
 
     val oldOffset = TransitionLogic.computeOldOffset(currentDirection, travel, progress)
     val newOffset = TransitionLogic.computeNewOffset(currentDirection, travel, progress)
-    val oldAlpha = (255 * TransitionLogic.oldOpacity(progress)).toInt().coerceIn(0, 255)
-    val newAlpha = (255 * TransitionLogic.newOpacity(progress)).toInt().coerceIn(0, 255)
-    // Blur radius scales with the glyph height (a fixed px radius is invisible on a large
-    // glyph). This soft smear — not the small vertical travel — is what sells the effect.
+    val oldAlpha = (255 * (1f - pClamped)).toInt().coerceIn(0, 255)
+    val newAlpha = (255 * pClamped).toInt().coerceIn(0, 255)
+    // Blur radius scales with glyph height (a fixed px radius is invisible on a large glyph)
+    // AND with the spring's velocity — fast motion (incl. inherited rapid-hold inertia)
+    // blurs more, sharp at rest. This velocity coupling is the SwiftUI "buttery" cue.
     val maxBlur = getTextHeight() * blurFactor
-    val oldRadius = maxBlur * TransitionLogic.blurEnvelope(progress)
-    val newRadius = maxBlur * TransitionLogic.newBlurEnvelope(progress)
+    val blurAmount =
+      if (debugManualProgress >= 0f) TransitionLogic.blurEnvelope(progress) // freeze-frame: position-based
+      else maxOf(
+        (kotlin.math.abs(springVelocity) / blurVelocityRef).coerceIn(0f, 1f), // single-step pulse
+        inputActivity // sustained during a fast hold
+      )
+    val oldRadius = maxBlur * blurAmount
+    val newRadius = maxBlur * blurAmount
 
     fun slotCx(slot: GlyphSlot): Float = when {
       slot.oldToken != null && slot.newToken != null -> {
@@ -549,7 +580,13 @@ class NumericTextView(context: Context) : View(context) {
   // ── Public setters ──
 
   fun setValue(newValue: Double) {
+    val now = System.nanoTime()
+    val gap = if (lastValueChangeNanos == 0L) Float.MAX_VALUE else (now - lastValueChangeNanos) / 1_000_000_000f
     numericValue = newValue
+    lastValueChangeNanos = now
+    // Two inputs within burstGap → we're in a fast hold; hold blur high. Isolated taps keep
+    // the natural velocity-driven pulse.
+    if (gap < burstGapSeconds) inputActivity = 1f
     if (!hasSettledOnce) {
       hasSettledOnce = true; settledValue = newValue; settledText = formatNumber(newValue)
       animationProgress = 1f; activePlan = null; perGlyphPlan = null
@@ -557,7 +594,9 @@ class NumericTextView(context: Context) : View(context) {
     }
     // Mid-flight update → retarget the running transition for continuity, instead of
     // cancelling and restarting from rest (which reads as staccato on a rapid hold).
-    if (animator != null && animationProgress < 1f) { retargetTransition(); return }
+    // Guard on the animator only: the spring value overshoots past 1 during the bounce,
+    // and a restart there would snap the display back to the segment origin.
+    if (animator != null) { retargetTransition(); return }
 
     val dir = when (numericDirection) {
       "up" -> 1; "down" -> -1
@@ -624,6 +663,8 @@ class NumericTextView(context: Context) : View(context) {
     if (debugManualProgress >= 0f) debugPlan = plan
     currentDirection = dir
     animationProgress = 0f
+    springValue = 0f
+    springVelocity = 0f
     completionFired = false
 
     if (!shouldAnimate()) { settleTo(newFormatted); return }
@@ -631,20 +672,46 @@ class NumericTextView(context: Context) : View(context) {
     val needsLayout = max(plan.oldWidth, plan.newWidth) > measuredWidth || plan.newWidth != plan.oldWidth
     if (needsLayout) requestLayout()
 
+    startSpringTicker()
+  }
+
+  // A ValueAnimator used only as a per-frame clock; the spring is integrated by real dt.
+  private fun startSpringTicker() {
+    if (animator != null) return
+    lastTickNanos = 0L
     val anim = ValueAnimator.ofFloat(0f, 1f)
-    anim.duration = animationDurationMs
+    anim.duration = 100_000L
+    anim.repeatCount = ValueAnimator.INFINITE
     anim.interpolator = LinearInterpolator()
-    anim.addUpdateListener { a -> animationProgress = a.animatedFraction; invalidate() }
-    // Settle to whatever the latest value is at completion (a retarget may have moved it).
-    pendingCompletion = {
-      if (!completionFired) { completionFired = true; settleTo(formatNumber(numericValue)) }
-    }
-    anim.addListener(object : AnimatorListenerAdapter() {
-      override fun onAnimationEnd(a: Animator) { pendingCompletion?.invoke() }
-      override fun onAnimationCancel(a: Animator) {}
-    })
+    anim.addUpdateListener { tickSpring() }
     animator = anim
     anim.start()
+  }
+
+  private fun tickSpring() {
+    val now = System.nanoTime()
+    if (lastTickNanos == 0L) { lastTickNanos = now; return }
+    val dt = ((now - lastTickNanos) / 1_000_000_000f).coerceIn(0f, 1f / 30f)
+    lastTickNanos = now
+
+    inputActivity = (inputActivity - dt / activityDecaySeconds).coerceAtLeast(0f)
+
+    val (x, v) = TransitionLogic.springStep(
+      springValue, springVelocity, 1f, springStiffness, springDampingRatio, dt
+    )
+    springValue = x
+    springVelocity = v
+    animationProgress = x
+
+    // Settled: near the goal AND slow AND no value change in the last ~160ms. The last
+    // condition keeps the ticker alive during a rapid hold, so each press re-bases and
+    // rolls continuously instead of settling and dead-starting between presses.
+    val quiet = (now - lastValueChangeNanos) > 160_000_000L
+    if (x >= 1f && quiet && kotlin.math.abs(x - 1f) < 0.002f && kotlin.math.abs(v) < 0.02f) {
+      if (!completionFired) { completionFired = true; springValue = 1f; springVelocity = 0f; settleTo(formatNumber(numericValue)) }
+      return
+    }
+    invalidate()
   }
 
   // Mid-flight retarget: keep the burst origin (settled value) and the running animator
@@ -652,6 +719,14 @@ class NumericTextView(context: Context) : View(context) {
   // becomes ONE continuous roll instead of restarting on every tick. The blur is high while
   // the target keeps moving, so the target swap is not visible.
   private fun retargetTransition() {
+    // If the current segment already reached its end (spring at/over 1), commit it and roll
+    // the new target from the start, carrying velocity. Seamless because the finished value
+    // is exactly what's on screen — this is what keeps a sustained hold flowing.
+    if (springValue >= 1f) {
+      activePlan?.let { settledValue = it.newValue; settledText = it.newFormatted }
+      springValue = (springValue - 1f).coerceAtLeast(0f)
+    }
+
     val oldFormatted = settledText
     val newFormatted = formatNumber(numericValue)
     if (newFormatted == oldFormatted) {
@@ -696,7 +771,10 @@ class NumericTextView(context: Context) : View(context) {
     animationProgress = 1f; activePlan = null; pendingCompletion = null
     // Keep the per-glyph plan alive while debug-scrubbing so the freeze-frame renders.
     if (debugManualProgress < 0f) { debugPlan = null; perGlyphPlan = null }
-    updateContentDescription(); invalidate(); animator = null
+    springValue = 1f; springVelocity = 0f; inputActivity = 0f
+    updateContentDescription(); invalidate()
+    // Stop the (infinite) spring ticker; remove the listener first so no further tick fires.
+    val a = animator; animator = null; a?.removeAllListeners(); a?.cancel()
     val dw = ceil(textPaint.measureText(text) + paddingLeft + paddingRight).toInt().coerceAtLeast(suggestedMinimumWidth)
     if (measuredWidth != dw) requestLayout()
   }

@@ -142,10 +142,36 @@ smootherstep ha velocità 0 agli estremi → chaining = scatto). Il blur alto du
 nasconde lo swap del target. Limite noto: per hold più lunghi di `animationDurationMs`
 l'animator completa e ri-parte (breve re-pulse ~ogni durata), non un flusso infinito.
 
+Spring driver (**risolto**): sostituito animator lineare + smootherstep con una molla vera
+(`TransitionLogic.springStep`, integrazione semi-implicita di Eulero, ticker `ValueAnimator`
+infinito che integra per dt reale). `springValue` è il progress (può superare 1 = overshoot),
+`springVelocity` è **preservato tra i retarget** → continuità d'inerzia (#6). `dampingRatio 0.7`
+→ leggero overshoot/bounce sull'atterraggio della cifra (#4). Il **blur è guidato dalla
+velocità** della molla (`|v|/blurVelocityRef`) invece che da una bell fissa → più moto = più
+blur, nitido a riposo (#2). `travelFactor 0.32→0.42` per rendere leggibile la direzione (#1).
+Test: `spring_settlesToGoal`, `spring_underdamped_overshoots`, `spring_criticallyDamped_*`.
+
+Direzione (#1): **non è un bug di segno** — i test `newOffset_*` provano incremento=dal basso
+(su), decremento=dall'alto (giù). L'illeggibilità era travel piccolo + blur simmetrico.
+
+Blur durante spam veloce (analisi frame ref, ~500 cambi/s): il blur del target è
+**per-cifra e velocity-based** — le cifre veloci (unità/decine) restano sfocate in continuo,
+quelle lente (migliaia/centinaia) restano **nitide**. Non è "tutto sfocato". Nel nostro
+modello le cifre alte sono già ancore nitide; mancava mantenere sfocate le cifre che cambiano
+durante un hold veloce (il blur pulsava una volta per segmento coalescato). **Risolto** con
+`inputActivity`: segnale 0→1 che sale quando gli input arrivano più fitti di `burstGapSeconds`
+(150ms) e decade in `activityDecaySeconds` (180ms). `blur = max(velocityBlur, inputActivity)`.
+Tap isolati → pulse naturale; hold veloce → blur sostenuto sulle cifre che cambiano, nitido
+quando l'input si ferma. Esempio: `+/-` ora fanno **auto-repeat on hold** (30ms) per riprodurre
+lo spam del ref.
+
 Prossimi passi (non fatti, evidence-driven su device):
-- confermare il **segno** della direzione (up/down) e tarare `travelFactor`/`blurFactor` vs iOS;
-- valutare spring reale con preservazione di velocità (oggi smootherstep su animator lineare);
-  eliminerebbe anche il re-pulse sui hold molto lunghi.
+- **stagger/cascata (#5)** + **per-slot springs**: molla indipendente per slot darebbe il blur
+  per-cifra fisico (unità sempre in moto) e lo sfasamento destra→sinistra. È la resa più
+  fedele ma è un refactor del renderer (progress/velocità per-slot, matching slot tra frame).
+- **anchoring orizzontale (#3)**: le ancore interpolano X (`oldX→newX`) durante i cambi di
+  larghezza → micro-shift. Fissare X per le cifre che restano nello stesso slot.
+- tarare `burstGapSeconds`/`activityDecaySeconds`/`springStiffness`/`blurVelocityRef` vs iOS.
 
 ## 6. Confronto = prova, non intuizione
 

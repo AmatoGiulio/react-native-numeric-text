@@ -1,6 +1,7 @@
 package com.numerictext
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class TransitionLogicTest {
@@ -318,6 +319,35 @@ class TransitionLogicTest {
     assertEquals(3, plan.slots.count { it.oldToken?.text == "9" && it.newToken?.text == "0" })
     assertEquals(true, plan.slots.any { it.oldToken == null && it.newToken?.text == "1" })
     assertEquals(true, plan.slots.any { it.oldToken == null && it.newToken?.text == "," })
+  }
+
+  // --- Spring driver ---
+
+  private fun runSpring(dampingRatio: Float, steps: Int = 800): Pair<Float, Float> {
+    var x = 0f; var v = 0f; var maxX = 0f
+    repeat(steps) {
+      val (nx, nv) = TransitionLogic.springStep(x, v, 1f, 320f, dampingRatio, 1f / 120f)
+      x = nx; v = nv; if (x > maxX) maxX = x
+    }
+    return Pair(x, maxX)
+  }
+
+  @Test
+  fun spring_settlesToGoal() {
+    val (x, _) = runSpring(0.7f)
+    assertEquals(1f, x, 0.01f)
+  }
+
+  @Test
+  fun spring_underdamped_overshoots() {
+    val (_, maxX) = runSpring(0.7f)
+    assertTrue("expected overshoot past 1.0, got $maxX", maxX > 1.0f)
+  }
+
+  @Test
+  fun spring_criticallyDamped_doesNotOvershoot() {
+    val (_, maxX) = runSpring(1.0f)
+    assertTrue("expected no overshoot, got $maxX", maxX <= 1.001f)
   }
 
   @Test

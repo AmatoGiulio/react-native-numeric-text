@@ -8,6 +8,7 @@ import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.sin
+import kotlin.math.sqrt
 
 enum class TokenKind {
   DIGIT, GROUP_SEPARATOR, DECIMAL_SEPARATOR, SIGN, OTHER
@@ -156,10 +157,26 @@ object TransitionLogic {
     return t * t * t * (t * (t * 6f - 15f) + 10f)
   }
 
-  // Old and new glyph share ONE eased motion so the pair translates as a rigid strip
-  // (odometer feel), instead of drifting apart.
-  fun oldMotion(progress: Float): Float = smootherstep(progress)
-  fun newMotion(progress: Float): Float = smootherstep(progress)
+  // Identity: the easing now comes from the spring driver (see springStep), which also
+  // lets the value overshoot past 1 → the new glyph springs slightly past its resting
+  // baseline and settles back (the underdamped "bounce"). Old/new share it → rigid strip.
+  fun oldMotion(progress: Float): Float = progress
+  fun newMotion(progress: Float): Float = progress
+
+  // Semi-implicit Euler step of a unit-mass spring toward `goal`. Returns (value, velocity).
+  // dampingRatio < 1 → underdamped (overshoot + settle); ~1 → critically damped.
+  // Velocity is preserved across retargets by feeding it back in — that is what gives the
+  // continuous, inertia-carrying feel on rapid updates.
+  fun springStep(
+    value: Float, velocity: Float, goal: Float,
+    stiffness: Float, dampingRatio: Float, dt: Float
+  ): Pair<Float, Float> {
+    val damping = 2f * dampingRatio * sqrt(stiffness)
+    val accel = -stiffness * (value - goal) - damping * velocity
+    val v = velocity + accel * dt
+    val x = value + v * dt
+    return Pair(x, v)
+  }
 
   // Complementary crossfade: both glyphs ~0.5 at the midpoint → heavy overlap so the
   // blurred old + blurred new read as a single soft smear.
