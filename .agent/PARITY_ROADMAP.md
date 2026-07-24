@@ -82,6 +82,44 @@ implementati AL CONTRARIO):
 **Da riverificare a video (solo Android)**: la cascata left→right e la direzione del roll sono le
 due correzioni percettivamente più grandi.
 
+### Regola direzionale DIMOSTRATA (analisi 60fps di 0→-1, -1→0, 99→100, 10→9)
+La direzione verticale è **GLOBALE per transizione** (= `countsDown`, dal confronto vecchio/nuovo
+valore del numero INTERO), mai per-cifra: numero ↑ → tutto arriva dall'alto ed esce in basso;
+numero ↓ → viceversa. Prova chiave: `0→-1` (numero scende, cifra 0→1 "sale") rotola nel verso del
+DECREMENTO. Il "diagonale" di `10→9` = verticale globale + reflow orizzontale per-posizione.
+Le ricreazioni web (shizukushq/numeric-text) usano 3 sezioni LCP, NON fedeli — ignorarle.
+
+### Iterazione android-8 → grid: direzione OK, mancano durata + sequencing (Passo 2 fatto)
+Grid `grid8_*`: direzione/spawn corretti ✓. Gap: (a) durata ~metà di iOS; (b) niente ordine
+interno — iOS su `10→9` fa exit "1" → enter "9" (dal basso, "0" ancora NITIDO) → exit "0" per
+ultimo; (c) anchor scivola troppo presto. → Implementato:
+- **Classificatore STRUTTURALE**: se cambia il conteggio delle cifre intere, una colonna che
+  cambia carattere diventa EXIT+ENTER **indipendenti** (niente roll accoppiato); struttura
+  stabile → roll come prima. Criterio sulla struttura numerica, NON sulla larghezza px.
+- **Cascata di fasi unificata**: exit e enter di ogni slot = fasi separate ordinate per X
+  (left→right), `exitDelay`/`delay` indipendenti → l'ordine iOS emerge dalla geometria.
+- Durate: `exitDuration 0.26→0.40`, `enterDuration 0.30→0.44`, `stagger 0.03→0.05`,
+  `anchorLagStart 0.35→0.5`.
+Da riverificare a video con grid su `10→9`, `1→1.5`, `999→1,000`.
+
+### Iterazione android-11 — VALIDATA (grid + zoom blur)
+Stato committato. Tutti gli eventi chiave ora combaciano strutturalmente con iOS:
+- `9,999→1` / `2,600→9`: fade sul posto left→right, macchia dell'entrante a metà evento (~f17 vs
+  f13 iOS), durata ~23 frame ≈ iOS. Fix determinanti: exit CONGELATI alla posizione vecchia
+  (+ deriva outward 0.18) — prima cavalcavano la contrazione e collassavano al centro; ordinamento
+  fasi in spazio CENTRO-RELATIVO (exit nel layout old, enter nel new → l'1 si interleava
+  correttamente: 9→,→9→ENTER 1→9→9); enter su stagger COMPRESSO (0.4×, `enterCascadeCompression`)
+  perché iOS fa comparire la macchia entrante presto, non al suo turno posizionale.
+- `1→1.5`: l'1 SCIVOLA (clock di reflow dedicato `layoutP` 0.40s — la molla globale lo faceva
+  saltare in 2 frame), `.5` nasce come macchia e si mette a fuoco. Residuo: iOS sequenzia
+  `.` poi `5`, noi quasi insieme.
+- `10→9`: exit 1 → enter 9 (0 ancora nitido) → exit 0 per ultimo ✓.
+- **Blur = bolla** (zoom pixel-level): NON è un limite Android, era calibro. 3 fix: raggio
+  `blurFactor 0.12→0.16`, quasi-isotropo (radiusX `0.35→0.85`·Y), **alpha accoppiata al blur**
+  (`blurAlphaDrop 0.35`: opacità ×(1−0.35·blur) → massa grigia chiara come iOS, un gaussian da
+  solo non schiarisce abbastanza). Residuo micro: risoluzione finale un filo più rapida/scura.
+Micro-delta rimasti: entrante ~3 frame più tardi nei big shrink; `.`+`5` insieme; fine-roll.
+
 ### Iterazione android-3 → "più rigido" (feedback utente) — diagnosi a 60fps
 Confronto 60fps iOS vs android-3 (carry `2,599→2,600`, single `2,576→2,577`):
 - ✅ **Direzione roll corretta** (incremento: nuova cifra dall'alto, contenuto scende) e **cascata

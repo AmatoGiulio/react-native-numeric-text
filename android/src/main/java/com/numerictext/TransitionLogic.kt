@@ -225,6 +225,44 @@ object TransitionLogic {
     return smoothstep(0f, 0.75f, 1f - abs(progress - 0.5f) * 2f)
   }
 
+  // ── Per-glyph enter/exit lifecycle curves ──
+  //
+  // The reference does NOT crossfade two glyphs inside a slot on one shared progress. Every glyph
+  // owns an independent lifecycle: the OUTGOING one degrades immediately (softness leads, then it
+  // shrinks and drifts out of the way, extinguishing with a gentle tail), while the INCOMING one
+  // appears near its final position and simply comes into focus — it barely travels.
+  //
+  // Each curve maps its own normalised progress (0→1) to one visual property, so onset and
+  // termination can be tuned per property instead of being welded to a single spring.
+
+  /** Gentle overshoot easing — gives the arriving glyph a small settle in the roll's direction. */
+  fun easeOutBack(x: Float, overshoot: Float = 0.9f): Float {
+    val t = x.coerceIn(0f, 1f) - 1f
+    return 1f + (overshoot + 1f) * t * t * t + overshoot * t * t
+  }
+
+  fun easeOut(x: Float): Float { val t = x.coerceIn(0f, 1f); val k = 1f - t; return 1f - k * k }
+
+  // Outgoing glyph. Alpha drops fast at first, then extinguishes with a soft tail (a hard cut
+  // reads as the old value "popping"; a linear fade reads as it lingering).
+  fun exitAlpha(e: Float): Float {
+    val k = 1f - e.coerceIn(0f, 1f)
+    return k * k * sqrt(k.coerceAtLeast(0f))
+  }
+  /** Front-loaded: the outgoing glyph is soft almost immediately, before it has visibly moved. */
+  fun exitBlur(e: Float): Float = smoothstep(0f, 0.22f, e)
+  fun exitScale(e: Float, minScale: Float = 0.82f): Float = 1f + (minScale - 1f) * easeOut(e)
+  /** Fraction of the exit travel already covered (it accelerates away). */
+  fun exitOffsetFraction(e: Float): Float = easeOut(e)
+
+  // Incoming glyph. Appears slightly after the exit begins and resolves by sharpening in place.
+  fun enterAlpha(n: Float): Float = smoothstep(0.05f, 0.62f, n)
+  fun enterBlur(n: Float): Float = 1f - smoothstep(0.10f, 0.80f, n)
+  fun enterScale(n: Float, minScale: Float = 0.90f): Float =
+    minScale + (1f - minScale) * easeOutBack(n)
+  /** Fraction of the (short) entry travel still to cover; slight overshoot gives the settle. */
+  fun enterOffsetFraction(n: Float): Float = 1f - easeOutBack(n)
+
   // ── Trajectory helpers ──
 
   fun computeOldOffset(direction: Int, travel: Float, progress: Float): Float {

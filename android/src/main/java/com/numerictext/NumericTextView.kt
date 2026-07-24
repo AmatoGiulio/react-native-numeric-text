@@ -69,25 +69,31 @@ class NumericTextView(context: Context) : View(context) {
   private val springStiffness: Float = 320f
   // Under-damped enough to keep a slight, lively settle in the roll's direction.
   private val springDampingRatio: Float = 0.70f
-  // Spring velocity (progress units/s) that maps to full per-digit blur. A fast-rolling digit
-  // (units during a rapid hold) reaches full blur; a rarely-changing digit (thousands) stays
-  // at rest → sharp. This *per-slot* coupling replaces the old global `inputActivity`.
-  // Spring velocity that maps to full blur. Tracks springStiffness (peak velocity ∝ √stiffness).
+  // Velocity that maps to full roll blur (position+velocity blend below).
   private val blurVelocityRef: Float = 9f
+  // Opacity drop at full blur. A Gaussian blur alone doesn't lighten a large glyph enough — the
+  // reference's out-of-focus bolla is LIGHT grey, so opacity is coupled to the blur amount.
+  private val blurAlphaDrop: Float = 0.35f
+  // Depth of the overlapped roll (subtle — the roll reads mostly from blur + vertical travel).
+  private val rollDepthMin: Float = 0.9f
 
-  // Birth/death (slot appearing/disappearing) spring. Must be as quick as the roll: when it was
-  // much softer the outgoing value lingered on screen long after the digits had rolled — the
-  // "old value stays visible too long" artefact. Slight damping < 1 so it follows the roll's physics.
-  private val lifeStiffness: Float = 380f
-  private val lifeDampingRatio: Float = 0.9f
-  // LEFT→RIGHT cascade. Reverse-engineered from the iOS reference at 60fps: on a multi-digit
-  // change the LEFTMOST changed column rolls first and each column to its right follows ~80ms
-  // later (e.g. 2,599→2,600: hundreds, then tens, then units). This is the opposite order and a
-  // far larger delay than a cosmetic stagger — it's a defining trait of SwiftUI numericText.
-  // Kept SUBTLE. The order (left→right) is what the reference does, but a large delay turns the
-  // cascade into a visibly sequential, machine-like wave. A small offset gives the wave without
-  // making each column a discrete step.
-  private val staggerSeconds: Float = 0.03f
+  // BORN/DYING lifecycle durations (seconds). Measured against the iOS reference grids: a length
+  // change spans ~300-400ms there; our previous 0.26/0.30 completed in roughly half iOS's time.
+  private val exitDuration: Float = 0.32f
+  private val enterDuration: Float = 0.38f
+  private val enterLag: Float = 0.05f
+  // How much of the positional stagger an ENTER keeps (exits keep it in full). 0.4 ⇒ in 9,999→1
+  // the "1" starts ~0.10s in (blob visible while the 2nd nine degrades), like the reference.
+  private val enterCascadeCompression: Float = 0.4f
+  // The horizontal reflow (anchors sliding, layouts recomposing) runs on its OWN slow clock. The
+  // global spring settles in ~150ms, and driving the anchor from it made the surviving "1" of
+  // 1→1.5 JUMP left in ~2 frames instead of gliding late over ~120ms like the reference.
+  private val layoutReflowSeconds: Float = 0.40f
+  private var layoutP: Float = 1f
+  // LEFT→RIGHT cascade (reverse-engineered from the iOS reference at 60fps: on a multi-digit
+  // change the leftmost changed column leads). Kept SUBTLE — a large delay turns the cascade into
+  // a visibly sequential, machine-like wave.
+  private val staggerSeconds: Float = 0.04f
 
   private var formatter: NumberFormat? = null
   private var currentFormatterLocale: Locale? = null
@@ -107,25 +113,31 @@ class NumericTextView(context: Context) : View(context) {
   private var cachedOldFormatted: String? = null
   private var cachedNewFormatted: String? = null
 
-  // ── Per-slot spring model (default PER_GLYPH renderer) ──
+  // ── Per-glyph lifecycle model (default PER_GLYPH renderer) ──
   //
-  // Each logical column (units, tens, …, separators) owns an independent spring keyed by a
-  // stable id (see TransitionLogic.KeyedSlot). Only columns whose character changes retarget;
-  // unchanged columns stay at rest and render sharp. Blur is derived per column from *its own*
-  // spring velocity, so units blur heavily during a hold while thousands stay crisp — the
-  // reference iOS behaviour that a single shared spring could not reproduce.
+  // Each logical column (units, tens, …, separators) is keyed by a stable id (see
+  // TransitionLogic.KeyedSlot) and owns up to TWO independent glyph lifecycles: one leaving and
+  // one arriving, each with its own clock and its own property curves. Only columns whose
+  // character changes are disturbed; the rest render sharp. This replaced a single shared spring
+  // driving every property, which could not reproduce the reference's onset/termination.
   private class RollSlot {
     var kind: TokenKind = TokenKind.DIGIT
-    var fromChar: String = ""      // character rolling out ("" for a newly-born column)
-    var toChar: String = ""        // character rolling in / current target
-    var value: Float = 1f          // roll progress 0→1 (overshoots for the bounce)
-    var velocity: Float = 0f
+    // A column is one of two things, and they animate differently (this distinction is the whole
+    // point — conflating them made a pure digit roll pop):
+    //   • ROLL — the same logical slot changes value (6→7). Old and new OVERLAP and roll together
+    //     on ONE shared spring; the two glyphs coexist, giving the continuous rotation feel.
+    //   • BORN / DYING — a whole column appears or disappears (a leading digit, a separator). One
+    //     glyph, with its own degrade-in / degrade-out lifecycle (blur, scale, drift out of the way).
+    var exitChar: String = ""      // glyph on its way out ("" = nothing leaving)
+    var enterChar: String = ""     // glyph arriving / currently settled character
+    var rolling: Boolean = false   // true → overlapped roll; false → born/dying lifecycle
+    var rollP: Float = 1f          // shared roll progress (overshoots past 1 for the settle)
+    var rollV: Float = 0f          // roll velocity, preserved across retargets for continuity
+    var exitP: Float = 1f          // 0→1 lifecycle exit progress (1 = fully gone)
+    var enterP: Float = 1f         // 0→1 lifecycle enter progress (1 = fully arrived and sharp)
+    var delay: Float = 0f          // stagger before the roll / the incoming glyph starts
+    var exitDelay: Float = 0f      // stagger before the outgoing glyph starts leaving
     var direction: Int = 1
-    var delay: Float = 0f          // remaining stagger delay before the roll starts
-    var rolling: Boolean = false
-    var life: Float = 1f           // presence 0→1 (birth/death fade + scale)
-    var lifeVel: Float = 0f
-    var lifeTarget: Float = 1f
     // Two independent centred layouts (matching iOS): the outgoing glyph is drawn at its position
     // in the OLD layout, the incoming glyph at its position in the NEW layout. `cfl*` is the glyph
     // centre measured from that layout's left edge; combined with the layout origin it gives the
@@ -161,14 +173,29 @@ class NumericTextView(context: Context) : View(context) {
   //   grey mass — the compact, readable roll SwiftUI produces (verified via iOS/Android frame diff).
   private val travelFactor = 0.24f
   // blurFactor: peak per-digit blur radius as a fraction of line-height. Lower = softer/greyer.
-  private val blurFactor = 0.12f
+  private val blurFactor = 0.16f
   // Extra height (per side, × line-height) reserved so the blur/roll can breathe.
   private val verticalHeadroomFactor = 0.16f
   // Depth scale: a rolling glyph shrinks toward this as it leaves and grows back on arrival,
   // so the motion reads as a digit rotating on a cylinder rather than a flat 2D guillotine.
-  private val depthMinScale = 0.88f
-  // Born/dying separators & leading digits scale in from this (fade + scale, no vertical roll).
-  private val bornMinScale = 0.6f
+  // Depth: the leaving glyph shrinks more (it recedes), the arriving one barely scales — it
+  // resolves by coming into focus rather than by travelling or growing a lot.
+  private val exitMinScale = 0.82f
+  // A born glyph is a BLOB when it spawns: small + heavily blurred, displaced from its final
+  // spot (outward + along the roll axis), then it slides in and comes into focus. A tame
+  // fade-in-place read as "the final number at low opacity" — too recognisable.
+  private val enterMinScale = 0.72f
+  private val enterTravelFactor = 0.75f
+  // Horizontal spawn displacement of a born glyph, as a fraction of its width: it appears
+  // displaced toward the composition's growing edge (e.g. the trailing "5" from the right) and
+  // slides to its slot. Direction derived from geometry — no hardcoding.
+  private val enterSpawnXFactor = 0.7f
+  // Small outward drift of a leaving glyph (fraction of its width, away from the new centre) —
+  // the reference's dying digits spread slightly apart as they fade, they don't converge.
+  private val exitDriftOut = 0.18f
+  // The surviving ANCHOR reflows LATE: it starts sliding only after the births are underway
+  // ("the 1 moves left once the 5 is sharp"). Fraction of the transition before its slide starts.
+  private val anchorLagStart = 0.5f
 
   private val travel: Float get() = getTextHeight() * travelFactor
 
@@ -176,8 +203,6 @@ class NumericTextView(context: Context) : View(context) {
     recalcTextPaint()
     recalcFormatter()
   }
-
-  private fun lerp(a: Float, b: Float, t: Float): Float = a + (b - a) * t
 
   // ── Measurement ──
 
@@ -281,95 +306,135 @@ class NumericTextView(context: Context) : View(context) {
 
   private fun drawSlots(canvas: Canvas, scrub: Float?) {
     val bl = baselineY(height / 2f)
-    // Two independent centred layouts (the iOS model): old glyphs live in the old layout, new
-    // glyphs in the new layout, both centred in the view — so a surviving digit never slides
-    // horizontally when the width changes; only born/dying columns appear/leave at the edge.
+    // HORIZONTAL REFLOW. Each glyph has its OWN X trajectory that interpolates between its position
+    // in the old centred layout and its position in the new one, driven by a single shared clock
+    // (`xL`). A surviving/replacing column slides smoothly old→new instead of jumping; born/dying
+    // columns slide with the composition as it expands/contracts. The trajectory is derived purely
+    // from the two measured layouts — no hardcoded direction — so it works for any font/locale.
     val oldOriginX = (width - slotOldWidth) / 2f
     val newOriginX = (width - slotNewWidth) / 2f
+    val sp = if (scrub != null) scrub.coerceIn(0f, 1f) else layoutP.coerceIn(0f, 1f)
+    val xL = TransitionLogic.smootherstep(sp)
+    // Lagged clock: the surviving anchor slides only after the births are underway.
+    val xLa = TransitionLogic.smoothstep(anchorLagStart, 1f, sp)
+    val newCenterX = newOriginX + slotNewWidth / 2f
     val h = getTextHeight()
     val travelPx = h * travelFactor
     val maxBlurPx = h * blurFactor
     val nodeCapable = Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && canvas.isHardwareAccelerated
 
-    // Pass 1 — static anchors (sharp), drawn directly at their new-layout position.
+    // A glyph's current X: the old glyph flows toward the new slot (or, if it has no new slot, it
+    // rides the shrinking composition); the new glyph flows in from where the old slot was.
+    fun xOldOf(s: RollSlot) = lerp(oldOriginX + s.cflOld, (if (s.hasNew) newOriginX + s.cflNew else newOriginX + s.cflOld), xL)
+    fun xNewOf(s: RollSlot) = lerp((if (s.hasOld) oldOriginX + s.cflOld else oldOriginX + s.cflNew), newOriginX + s.cflNew, xL)
+    fun anchorXOf(s: RollSlot) = lerp(oldOriginX + s.cflOld, newOriginX + s.cflNew, xLa)
+
+    // Pass 1 — settled anchors (sharp). They still slide along their reflow trajectory: an anchor
+    // whose logical position shifts (e.g. the "1" in 1→1.5) glides to its new spot.
     textPaint.maskFilter = null; textPaint.alpha = 255
     for (s in rollSlots.values) {
-      if (!isAnimated(s)) drawGlyph(canvas, s.toChar, newOriginX + s.cflNew, bl, textPaint)
+      if (!isAnimated(s)) drawGlyph(canvas, s.enterChar, anchorXOf(s), bl, textPaint)
     }
 
     // Pass 2 — moving / born / dying columns, each with its own blur + depth.
     for (s in rollSlots.values) {
       if (!isAnimated(s)) continue
-      val newCx = newOriginX + s.cflNew
-      val oldCx = oldOriginX + s.cflOld
-      val life = s.life.coerceIn(0f, 1f)
+      val newCx = xNewOf(s)
+      val oldCx = xOldOf(s)
 
       // iOS roll direction: increment → new enters from the TOP (content moves down); decrement
       // → new from the bottom. Our offset helpers encode the opposite convention, so negate.
       val d = -s.direction
 
-      if (s.rolling && s.fromChar.isNotEmpty()) {
-        val p = scrub ?: s.value
+      if (s.rolling && s.delay > 0f) {
+        // Waiting its turn in the left→right cascade: still showing the previous value, sharp.
+        textPaint.maskFilter = null; textPaint.alpha = 255
+        drawGlyph(canvas, s.exitChar, oldCx, bl, textPaint)
+      } else if (s.rolling) {
+        // ── OVERLAPPED ROLL: old and new coexist and roll together on the shared spring. The two
+        // glyphs blend into one soft moving mass — the continuous digit roll. NO sideways drift.
+        val p = scrub ?: s.rollP
         val pC = p.coerceIn(0f, 1f)
-        // Blur has TWO sources. Velocity alone made the softness follow the spring's mechanical
-        // profile, so it arrived late and the glyphs read as two separate hard objects. A
-        // position-based term gives the transition its own early softness, like the reference.
-        val motionBlur = (abs(s.velocity) / blurVelocityRef).coerceIn(0f, 1f)
+        val motionBlur = (abs(s.rollV) / blurVelocityRef).coerceIn(0f, 1f)
         val transitionBlur = TransitionLogic.blurEnvelope(pC)
-        val blurAmt = if (scrub != null) transitionBlur
-          else max(motionBlur * 0.6f, transitionBlur * 0.85f)
+        val blurAmt = if (scrub != null) transitionBlur else max(motionBlur * 0.6f, transitionBlur * 0.85f)
         val radius = maxBlurPx * blurAmt
-        // Position keeps the RAW spring value (overshoot intact → the glyph still lands with
-        // physics); alpha/scale use an overshoot-free progress so they don't wobble at the end.
         val pv = TransitionLogic.smootherstep(pC)
         val oldOff = TransitionLogic.computeOldOffset(d, travelPx, p)
         val newOff = TransitionLogic.computeNewOffset(d, travelPx, p)
-        // Gently asymmetric crossfade with a GENEROUS overlap. A linear 1-p / p fade keeps total
-        // ink at 1.0 throughout and two overlapping blurred layers read darker than one, so the
-        // sum dips slightly at the crossing to give the reference's soft grey mass. Cutting the
-        // overlap hard (old leaving very early) makes each digit a discrete event → mechanical.
-        val oldA = 1f - TransitionLogic.smoothstep(0.05f, 0.70f, pC)
-        val newA = TransitionLogic.smoothstep(0.22f, 0.92f, pC)
-        val oldAlpha = (oldA * life * 255f).toInt().coerceIn(0, 255)
-        val newAlpha = (newA * life * 255f).toInt().coerceIn(0, 255)
-        val oldScale = lerp(1f, depthMinScale, pv)
-        val newScale = lerp(depthMinScale, 1f, pv)
+        // Gently asymmetric crossfade with generous overlap; the sum dips slightly at the crossing
+        // so two overlapping blurred layers don't read as a doubled dark glyph.
+        val lighten = 1f - blurAlphaDrop * blurAmt
+        val oldAlpha = ((1f - TransitionLogic.smoothstep(0.05f, 0.70f, pC)) * lighten * 255f).toInt().coerceIn(0, 255)
+        val newAlpha = (TransitionLogic.smoothstep(0.22f, 0.92f, pC) * lighten * 255f).toInt().coerceIn(0, 255)
+        val oldScale = lerp(1f, rollDepthMin, pv)
+        val newScale = lerp(rollDepthMin, 1f, pv)
         if (nodeCapable) {
-          s.oldNode = drawSlotGlyphNode(canvas, s.oldNode, s.fromChar, oldCx, bl, oldOff, oldScale, oldAlpha, radius)
-          s.newNode = drawSlotGlyphNode(canvas, s.newNode, s.toChar, newCx, bl, newOff, newScale, newAlpha, radius)
+          s.oldNode = drawSlotGlyphNode(canvas, s.oldNode, s.exitChar, oldCx, bl, oldOff, oldScale, oldAlpha, radius)
+          s.newNode = drawSlotGlyphNode(canvas, s.newNode, s.enterChar, newCx, bl, newOff, newScale, newAlpha, radius)
         } else {
-          drawGlyphBlurred(canvas, s.fromChar, oldCx, bl + oldOff, oldAlpha, radius * 0.6f)
-          drawGlyphBlurred(canvas, s.toChar, newCx, bl + newOff, newAlpha, radius * 0.6f)
+          drawGlyphBlurred(canvas, s.exitChar, oldCx, bl + oldOff, oldAlpha, radius * 0.6f)
+          drawGlyphBlurred(canvas, s.enterChar, newCx, bl + newOff, newAlpha, radius * 0.6f)
         }
-      } else {
-        // Birth / death (separators, leading digits). Previously this was opacity + scale ONLY, so
-        // a vanishing digit stayed a perfectly sharp glyph while it faded and read as lingering.
-        // The reference dissolves it: blur peaks mid-transition and it drifts along the roll axis.
-        val cx = if (s.hasNew) newCx else oldCx
-        val lifeBlur = TransitionLogic.blurEnvelope(life)
-        val radius = maxBlurPx * lifeBlur * 0.85f
-        // Follow the roll's sense: a born glyph arrives from the incoming side, a dying one leaves
-        // toward the outgoing side.
-        val off = if (s.hasNew) TransitionLogic.computeNewOffset(d, travelPx * 0.6f, life)
-                  else TransitionLogic.computeOldOffset(d, travelPx * 0.6f, 1f - life)
-        val alpha = (life * 255f).toInt().coerceIn(0, 255)
-        val scale = lerp(bornMinScale, 1f, life)
-        if (nodeCapable) {
-          s.newNode = drawSlotGlyphNode(canvas, s.newNode, s.toChar, cx, bl, off, scale, alpha, radius)
-        } else {
-          textPaint.alpha = alpha
-          canvas.save(); canvas.scale(scale, scale, cx, bl - h * 0.3f)
-          drawGlyphBlurred(canvas, s.toChar, cx, bl + off, alpha, radius * 0.6f)
-          canvas.restore()
-          textPaint.alpha = 255
+      } else if (!s.rolling) {
+        // ── LEAVING glyph (dying column, or the outgoing half of a structural replacement).
+        // It fades ESSENTIALLY IN PLACE: frozen at its old-layout position with only a small
+        // outward drift (away from the new composition's centre) — measured against iOS, where a
+        // big shrink (2,600→9) fades the old digits where they stand. Riding the full layout
+        // contraction made every dying glyph slide to the middle and pile up into a jumble.
+        if (s.exitChar.isNotEmpty()) {
+          val e = if (scrub != null) scrub.coerceIn(0f, 1f) else s.exitP
+          val alpha = (TransitionLogic.exitAlpha(e) * (1f - blurAlphaDrop * TransitionLogic.exitBlur(e)) * 255f).toInt().coerceIn(0, 255)
+          if (alpha > 0) {
+            val exCx = oldOriginX + s.cflOld
+            val radius = maxBlurPx * TransitionLogic.exitBlur(e)
+            val frac = TransitionLogic.exitOffsetFraction(e)
+            // Same side as the roll's outgoing glyph: leaves DOWN for an increment, UP for a
+            // decrement (e.g. the dying "1" in 10→9 exits upward).
+            val yOff = -d * travelPx * frac
+            val dirX = if (exCx >= newCenterX) 1f else -1f
+            val xOff = dirX * textPaint.measureText(s.exitChar) * exitDriftOut * frac
+            val scale = TransitionLogic.exitScale(e, exitMinScale)
+            if (nodeCapable) {
+              s.oldNode = drawSlotGlyphNode(canvas, s.oldNode, s.exitChar, exCx + xOff, bl, yOff, scale, alpha, radius)
+            } else {
+              drawGlyphBlurred(canvas, s.exitChar, exCx + xOff, bl + yOff, alpha, radius * 0.6f)
+            }
+          }
+        }
+        // ── BORN (enter only): spawns as a displaced BLOB (outward + along the roll axis, small +
+        // very blurred) and slides to its slot coming into focus. `off` is the residual offset:
+        // full at n=0, zero at n=1.
+        if (s.enterChar.isNotEmpty() && s.delay <= 0f) {
+          val n = if (scrub != null) scrub.coerceIn(0f, 1f) else s.enterP
+          val alpha = (TransitionLogic.enterAlpha(n) * (1f - blurAlphaDrop * TransitionLogic.enterBlur(n)) * 255f).toInt().coerceIn(0, 255)
+          if (alpha > 0) {
+            val radius = maxBlurPx * TransitionLogic.enterBlur(n)
+            val off = TransitionLogic.enterOffsetFraction(n)              // 1 → 0 as it settles
+            // Same side as the roll's incoming glyph: from the TOP for an increment (content
+            // moves down), from the bottom for a decrement.
+            val yOff = d * travelPx * enterTravelFactor * off
+            val finalX = newOriginX + s.cflNew
+            val dirX = if (finalX >= newCenterX) 1f else -1f             // outward = growing edge
+            val xSpawn = dirX * textPaint.measureText(s.enterChar) * enterSpawnXFactor * off
+            val scale = TransitionLogic.enterScale(n, enterMinScale)
+            if (nodeCapable) {
+              s.newNode = drawSlotGlyphNode(canvas, s.newNode, s.enterChar, finalX + xSpawn, bl, yOff, scale, alpha, radius)
+            } else {
+              drawGlyphBlurred(canvas, s.enterChar, finalX + xSpawn, bl + yOff, alpha, radius * 0.6f)
+            }
+          }
         }
       }
     }
     textPaint.maskFilter = null; textPaint.alpha = 255
   }
 
+  /** A column is animating while it is rolling, leaving, still arriving, or waiting to start. */
   private fun isAnimated(s: RollSlot): Boolean =
-    s.rolling || s.lifeTarget == 0f || abs(s.life - 1f) > 0.01f
+    s.rolling || s.delay > 0f || s.exitChar.isNotEmpty() || s.enterP < 1f
+
+  private fun lerp(a: Float, b: Float, t: Float): Float = a + (b - a) * t
 
   private fun drawGlyph(canvas: Canvas, text: String, centerX: Float, baseline: Float, paint: TextPaint) {
     if (text.isEmpty()) return
@@ -398,10 +463,10 @@ class NumericTextView(context: Context) : View(context) {
     node.scaleY = scale
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
       node.setRenderEffect(
-        // Not purely vertical: a sliver of horizontal blur softens the glyph edge so the motion
-        // reads as an out-of-focus object rather than a graphic vertical smear.
+        // Near-ISOTROPIC: the reference's blurred glyph is a round, out-of-focus bolla, not a
+        // directional streak. Only a slight vertical bias remains to hint at the roll axis.
         if (blurRadiusY >= 0.8f)
-          RenderEffect.createBlurEffect(max(1f, blurRadiusY * 0.35f), blurRadiusY, Shader.TileMode.DECAL)
+          RenderEffect.createBlurEffect(max(1f, blurRadiusY * 0.85f), blurRadiusY, Shader.TileMode.DECAL)
         else null
       )
     }
@@ -429,9 +494,8 @@ class NumericTextView(context: Context) : View(context) {
     val layout = TransitionLogic.layoutKeyedSlots(committed, currentGroupSep, currentDecimalSep, currentMinusSign, slotMeasure)
     for (ks in layout) {
       rollSlots[ks.key] = RollSlot().apply {
-        kind = ks.kind; fromChar = ""; toChar = ks.char
-        value = 1f; velocity = 0f; rolling = false
-        life = 1f; lifeVel = 0f; lifeTarget = 1f
+        kind = ks.kind; exitChar = ""; enterChar = ks.char
+        exitP = 1f; enterP = 1f; delay = 0f
         cflOld = ks.centerFromLeft; cflNew = ks.centerFromLeft; hasOld = true; hasNew = true
       }
     }
@@ -448,51 +512,98 @@ class NumericTextView(context: Context) : View(context) {
     val newLayout = TransitionLogic.layoutKeyedSlots(newFormatted, currentGroupSep, currentDecimalSep, currentMinusSign, slotMeasure)
     val oldByKey = oldLayout.associateBy { it.key }
     val newKeys = HashSet<String>(newLayout.size)
-    val started = ArrayList<RollSlot>()
+
+    // STRUCTURAL classifier (numeric structure, not pixel width): when the integer digit count
+    // changes (10→9, 999→1,000), a changed digit column is NOT a same-slot substitution — the
+    // reference shows its old glyph leaving and the new one arriving as independent glyphs with
+    // their own timing (the "0" of 10→9 stays sharp and leaves LAST while the "9" is already
+    // emerging). Stable structure keeps the overlapped roll.
+    val oldIntCount = oldLayout.count { it.key.startsWith("I") }
+    val newIntCount = newLayout.count { it.key.startsWith("I") }
+    val structural = oldIntCount != newIntCount
+
+    // Phases of the left→right cascade: each slot's exit and enter are separate entries, ordered
+    // by the X they happen at. CRUCIAL: exits live in the old layout and enters in the new one,
+    // so the shared axis is the position RELATIVE TO EACH LAYOUT'S CENTRE (both are centred in
+    // the view). This interleaves arrivals among departures exactly like the reference —
+    // 9,999→1: exit 9(-82) → exit ,(-47) → exit 9(-12) → ENTER 1(0) → exit 9(+35) → exit 9(+82).
+    val oldW = oldLayout.firstOrNull()?.totalWidth ?: slotMeasure(slotTargetText)
+    val newW = newLayout.firstOrNull()?.totalWidth ?: slotMeasure(newFormatted)
+    data class Phase(val s: RollSlot, val x: Float, val isExit: Boolean)
+    val phases = ArrayList<Phase>()
+    fun exitX(cflOld: Float) = cflOld - oldW / 2f
+    fun enterX(cflNew: Float) = cflNew - newW / 2f
 
     for (ks in newLayout) {
       newKeys.add(ks.key)
       val existing = rollSlots[ks.key]
       if (existing == null) {
-        // Born: appears with a fade + scale at its new-layout position (no roll).
+        // Born: an enter with no exit.
         rollSlots[ks.key] = RollSlot().apply {
-          kind = ks.kind; fromChar = ""; toChar = ks.char
-          value = 1f; velocity = 0f; rolling = false
-          life = 0f; lifeVel = 0f; lifeTarget = 1f
+          kind = ks.kind; exitChar = ""; enterChar = ks.char
+          exitP = 1f; enterP = 0f
           direction = dir
           cflNew = ks.centerFromLeft; hasNew = true
           cflOld = oldByKey[ks.key]?.centerFromLeft ?: ks.centerFromLeft
           hasOld = oldByKey.containsKey(ks.key)
-        }
+        }.also { phases.add(Phase(it, enterX(it.cflNew), isExit = false)) }
       } else {
         existing.kind = ks.kind
-        existing.lifeTarget = 1f
         // The glyph's current on-screen spot becomes its outgoing (OLD) position.
         existing.cflOld = existing.cflNew; existing.hasOld = true
         existing.cflNew = ks.centerFromLeft; existing.hasNew = true
-        if (existing.toChar != ks.char) {
-          val wasRolling = existing.rolling
-          existing.fromChar = existing.toChar     // roll from the previous target
-          existing.toChar = ks.char
-          existing.value = 0f                      // restart the roll; velocity is preserved
+        if (existing.enterChar != ks.char) {
+          val wasBusy = (existing.rolling && existing.rollP < 1f) ||
+            (!existing.rolling && (existing.exitChar.isNotEmpty() || existing.enterP < 1f))
           existing.direction = dir
-          existing.rolling = true
-          // Only columns starting from rest join the cascade. Re-staggering a column that is
-          // already mid-roll would freeze it mid-flight — during rapid multi-digit updates the
-          // next value arrives before the cascade finishes, and that read as stutter/dropped frames.
-          if (wasRolling) existing.delay = 0f else started.add(existing)
+          if (structural) {
+            // Independent lifecycles: old glyph leaves, new glyph arrives, each on its own clock.
+            existing.exitChar = existing.enterChar
+            existing.enterChar = ks.char
+            existing.rolling = false
+            existing.exitP = 0f; existing.enterP = 0f
+            if (wasBusy) { existing.delay = 0f; existing.exitDelay = 0f }
+            else {
+              phases.add(Phase(existing, exitX(existing.cflOld), isExit = true))
+              phases.add(Phase(existing, enterX(existing.cflNew), isExit = false))
+            }
+          } else {
+            // Same slot in a stable structure → the overlapped ROLL (continuous digit roll).
+            existing.exitChar = existing.enterChar
+            existing.enterChar = ks.char
+            existing.rolling = true
+            existing.rollP = 0f                    // restart the roll; rollV preserved for continuity
+            existing.exitP = 1f; existing.enterP = 1f
+            // Only columns starting from rest join the cascade. Re-staggering a column already
+            // mid-roll would freeze it — the rapid-burst stutter.
+            if (wasBusy) existing.delay = 0f else phases.add(Phase(existing, enterX(existing.cflNew), isExit = false))
+          }
         }
       }
     }
-    // Columns no longer present start their death animation, frozen at their OLD-layout position.
+    // Columns no longer present: a DYING lifecycle (exit only), frozen at their OLD-layout position.
     for ((k, s) in rollSlots) if (!newKeys.contains(k)) {
-      s.lifeTarget = 0f; s.hasNew = false
+      val wasIdle = s.enterP >= 1f && s.exitChar.isEmpty() && !s.rolling
+      s.hasNew = false; s.rolling = false
+      if (s.enterChar.isNotEmpty()) { s.exitChar = s.enterChar; s.exitP = 0f; s.enterChar = "" }
+      s.enterP = 1f
+      s.direction = dir
       oldByKey[k]?.let { s.cflOld = it.centerFromLeft; s.hasOld = true }
+      if (wasIdle) phases.add(Phase(s, exitX(s.cflOld), isExit = true))
     }
 
-    // LEFT→RIGHT stagger: leftmost (smallest centre-from-left) newly-rolling column first.
-    started.sortBy { it.cflNew }
-    for ((i, s) in started.withIndex()) s.delay = i * staggerSeconds
+    // LEFT→RIGHT cascade over ALL phases (exits and enters interleaved by X). EXITS follow the
+    // full positional cascade; ENTERS keep the same ordering but on a COMPRESSED stagger — in the
+    // reference the incoming glyph's blob is already visible near the START of the event (9,999→1:
+    // the "1" shows while the SECOND 9 is still degrading), it doesn't wait its positional turn.
+    phases.sortBy { it.x }
+    for ((i, ph) in phases.withIndex()) {
+      when {
+        ph.isExit -> ph.s.exitDelay = i * staggerSeconds
+        ph.s.rolling -> ph.s.delay = i * staggerSeconds
+        else -> ph.s.delay = enterLag + i * staggerSeconds * enterCascadeCompression
+      }
+    }
 
     // Two centred layouts: remember each layout's total width to place its origin.
     slotOldWidth = oldLayout.firstOrNull()?.totalWidth ?: slotMeasure(slotTargetText)
@@ -504,25 +615,33 @@ class NumericTextView(context: Context) : View(context) {
     val it = rollSlots.iterator()
     while (it.hasNext()) {
       val s = it.next().value
-      // Presence (birth/death) — critically damped, no bounce.
-      val (lx, lv) = TransitionLogic.springStep(s.life, s.lifeVel, s.lifeTarget, lifeStiffness, lifeDampingRatio, dt)
-      s.life = lx.coerceIn(0f, 1.05f); s.lifeVel = lv
-
-      if (s.delay > 0f) {
-        s.delay = (s.delay - dt).coerceAtLeast(0f)
-      } else if (s.rolling) {
-        val (x, v) = TransitionLogic.springStep(s.value, s.velocity, 1f, springStiffness, springDampingRatio, dt)
-        s.value = x; s.velocity = v
-        if (x >= 1f && abs(v) < 0.02f) { s.rolling = false; s.value = 1f; s.velocity = 0f }
+      if (s.rolling) {
+        if (s.delay > 0f) { s.delay = (s.delay - dt).coerceAtLeast(0f) }
+        else {
+          // Overlapped roll on a shared spring (soft, continuous — the good digit roll).
+          val (x, v) = TransitionLogic.springStep(s.rollP, s.rollV, 1f, springStiffness, springDampingRatio, dt)
+          s.rollP = x; s.rollV = v
+          if (x >= 1f && abs(v) < 0.02f) { s.rolling = false; s.rollP = 1f; s.rollV = 0f; s.exitChar = "" }
+        }
+      } else {
+        // Lifecycle: exit and enter are independently gated so the left→right cascade can
+        // interleave departures and arrivals (10→9: exit "1" → enter "9" → exit "0").
+        if (s.exitDelay > 0f) s.exitDelay = (s.exitDelay - dt).coerceAtLeast(0f)
+        else if (s.exitChar.isNotEmpty() && s.exitP < 1f) {
+          s.exitP = (s.exitP + dt / exitDuration).coerceAtMost(1f)
+          if (s.exitP >= 1f) s.exitChar = ""
+        }
+        if (s.delay > 0f) s.delay = (s.delay - dt).coerceAtLeast(0f)
+        else if (s.enterP < 1f) s.enterP = (s.enterP + dt / enterDuration).coerceAtMost(1f)
       }
-
-      if (s.lifeTarget == 0f && s.life < 0.02f) it.remove()
+      // A column with nothing left to show and nothing arriving is done.
+      if (s.enterChar.isEmpty() && s.exitChar.isEmpty()) it.remove()
     }
   }
 
   private fun slotsAtRest(): Boolean =
     rollSlots.values.all {
-      !it.rolling && it.delay <= 0f && it.lifeTarget == 1f && abs(it.life - 1f) < 0.02f
+      it.delay <= 0f && it.exitDelay <= 0f && !it.rolling && it.exitChar.isEmpty() && it.enterP >= 1f
     }
 
   // ── Block renderer (debug strategies WHOLE_RUN / CHANGED_RUN) ──
@@ -840,6 +959,7 @@ class NumericTextView(context: Context) : View(context) {
 
     seedSlots(oldFormatted)
     scheduleSlots(newFormatted, dir)
+    layoutP = 0f
 
     // Freeze-frame (debug scrub): keep the slots staged, render at the manual progress, no ticker.
     if (debugManualProgress >= 0f) { invalidate(); return }
@@ -878,13 +998,14 @@ class NumericTextView(context: Context) : View(context) {
     springVelocity = v
     animationProgress = x
 
+    if (layoutP < 1f) layoutP = (layoutP + dt / layoutReflowSeconds).coerceAtMost(1f)
     tickSlots(dt)
 
     // Settled: global spring at the goal AND slow, every column at rest, AND no value change in
     // the last ~160ms. The recency guard keeps the ticker alive during a rapid hold, so each
     // press re-bases and rolls continuously instead of settling and dead-starting between presses.
     val quiet = (now - lastValueChangeNanos) > 160_000_000L
-    if (x >= 1f && quiet && slotsAtRest() && abs(x - 1f) < 0.002f && abs(v) < 0.02f) {
+    if (x >= 1f && quiet && slotsAtRest() && layoutP >= 1f && abs(x - 1f) < 0.002f && abs(v) < 0.02f) {
       if (!completionFired) { completionFired = true; springValue = 1f; springVelocity = 0f; settleTo(formatNumber(numericValue)) }
       return
     }
@@ -917,6 +1038,7 @@ class NumericTextView(context: Context) : View(context) {
     currentDirection = dir
 
     scheduleSlots(newFormatted, dir)
+    layoutP = 0f
 
     val needsLayout = max(plan.oldWidth, plan.newWidth) > measuredWidth || plan.newWidth != plan.oldWidth
     if (needsLayout) requestLayout()

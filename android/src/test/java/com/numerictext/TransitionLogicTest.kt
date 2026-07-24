@@ -350,6 +350,61 @@ class TransitionLogicTest {
     assertTrue("expected no overshoot, got $maxX", maxX <= 1.001f)
   }
 
+  // --- Per-glyph enter/exit lifecycle curves ---
+
+  @Test
+  fun exit_alpha_startsOpaque_endsGone() {
+    assertEquals(1f, TransitionLogic.exitAlpha(0f), 0.001f)
+    assertEquals(0f, TransitionLogic.exitAlpha(1f), 0.001f)
+  }
+
+  @Test
+  fun exit_alpha_dropsFastThenTails() {
+    // Front-loaded departure: already well under half by a third of the way through, then a soft
+    // low tail instead of a hard cut.
+    assertTrue(TransitionLogic.exitAlpha(0.33f) < 0.5f)
+    assertTrue(TransitionLogic.exitAlpha(0.85f) > 0f)
+    assertTrue(TransitionLogic.exitAlpha(0.85f) < 0.1f)
+  }
+
+  @Test
+  fun exit_blur_isFrontLoaded() {
+    // Softness leads the motion: near-full blur very early, before it has visibly travelled.
+    assertTrue(TransitionLogic.exitBlur(0.22f) > 0.95f)
+    assertEquals(0f, TransitionLogic.exitBlur(0f), 0.001f)
+  }
+
+  @Test
+  fun exit_shrinksAndTravels() {
+    assertEquals(1f, TransitionLogic.exitScale(0f), 0.001f)
+    assertEquals(0.82f, TransitionLogic.exitScale(1f), 0.001f)
+    assertEquals(0f, TransitionLogic.exitOffsetFraction(0f), 0.001f)
+    assertEquals(1f, TransitionLogic.exitOffsetFraction(1f), 0.001f)
+  }
+
+  @Test
+  fun enter_alpha_lagsThenSolidifies() {
+    assertEquals(0f, TransitionLogic.enterAlpha(0f), 0.001f)
+    assertEquals(1f, TransitionLogic.enterAlpha(1f), 0.001f)
+    // Still faint while the outgoing glyph is doing most of its leaving.
+    assertTrue(TransitionLogic.enterAlpha(0.15f) < 0.35f)
+  }
+
+  @Test
+  fun enter_blur_sharpensIn() {
+    assertEquals(1f, TransitionLogic.enterBlur(0f), 0.001f)
+    assertEquals(0f, TransitionLogic.enterBlur(1f), 0.001f)
+  }
+
+  @Test
+  fun enter_arrivesInPlace_withSettle() {
+    // Ends at its final size/position...
+    assertEquals(1f, TransitionLogic.enterScale(1f), 0.001f)
+    assertEquals(0f, TransitionLogic.enterOffsetFraction(1f), 0.001f)
+    // ...and the gentle overshoot means it passes its target before settling back.
+    assertTrue(TransitionLogic.easeOutBack(0.7f) > 1f)
+  }
+
   // --- Keyed slot layout (per-slot spring scheduler input) ---
 
   private fun keyed(s: String) =
