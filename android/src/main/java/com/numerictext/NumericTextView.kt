@@ -66,9 +66,11 @@ class NumericTextView(context: Context) : View(context) {
   // Soft and flowing, NOT snappy. A stiff spring makes every digit a crisp discrete event, which
   // reads as mechanical/robotic; the reference feels docile because each roll is soft and the
   // rolls blend into one another. Keep the roll gentle and let the blur carry the motion.
-  private val springStiffness: Float = 320f
+  // Measured: the iOS roll's settle tail is ~0.45s (centroid still moving 24+ frames after
+  // onset) with a gentle mass overshoot — that's a soft spring ≈150-170, not 320.
+  private val springStiffness: Float = 170f
   // Under-damped enough to keep a slight, lively settle in the roll's direction.
-  private val springDampingRatio: Float = 0.70f
+  private val springDampingRatio: Float = 0.78f
   // Velocity that maps to full roll blur (position+velocity blend below).
   private val blurVelocityRef: Float = 9f
   // Opacity drop at full blur. A Gaussian blur alone doesn't lighten a large glyph enough — the
@@ -80,20 +82,24 @@ class NumericTextView(context: Context) : View(context) {
   // BORN/DYING lifecycle durations (seconds). Measured against the iOS reference grids: a length
   // change spans ~300-400ms there; our previous 0.26/0.30 completed in roughly half iOS's time.
   private val exitDuration: Float = 0.32f
-  private val enterDuration: Float = 0.38f
-  private val enterLag: Float = 0.05f
-  // How much of the positional stagger an ENTER keeps (exits keep it in full). 0.4 ⇒ in 9,999→1
-  // the "1" starts ~0.10s in (blob visible while the 2nd nine degrades), like the reference.
-  private val enterCascadeCompression: Float = 0.4f
+  private val enterDuration: Float = 0.40f
+  // Fraction of the positional stagger an ENTER keeps (measured: iOS 9,999→1 enter starts
+  // ~0.12s in = lag + 3·stagger·0.55; full stagger entered too late, 0.4 too early).
+  private val enterCascadeCompression: Float = 0.55f
+  private val enterLag: Float = 0.04f
+
   // The horizontal reflow (anchors sliding, layouts recomposing) runs on its OWN slow clock. The
   // global spring settles in ~150ms, and driving the anchor from it made the surviving "1" of
   // 1→1.5 JUMP left in ~2 frames instead of gliding late over ~120ms like the reference.
-  private val layoutReflowSeconds: Float = 0.40f
+  private val layoutReflowSeconds: Float = 0.45f
   private var layoutP: Float = 1f
   // LEFT→RIGHT cascade (reverse-engineered from the iOS reference at 60fps: on a multi-digit
   // change the leftmost changed column leads). Kept SUBTLE — a large delay turns the cascade into
   // a visibly sequential, machine-like wave.
   private val staggerSeconds: Float = 0.04f
+  // ROLLS cascade slower than exits (measured on 2,599→2,600: ~4.5-5 frames ≈ 75-83ms per digit,
+  // vs ~2.25 frames between exits in 9,999→1).
+  private val rollStaggerSeconds: Float = 0.075f
 
   private var formatter: NumberFormat? = null
   private var currentFormatterLocale: Locale? = null
@@ -180,22 +186,22 @@ class NumericTextView(context: Context) : View(context) {
   // so the motion reads as a digit rotating on a cylinder rather than a flat 2D guillotine.
   // Depth: the leaving glyph shrinks more (it recedes), the arriving one barely scales — it
   // resolves by coming into focus rather than by travelling or growing a lot.
-  private val exitMinScale = 0.82f
+  private val exitMinScale = 0.74f
   // A born glyph is a BLOB when it spawns: small + heavily blurred, displaced from its final
   // spot (outward + along the roll axis), then it slides in and comes into focus. A tame
   // fade-in-place read as "the final number at low opacity" — too recognisable.
   private val enterMinScale = 0.72f
-  private val enterTravelFactor = 0.75f
+  private val enterTravelFactor = 2.0f
   // Horizontal spawn displacement of a born glyph, as a fraction of its width: it appears
   // displaced toward the composition's growing edge (e.g. the trailing "5" from the right) and
   // slides to its slot. Direction derived from geometry — no hardcoding.
-  private val enterSpawnXFactor = 0.7f
+  private val enterSpawnXFactor = 0.15f
   // Small outward drift of a leaving glyph (fraction of its width, away from the new centre) —
   // the reference's dying digits spread slightly apart as they fade, they don't converge.
   private val exitDriftOut = 0.18f
   // The surviving ANCHOR reflows LATE: it starts sliding only after the births are underway
   // ("the 1 moves left once the 5 is sharp"). Fraction of the transition before its slide starts.
-  private val anchorLagStart = 0.5f
+  private val anchorLagStart = 0.12f
 
   private val travel: Float get() = getTextHeight() * travelFactor
 
@@ -356,7 +362,7 @@ class NumericTextView(context: Context) : View(context) {
         val p = scrub ?: s.rollP
         val pC = p.coerceIn(0f, 1f)
         val motionBlur = (abs(s.rollV) / blurVelocityRef).coerceIn(0f, 1f)
-        val transitionBlur = TransitionLogic.blurEnvelope(pC)
+        val transitionBlur = TransitionLogic.rollBlurEnvelope(pC)
         val blurAmt = if (scrub != null) transitionBlur else max(motionBlur * 0.6f, transitionBlur * 0.85f)
         val radius = maxBlurPx * blurAmt
         val pv = TransitionLogic.smootherstep(pC)
@@ -365,8 +371,8 @@ class NumericTextView(context: Context) : View(context) {
         // Gently asymmetric crossfade with generous overlap; the sum dips slightly at the crossing
         // so two overlapping blurred layers don't read as a doubled dark glyph.
         val lighten = 1f - blurAlphaDrop * blurAmt
-        val oldAlpha = ((1f - TransitionLogic.smoothstep(0.05f, 0.70f, pC)) * lighten * 255f).toInt().coerceIn(0, 255)
-        val newAlpha = (TransitionLogic.smoothstep(0.22f, 0.92f, pC) * lighten * 255f).toInt().coerceIn(0, 255)
+        val oldAlpha = ((1f - TransitionLogic.smoothstep(0.08f, 0.78f, pC)) * lighten * 255f).toInt().coerceIn(0, 255)
+        val newAlpha = (TransitionLogic.smoothstep(0.14f, 0.96f, pC) * lighten * 255f).toInt().coerceIn(0, 255)
         val oldScale = lerp(1f, rollDepthMin, pv)
         val newScale = lerp(rollDepthMin, 1f, pv)
         if (nodeCapable) {
@@ -592,15 +598,19 @@ class NumericTextView(context: Context) : View(context) {
       if (wasIdle) phases.add(Phase(s, exitX(s.cflOld), isExit = true))
     }
 
-    // LEFT→RIGHT cascade over ALL phases (exits and enters interleaved by X). EXITS follow the
-    // full positional cascade; ENTERS keep the same ordering but on a COMPRESSED stagger — in the
-    // reference the incoming glyph's blob is already visible near the START of the event (9,999→1:
-    // the "1" shows while the SECOND 9 is still degrading), it doesn't wait its positional turn.
+    // LEFT→RIGHT cascade over ALL phases (ink-timeline measurements, 9,999→1 @60fps):
+    //  • EXITS are CONTIGUOUS — iOS spaces them ~2.25 frames apart regardless of interleaved
+    //    arrivals, so they are indexed by their own ordinal (a global index made later exits
+    //    start 2-4 frames late).
+    //  • ENTERS keep the global positional index on a compressed stagger (×0.55): the iOS "1"
+    //    starts ~0.12s in — while the overlapping old ink is still ~60% present, so the centre
+    //    never goes empty (our deep "empty dip" came from entering too late).
     phases.sortBy { it.x }
+    var exitOrdinal = 0
     for ((i, ph) in phases.withIndex()) {
       when {
-        ph.isExit -> ph.s.exitDelay = i * staggerSeconds
-        ph.s.rolling -> ph.s.delay = i * staggerSeconds
+        ph.isExit -> ph.s.exitDelay = exitOrdinal++ * staggerSeconds
+        ph.s.rolling -> ph.s.delay = i * rollStaggerSeconds
         else -> ph.s.delay = enterLag + i * staggerSeconds * enterCascadeCompression
       }
     }

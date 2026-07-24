@@ -120,6 +120,24 @@ Stato committato. Tutti gli eventi chiave ora combaciano strutturalmente con iOS
   solo non schiarisce abbastanza). Residuo micro: risoluzione finale un filo più rapida/scura.
 Micro-delta rimasti: entrante ~3 frame più tardi nei big shrink; `.`+`5` insieme; fine-roll.
 
+### Tecnica di misura v2 — momenti (massa, centroide, dispersione)
+Upgrade da ink scalare (245−YAVG) a vettore per-frame per ROI: `M, Cx, Cy, σx, σy` su mappa
+`D=clip(B−I,0)` con B=mediana dei frame statici pre-transizione (script Python+numpy inline).
+Disambigua alpha/traslazione/blur/scala. Misure chiave ottenute (video and13 vs iOS):
+- **Spawn glifi nati = moto PURAMENTE VERTICALE** (Cx del "5" costante ±0.5px): nasce ~0.5
+  line-height sopra la posizione finale e scende; "dall'alto-destro" = posizione dello slot, non
+  moto orizzontale → `enterSpawnXFactor 1.0→0.15`, `enterTravelFactor 0.9→2.0`.
+- **Overshoot d'ingresso** misurato: +10% oltre il target, rientro ~9 frame (easeOutBack ✓).
+- **Molla del roll iOS morbida**: coda ~0.45s + overshoot massa 1.05 → `stiffness 320→170`,
+  `damping 0.70→0.78`.
+- **Roll stagger ≠ exit stagger**: carry 2,599→2,600 a ~4.5-5f/cifra (75-83ms) vs exit a 2.25f →
+  `rollStaggerSeconds 0.075` separato da `staggerSeconds 0.04`.
+- **Dip del roll**: iOS min ~0.55 (nostro era 0.44) → overlap alpha allargato
+  (old 0.08-0.78, new 0.14-0.96) + `rollBlurEnvelope` asimmetrico sin(π·p^0.72).
+- 9,999→1 post-fix: exit onsets combaciano (+7.2/+9.6f vs iOS +7/+9), enter +11f vs +9.5.
+Prossimo livello (proposto dall'utente, non ancora implementato): occupancy normalizzata per-ROI,
+onset robusti (>2% per 2 frame), griglia 3×3 per slot, template fitting old/new, loss-based tuning.
+
 ### Iterazione android-3 → "più rigido" (feedback utente) — diagnosi a 60fps
 Confronto 60fps iOS vs android-3 (carry `2,599→2,600`, single `2,576→2,577`):
 - ✅ **Direzione roll corretta** (incremento: nuova cifra dall'alto, contenuto scende) e **cascata

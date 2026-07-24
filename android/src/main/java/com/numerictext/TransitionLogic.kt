@@ -214,6 +214,13 @@ object TransitionLogic {
   // "buttery" part of the effect. Present across most of the transition.
   fun blurEnvelope(progress: Float): Float = sin(PI * progress.coerceIn(0f, 1f)).toFloat()
 
+  // Asymmetric bell for the ROLL: peaks early and DECAYS SLOWLY — the reference's roll keeps a
+  // soft edge for a long tail (~16-21 frames of recovery in the ink timelines vs our former ~10).
+  fun rollBlurEnvelope(progress: Float): Float {
+    val t = progress.coerceIn(0f, 1f).toDouble()
+    return sin(PI * Math.pow(t, 0.72)).toFloat()
+  }
+
   fun newBlurEnvelope(progress: Float): Float = blurEnvelope(progress)
 
   fun scaleEnvelope(progress: Float, minScale: Float = 0.92f): Float {
@@ -256,7 +263,7 @@ object TransitionLogic {
   fun exitOffsetFraction(e: Float): Float = easeOut(e)
 
   // Incoming glyph. Appears slightly after the exit begins and resolves by sharpening in place.
-  fun enterAlpha(n: Float): Float = smoothstep(0.05f, 0.62f, n)
+  fun enterAlpha(n: Float): Float = smoothstep(0.02f, 0.60f, n)
   fun enterBlur(n: Float): Float = 1f - smoothstep(0.10f, 0.80f, n)
   fun enterScale(n: Float, minScale: Float = 0.90f): Float =
     minScale + (1f - minScale) * easeOutBack(n)
