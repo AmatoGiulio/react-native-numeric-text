@@ -88,6 +88,9 @@ class NumericTextView(context: Context) : View(context) {
   // Fraction of the positional stagger an ENTER keeps (measured: iOS 9,999→1 enter starts
   // ~0.12s in = lag + 3·stagger·0.55; full stagger entered too late, 0.4 too early).
   private val enterCascadeCompression: Float = 0.55f
+  // Spacing BETWEEN successive arrivals (measured on 1→1.5: iOS separates "." and "5" by ~5
+  // frames — the same unhurried pace as the rolls, not the tight exit stagger).
+  private val enterSpacingSeconds: Float = 0.05f
   private val enterLag: Float = 0.04f
 
   // The horizontal reflow (anchors sliding, layouts recomposing) runs on its OWN slow clock. The
@@ -616,7 +619,10 @@ class NumericTextView(context: Context) : View(context) {
         // reference's "handoff": in 10→9 the "0" stays firm until the "9" is perceptible.
         ph.isExit -> ph.s.exitDelay = (exitOrdinal++ + entersSeen * 0.5f) * staggerSeconds
         ph.s.rolling -> ph.s.delay = i * rollStaggerSeconds
-        else -> { ph.s.delay = enterLag + i * staggerSeconds * enterCascadeCompression; entersSeen++ }
+        else -> {
+          ph.s.delay = enterLag + i * staggerSeconds * enterCascadeCompression + entersSeen * enterSpacingSeconds
+          entersSeen++
+        }
       }
     }
 
