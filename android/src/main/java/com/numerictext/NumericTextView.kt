@@ -75,7 +75,9 @@ class NumericTextView(context: Context) : View(context) {
   private val blurVelocityRef: Float = 9f
   // Opacity drop at full blur. A Gaussian blur alone doesn't lighten a large glyph enough — the
   // reference's out-of-focus bolla is LIGHT grey, so opacity is coupled to the blur amount.
-  private val blurAlphaDrop: Float = 0.35f
+  // 0.35 washed the mid-transition out too much (user-confirmed: ghosts too pale + an "empty
+  // breath" at the crossing that iOS never has — its grey mass stays present throughout).
+  private val blurAlphaDrop: Float = 0.22f
   // Depth of the overlapped roll (subtle — the roll reads mostly from blur + vertical travel).
   private val rollDepthMin: Float = 0.9f
 
@@ -607,11 +609,14 @@ class NumericTextView(context: Context) : View(context) {
     //    never goes empty (our deep "empty dip" came from entering too late).
     phases.sortBy { it.x }
     var exitOrdinal = 0
+    var entersSeen = 0
     for ((i, ph) in phases.withIndex()) {
       when {
-        ph.isExit -> ph.s.exitDelay = exitOrdinal++ * staggerSeconds
+        // Exits are contiguous, but one that follows an arrival waits half a step extra — the
+        // reference's "handoff": in 10→9 the "0" stays firm until the "9" is perceptible.
+        ph.isExit -> ph.s.exitDelay = (exitOrdinal++ + entersSeen * 0.5f) * staggerSeconds
         ph.s.rolling -> ph.s.delay = i * rollStaggerSeconds
-        else -> ph.s.delay = enterLag + i * staggerSeconds * enterCascadeCompression
+        else -> { ph.s.delay = enterLag + i * staggerSeconds * enterCascadeCompression; entersSeen++ }
       }
     }
 

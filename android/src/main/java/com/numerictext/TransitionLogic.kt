@@ -263,7 +263,7 @@ object TransitionLogic {
   fun exitOffsetFraction(e: Float): Float = easeOut(e)
 
   // Incoming glyph. Appears slightly after the exit begins and resolves by sharpening in place.
-  fun enterAlpha(n: Float): Float = smoothstep(0.02f, 0.60f, n)
+  fun enterAlpha(n: Float): Float = smoothstep(0.06f, 0.62f, n)
   fun enterBlur(n: Float): Float = 1f - smoothstep(0.10f, 0.80f, n)
   fun enterScale(n: Float, minScale: Float = 0.90f): Float =
     minScale + (1f - minScale) * easeOutBack(n)
