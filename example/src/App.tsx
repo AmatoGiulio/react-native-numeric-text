@@ -1,6 +1,12 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
 import { View, Text, Pressable, ScrollView, StyleSheet } from 'react-native';
 import { NumericText } from 'react-native-numeric-text';
+import { AnimatedNumber } from './reference/AnimatedNumber';
+import {
+  SEQUENCE_START,
+  SEQUENCE_DURATION,
+  useSequencePlayer,
+} from './sequence';
 
 type Preset = { label: string; from: number; to: number };
 
@@ -17,18 +23,31 @@ const PRESETS: Preset[] = [
   { label: '1 → 9,999', from: 1, to: 9999 },
 ];
 
+type Impl = 'reference' | 'library';
 type ReduceMode = 'system' | 'always' | 'never';
-type Strategy = 'changed_run' | 'whole_run' | 'per_glyph';
-
-const MANUAL_PROGRESS_VALUES = [0.0, 0.1, 0.25, 0.4, 0.5, 0.65, 0.75, 0.9, 1.0];
 
 export default function App() {
-  const [value, setValue] = useState(2576);
+  const [value, setValue] = useState(SEQUENCE_START);
+  const [impl, setImpl] = useState<Impl>('library');
   const [reduceMotion, setReduceMotion] = useState<ReduceMode>('system');
-  const [strategy, setStrategy] = useState<Strategy>('per_glyph');
-  const [manualProgress, setManualProgress] = useState<number | undefined>(
-    undefined
-  );
+  const [phase, setPhase] = useState('idle');
+  const [playing, setPlaying] = useState(false);
+
+  const onDone = useCallback(() => {
+    setPlaying(false);
+    setPhase('done');
+  }, []);
+  const { play, stop } = useSequencePlayer(setValue, setPhase, onDone);
+
+  const playSequence = useCallback(() => {
+    setPlaying(true);
+    play();
+  }, [play]);
+  const stopSequence = useCallback(() => {
+    stop();
+    setPlaying(false);
+    setPhase('idle');
+  }, [stop]);
 
   // Press-and-hold auto-repeat, so +/- can reproduce the fast-spam (rapid roll) behaviour.
   const holdRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -45,18 +64,6 @@ export default function App() {
   }, []);
   useEffect(() => () => stopHold(), [stopHold]);
 
-  const runStress = useCallback(() => {
-    setValue(100);
-    const timer1 = setTimeout(() => setValue(101), 200);
-    const timer2 = setTimeout(() => setValue(102), 400);
-    const timer3 = setTimeout(() => setValue(156), 600);
-    return () => {
-      clearTimeout(timer1);
-      clearTimeout(timer2);
-      clearTimeout(timer3);
-    };
-  }, []);
-
   const applyPreset = useCallback((p: Preset) => {
     setValue(p.from);
     setTimeout(() => setValue(p.to), 400);
@@ -64,21 +71,62 @@ export default function App() {
 
   return (
     <ScrollView style={styles.screen} contentContainerStyle={styles.content}>
-      <View style={styles.numberContainer}>
-        <NumericText
-          value={value}
-          locale="en-US"
-          direction="automatic"
-          animationDuration={220}
-          reduceMotion={reduceMotion}
-          useGrouping
-          minimumFractionDigits={0}
-          maximumFractionDigits={3}
-          style={styles.number}
-          debugTransitionStrategy={strategy}
-          debugManualProgress={manualProgress}
-        />
+      {/* Implementation under test — the SAME `value` drives both, so the same scripted
+          sequence produces comparable recordings on iOS (reference) and Android (library). */}
+      <View style={styles.segment}>
+        {(['reference', 'library'] as const).map((m) => (
+          <Pressable
+            key={m}
+            style={[styles.segmentBtn, impl === m && styles.segmentBtnActive]}
+            onPress={() => setImpl(m)}
+          >
+            <Text
+              style={[
+                styles.segmentText,
+                impl === m && styles.segmentTextActive,
+              ]}
+            >
+              {m === 'reference' ? 'Reference (SwiftUI)' : 'This library'}
+            </Text>
+          </Pressable>
+        ))}
       </View>
+
+      <View style={styles.numberContainer}>
+        {impl === 'reference' ? (
+          <AnimatedNumber value={value} size={84} />
+        ) : (
+          <NumericText
+            value={value}
+            locale="en-US"
+            direction="automatic"
+            animationDuration={220}
+            reduceMotion={reduceMotion}
+            useGrouping
+            minimumFractionDigits={0}
+            maximumFractionDigits={3}
+            style={styles.number}
+            debugTransitionStrategy="per_glyph"
+          />
+        )}
+      </View>
+
+      {/* Scripted sequence — press once, record, get an identical run to compare across platforms. */}
+      <View style={styles.playRow}>
+        <Pressable
+          style={[styles.playBtn, playing && styles.playBtnActive]}
+          onPress={playing ? stopSequence : playSequence}
+        >
+          <Text style={styles.playText}>
+            {playing
+              ? '■ Stop sequence'
+              : `▶ Play sequence (${Math.round(SEQUENCE_DURATION / 1000)}s)`}
+          </Text>
+        </Pressable>
+      </View>
+      <Text
+        style={styles.phase}
+      >{`phase: ${phase}   ·   value: ${value.toLocaleString('en-US')}`}</Text>
 
       <View style={styles.buttonsRow}>
         <Pressable
@@ -113,13 +161,7 @@ export default function App() {
           ))}
         </View>
 
-        <View style={styles.row}>
-          <Pressable style={styles.actionBtn} onPress={runStress}>
-            <Text style={styles.actionText}>Rapid: 100→101→102→156</Text>
-          </Pressable>
-        </View>
-
-        <Text style={styles.sectionTitle}>Reduce Motion</Text>
+        <Text style={styles.sectionTitle}>Reduce Motion (library only)</Text>
         <View style={styles.row}>
           {(['system', 'always', 'never'] as const).map((mode) => (
             <Pressable
@@ -142,77 +184,11 @@ export default function App() {
           ))}
         </View>
 
-        <Text style={styles.sectionTitle}>Transition Strategy</Text>
-        <View style={styles.row}>
-          {(['changed_run', 'whole_run', 'per_glyph'] as const).map((s) => (
-            <Pressable
-              key={s}
-              style={[
-                styles.toggleBtn,
-                strategy === s && styles.toggleBtnActive,
-              ]}
-              onPress={() => setStrategy(s)}
-            >
-              <Text
-                style={[
-                  styles.toggleText,
-                  strategy === s && styles.toggleTextActive,
-                ]}
-              >
-                {s === 'changed_run'
-                  ? 'CHANGED_RUN'
-                  : s === 'whole_run'
-                    ? 'WHOLE_RUN'
-                    : 'PER_GLYPH'}
-              </Text>
-            </Pressable>
-          ))}
-        </View>
-
-        <Text style={styles.sectionTitle}>Manual Progress (freeze frame)</Text>
-        <View style={styles.row}>
-          <Pressable
-            style={[
-              styles.toggleBtn,
-              manualProgress === undefined && styles.toggleBtnActive,
-            ]}
-            onPress={() => setManualProgress(undefined)}
-          >
-            <Text
-              style={[
-                styles.toggleText,
-                manualProgress === undefined && styles.toggleTextActive,
-              ]}
-            >
-              Live
-            </Text>
-          </Pressable>
-          {MANUAL_PROGRESS_VALUES.map((p) => (
-            <Pressable
-              key={p}
-              style={[
-                styles.progressBtn,
-                manualProgress === p && styles.toggleBtnActive,
-              ]}
-              onPress={() => setManualProgress(p)}
-            >
-              <Text
-                style={[
-                  styles.progressText,
-                  manualProgress === p && styles.toggleTextActive,
-                ]}
-              >
-                {p.toFixed(2)}
-              </Text>
-            </Pressable>
-          ))}
-        </View>
-
         <Text style={styles.sectionTitle}>Diagnostics</Text>
         <Text style={styles.diag}>
-          {`value: ${value}
-strategy: ${strategy}
-freeze: ${manualProgress ?? 'none'}
+          {`impl: ${impl}
+phase: ${phase}
+value: ${value}
 reduceMotion: ${reduceMotion}`}
         </Text>
       </View>
@@ -227,25 +203,71 @@ const styles = StyleSheet.create({
   },
   content: {
     alignItems: 'center',
-    paddingTop: 120,
+    paddingTop: 100,
     paddingBottom: 60,
     paddingHorizontal: 20,
+  },
+  segment: {
+    flexDirection: 'row',
+    backgroundColor: '#e8e8ed',
+    borderRadius: 10,
+    padding: 3,
+    marginBottom: 24,
+  },
+  segmentBtn: {
+    paddingHorizontal: 18,
+    paddingVertical: 8,
+    borderRadius: 8,
+  },
+  segmentBtnActive: {
+    backgroundColor: '#fff',
+  },
+  segmentText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#666',
+  },
+  segmentTextActive: {
+    color: '#000',
   },
   numberContainer: {
     alignItems: 'center',
     justifyContent: 'center',
     height: 120,
-    marginBottom: 20,
+    marginBottom: 12,
   },
   number: {
     fontSize: 84,
     fontWeight: '700',
     color: '#000',
   },
+  playRow: {
+    marginBottom: 8,
+  },
+  playBtn: {
+    paddingHorizontal: 22,
+    paddingVertical: 12,
+    borderRadius: 10,
+    backgroundColor: '#007aff',
+  },
+  playBtnActive: {
+    backgroundColor: '#ff3b30',
+  },
+  playText: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#fff',
+  },
+  phase: {
+    fontSize: 12,
+    color: '#999',
+    fontFamily: 'monospace',
+    marginBottom: 24,
+  },
   buttonsRow: {
     flexDirection: 'row',
     gap: 24,
-    marginBottom: 40,
+    marginBottom: 32,
   },
   circleBtn: {
     width: 56,
@@ -294,18 +316,6 @@ const styles = StyleSheet.create({
     flexWrap: 'wrap',
     gap: 4,
   },
-  actionBtn: {
-    paddingHorizontal: 16,
-    paddingVertical: 10,
-    borderRadius: 8,
-    backgroundColor: '#ffd60a',
-    alignSelf: 'flex-start',
-  },
-  actionText: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: '#000',
-  },
   toggleBtn: {
     paddingHorizontal: 16,
     paddingVertical: 8,
@@ -323,18 +333,6 @@ const styles = StyleSheet.create({
   },
   toggleTextActive: {
     color: '#fff',
-  },
-  progressBtn: {
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 6,
-    backgroundColor: '#e8e8ed',
-    marginRight: 2,
-    marginBottom: 4,
-  },
-  progressText: {
-    fontSize: 11,
-    color: '#333',
   },
   diag: {
     fontSize: 12,

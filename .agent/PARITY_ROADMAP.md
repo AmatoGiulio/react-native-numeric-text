@@ -5,6 +5,96 @@ Per il contesto completo dell'algoritmo vedi `NUMERIC_TEXT_ALGORITHM.md`.
 
 ---
 
+## 0. Fatto in questa iterazione (molle per-slot) — da verificare a video
+
+Refactor del renderer `PER_GLYPH` da **molla globale condivisa** a **molle indipendenti per
+colonna logica**. Copre in un colpo A, B, C, D, F della lista sotto. 53 unit test verdi.
+
+- **A — Molle per-slot.** Ogni colonna (unità, decine, …, separatori) è una `RollSlot` con
+  `value/velocity/target` indipendenti, chiave stabile ancorata a destra
+  (`TransitionLogic.layoutKeyedSlots` → `I0`=unità, `I3`=migliaia, `G3`=separatore, `F0`=decimi,
+  `DEC`, `S`). Solo le colonne il cui carattere cambia fanno retarget; le altre restano a riposo
+  → nitide. Le molle **persistono** tra i retarget del rapid-hold (continuità per-colonna).
+- **Blur per-cifra dalla velocità della singola molla** (`|velocity|/blurVelocityRef`). Niente
+  più `inputActivity` (rimosso): unità in hold veloce → retarget continuo → blur; migliaia ferme
+  → nitide. Emerge naturalmente il differenziale di blur del ref.
+- **B — Stagger destra→sinistra** (`staggerSeconds = 0.012`): le colonne che iniziano a rotolare
+  partono in cascata dall'unità → onda invece di blocco sincronizzato.
+- **C — Separatori fade+scale** (non roll): colonne separatore che nascono/muoiono usano la molla
+  di *life* (alpha + scale da `bornMinScale`), branch nel renderer per `!rolling`.
+- **D — Ancoraggio orizzontale**: colonne right-anchored per `distFromRight`; si interpola **solo
+  l'origine di centraggio** (`currentCompWidth` via `springValue`), non la X per-cifra → niente
+  micro-wobble sulle cifre che mantengono posizione logica.
+- **F — Depth scale (cylinder)**: layer OLD `scale 1→0.86`, NEW `0.86→1` sul pivot del glifo
+  (`RenderNode.scaleX/Y` + `pivotX/Y`), così il moto legge come rotazione su cilindro, non
+  ghigliottina 2D.
+- **Finestra verticale più corta** (`travelFactor 0.42→0.34`, `blurFactor 0.18→0.16`,
+  `verticalHeadroomFactor 0.14→0.16`) → scia più corta e morbida, meno colonna nera.
+
+**Knob nuovi** (in cima a `NumericTextView.kt`): `blurVelocityRef=9`, `staggerSeconds=0.012`,
+`lifeStiffness=260`, `depthMinScale=0.86`, `bornMinScale=0.6`. Il blur/velocità e lo stagger sono
+i primi da ritoccare a video.
+
+**Perf**: nodi `RenderNode` old/new **poolati per slot** (campi di `RollSlot`, riusati tra i
+frame; mai `new` in `onDraw`). Da profilare `onDraw` con molte colonne se serve.
+
+**Ancora aperto**: E (deprecare `animationDuration`, esporre `stiffness`/`dampingRatio` come
+prop), tuning fine dei knob a video, eventuale squash/stretch legato all'overshoot.
+
+### Esito confronto frame iOS ref vs Android (video android-1 + iOS sim, 2026-07-23)
+Harness side-by-side ([[parity-comparison-harness]]): stessa `SEQUENCE`, allineata via evento
+999→1,000 (`t0_ios≈1.85s`, `t0_and≈2.5s`). Verdetto:
+- **RISOLTO**: blur per-cifra (solo le cifre che cambiano), cifre invariate nitide, continuità
+  rapid-hold (niente più black-blob — nel rapid il nostro unità sfoca, prefisso nitido come iOS).
+- **GAP PRINCIPALE (uniforme su tutte le transizioni)**: il roll Android è **troppo lungo** →
+  glifo uscente e entrante restano separati verticalmente = due fantasmi scuri = **colonna nera
+  alta**. iOS ha travel corto → i due glifi si **sovrappongono** → un'unica **massa grigia
+  morbida**, glifo leggibile. → Fix applicato: `travelFactor 0.34→0.18`, `blurFactor 0.16→0.12`,
+  `verticalHeadroomFactor 0.16→0.12`. **Da riverificare a video (solo Android, la ref iOS non
+  cambia).**
+- **GAP minore**: su shrink/bigjump (`1,000→999`, `9,999→1`) la cifra superstite scivola
+  orizzontalmente un po' più che su iOS (right-anchor + interpolazione origine). iOS mantiene il
+  nuovo valore più centrato. Da valutare dopo il blur: interpolare la X per-colonna tra layout
+  vecchio-centrato e nuovo-centrato invece del solo right-anchor.
+
+### Algoritmo iOS numericText — reverse engineering a 60fps (video android-2 + iOS sim)
+Misurato frame-by-frame sui filmstrip 60fps della reference (single roll `2,576→2,577`, carry
+`2,599→2,600`, grow `999→1,000`, decrement `2→1`). **Tratti fondamentali** (alcuni erano
+implementati AL CONTRARIO):
+- **Cascata LEFT→RIGHT**: su un cambio multi-cifra la cifra **più a sinistra rotola per prima**,
+  poi via via verso destra (`2,599→2,600`: prima centinaia, poi decine, poi unità), con delay
+  **~80ms per cifra**. Era right→left @12ms → **corretto** (`staggerSeconds=0.075`, sort per
+  `cflNew` crescente).
+- **Direzione del roll**: incremento → la nuova cifra entra dall'**alto** (il contenuto scende);
+  decremento → dal **basso** (contenuto sale). Era invertito → **corretto** (nego `direction`
+  nelle offset del renderer).
+- **Durata roll per cifra ~130–160ms core** (coda morbida fino a ~250ms); settle globale ~280ms.
+  → `dampingRatio 0.7→0.8` (poco bounce come `.spring()` iOS). Stiffness lasciata 320.
+- **Travel ~0.3× l'altezza glifo** → `travelFactor 0.18→0.24` (+`verticalHeadroomFactor 0.16`).
+- **Layout orizzontale = DUE layout centrati indipendenti** (vecchio+nuovo), crossfade; la cifra
+  che sopravvive NON scivola, solo nascita/morte ai bordi. → refactor `RollSlot`
+  (`cflOld/cflNew/hasOld/hasNew`), `drawSlots` usa `oldOriginX/newOriginX`, rimosso
+  `distFromRight`/`currentCompWidth`. Fissa il GAP orizzontale.
+- **Blur**: corto/grigio/morbido — già ok, invariato.
+- Separatore/cifra di testa che nasce: **fade+scale** insieme alla cifra più a sinistra (early),
+  non roll. Già così.
+
+**Da riverificare a video (solo Android)**: la cascata left→right e la direzione del roll sono le
+due correzioni percettivamente più grandi.
+
+### Iterazione android-3 → "più rigido" (feedback utente) — diagnosi a 60fps
+Confronto 60fps iOS vs android-3 (carry `2,599→2,600`, single `2,576→2,577`):
+- ✅ **Direzione roll corretta** (incremento: nuova cifra dall'alto, contenuto scende) e **cascata
+  left→right corretta**. Le due correzioni grosse hanno funzionato.
+- ❌ **Causa del "rigido" = molla troppo morbida/lenta**: iOS completa un roll di cifra in ~5-6
+  frame (~90ms) con partenza immediata; android-3 impiegava ~11+ frame (~200ms) con partenza
+  fiacca. Il roll draggy fa sembrare la cascata laboriosa. → Fix: `springStiffness 320→700`
+  (roll ~130ms, partenza scattante), `dampingRatio 0.8→0.78`, `blurVelocityRef 9→13` (compensa la
+  velocità di picco più alta così il blur resta uguale), `staggerSeconds 0.075→0.07`. Da
+  riverificare a video.
+
+---
+
 ## 1. Dove siamo (stato attuale)
 
 Implementato e verificato (46 unit test verdi, solo logica pura; il visivo lo prova

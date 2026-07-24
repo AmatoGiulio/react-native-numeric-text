@@ -2420,6 +2420,19 @@ __metadata:
   languageName: node
   linkType: hard
 
+"@expo/ui@npm:~55.0.17":
+  version: 55.0.17
+  resolution: "@expo/ui@npm:55.0.17"
+  dependencies:
+    sf-symbols-typescript: "npm:^2.1.0"
+  peerDependencies:
+    expo: "*"
+    react: "*"
+    react-native: "*"
+  checksum: 10c0/e47af51035215dd1a9b5d75f4fe9d8a1933824f8025ace2106d50e68e0a7f632e11ac401cb4e848a38f71fd9111947d29f2499e262fd872271049e18b8a2e7fb
+  languageName: node
+  linkType: hard
+
 "@expo/vector-icons@npm:^15.0.2":
   version: 15.1.1
   resolution: "@expo/vector-icons@npm:15.1.1"
@@ -10571,6 +10584,7 @@ __metadata:
   resolution: "react-native-numeric-text-example@workspace:example"
   dependencies:
     "@expo/metro-runtime": "npm:~55.0.12"
+    "@expo/ui": "npm:~55.0.17"
     expo: "npm:~55.0.28"
     expo-dev-client: "npm:~55.0.37"
     expo-status-bar: "npm:~55.0.6"
@@ -11187,6 +11201,13 @@ __metadata:
   version: 1.2.0
   resolution: "setprototypeof@npm:1.2.0"
   checksum: 10c0/68733173026766fa0d9ecaeb07f0483f4c2dc70ca376b3b7c40b7cda909f94b0918f6c5ad5ce27a9160bdfb475efaa9d5e705a11d8eaae18f9835d20976028bc
+  languageName: node
+  linkType: hard
+
+"sf-symbols-typescript@npm:^2.1.0":
+  version: 2.2.0
+  resolution: "sf-symbols-typescript@npm:2.2.0"
+  checksum: 10c0/3f3bbf33aaad19e619d6f169899b39e9fe9c5fd21f0d6d511100e36887606ad349109ddc6ff82933f2b8cbf437dd7105c2ae6b0059b291dc47f143b30c2074cc
   languageName: node
   linkType: hard
 

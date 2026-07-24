@@ -350,6 +350,68 @@ class TransitionLogicTest {
     assertTrue("expected no overshoot, got $maxX", maxX <= 1.001f)
   }
 
+  // --- Keyed slot layout (per-slot spring scheduler input) ---
+
+  private fun keyed(s: String) =
+    TransitionLogic.layoutKeyedSlots(s, ',', '.', '-') { it.length.toFloat() }
+
+  private fun keyMap(s: String) = keyed(s).associate { it.key to it.char }
+
+  @Test
+  fun keyed_integerDigits_keyedFromRight() {
+    // Units → I0, tens → I1, … regardless of overall length.
+    assertEquals(mapOf("I0" to "6", "I1" to "7", "I2" to "5", "I3" to "2", "G3" to ","), keyMap("2,576"))
+  }
+
+  @Test
+  fun keyed_unitsKeyStable_acrossLengthChange() {
+    // The units digit keeps key I0 in both "999" and "1,000" → its spring survives the carry.
+    assertEquals("9", keyMap("999")["I0"])
+    assertEquals("0", keyMap("1,000")["I0"])
+    assertEquals("9", keyMap("999")["I2"])
+    assertEquals("0", keyMap("1,000")["I2"])
+  }
+
+  @Test
+  fun keyed_separatorKeyStable_bornOnCarry() {
+    // 999 has no separator; 1,000 gains G3 and a new leading I3 — both absent from 999's keys.
+    assertEquals(false, keyMap("999").containsKey("G3"))
+    assertEquals(false, keyMap("999").containsKey("I3"))
+    assertEquals(",", keyMap("1,000")["G3"])
+    assertEquals("1", keyMap("1,000")["I3"])
+  }
+
+  @Test
+  fun keyed_fractional_keyedFromLeft() {
+    assertEquals(mapOf("I0" to "1", "DEC" to ".", "F0" to "9"), keyMap("1.9"))
+    assertEquals(mapOf("I0" to "2", "DEC" to ".", "F0" to "0"), keyMap("2.0"))
+  }
+
+  @Test
+  fun keyed_sign_keyed() {
+    assertEquals("-", keyMap("-1")["S"])
+    assertEquals("1", keyMap("-1")["I0"])
+  }
+
+  @Test
+  fun keyed_distFromRight_unitsIsSmallest() {
+    // With unit char widths, the rightmost glyph has the smallest distance-from-right.
+    val slots = keyed("2,576")
+    val units = slots.first { it.key == "I0" }
+    val thousands = slots.first { it.key == "I3" }
+    assertTrue(units.distFromRight < thousands.distFromRight)
+    // Units centre sits half a glyph in from the right edge.
+    assertEquals(0.5f, units.distFromRight, 0.001f)
+  }
+
+  @Test
+  fun keyed_twoSeparators_distinctKeys() {
+    val m = keyMap("1,000,000")
+    assertEquals(",", m["G3"])
+    assertEquals(",", m["G6"])
+    assertEquals("1", m["I6"])
+  }
+
   @Test
   fun perGlyph_fractional_carry() {
     // 1.9 → 2.0: integer 1→2 and fraction 9→0 both change; decimal point is an anchor.

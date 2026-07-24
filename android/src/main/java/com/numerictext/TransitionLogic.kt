@@ -18,6 +18,32 @@ data class NumericToken(val text: String, val kind: TokenKind, val logicalIndex:
 data class GlyphSlot(val oldToken: NumericToken?, val newToken: NumericToken?, val oldX: Float, val newX: Float, val oldWidth: Float, val newWidth: Float, val changed: Boolean)
 data class TransitionPlan(val oldFormatted: String, val newFormatted: String, val slots: List<GlyphSlot>, val oldWidth: Float, val newWidth: Float)
 
+/**
+ * A single glyph position of a formatted number, tagged with a **stable key** that is
+ * anchored to logical position (units, tens, …) rather than array index, so per-slot spring
+ * state survives across value changes and length changes (the roadmap Part A requirement).
+ *
+ * Key convention:
+ *  - `I{n}`  integer digit, n = number of integer digits to its right (I0 = units, I3 = thousands)
+ *  - `F{n}`  fractional digit, n = position after the decimal separator (F0 = tenths)
+ *  - `G{n}`  group separator, n = integer digits to its right (stable across 999→1,000)
+ *  - `DEC`   decimal separator, `S` sign, `O{i}` anything else
+ *
+ * `centerFromLeft` is the glyph centre measured from the string's left edge; `distFromRight`
+ * (= totalWidth − centerFromLeft) is what the renderer uses to right-anchor columns so a digit
+ * that keeps its logical position never wobbles horizontally when the number's width changes.
+ */
+data class KeyedSlot(
+  val key: String,
+  val kind: TokenKind,
+  val char: String,
+  val centerFromLeft: Float,
+  val width: Float,
+  val totalWidth: Float
+) {
+  val distFromRight: Float get() = totalWidth - centerFromLeft
+}
+
 enum class TransitionStrategy { WHOLE_RUN, CHANGED_RUN, PER_GLYPH }
 
 data class LayerPlan(
@@ -273,6 +299,48 @@ object TransitionLogic {
     val ml = maxOf(of.size, nf.size); val slots = mutableListOf<Triple<Int, Int, Boolean>>()
     for (i in 0 until ml) { val oT = of.getOrNull(i); val nT = nf.getOrNull(i); val oi = if (oT != null) ot.indexOf(oT) else -1; val ni = if (nT != null) nt.indexOf(nT) else -1; slots.add(Triple(oi, ni, oi >= 0 && ni >= 0 && ot[oi].text != nt[ni].text)) }
     return slots
+  }
+
+  /**
+   * Lay out a formatted number into keyed glyph slots (see [KeyedSlot]). Pure and testable —
+   * the renderer's per-slot spring scheduler diffs two of these lists to decide which columns
+   * roll, which are born, and which die.
+   */
+  fun layoutKeyedSlots(
+    formatted: String,
+    groupSep: Char, decimalSep: Char, minusSign: Char,
+    measure: (String) -> Float
+  ): List<KeyedSlot> {
+    val tokens = tokenize(formatted, groupSep, decimalSep, minusSign)
+    val widths = tokens.map { measure(it.text) }
+    val total = widths.sum()
+    val decIdx = tokens.indexOfFirst { it.kind == TokenKind.DECIMAL_SEPARATOR }
+    val intEnd = if (decIdx >= 0) decIdx else tokens.size
+
+    // For every token index, how many integer digits sit to its right (units digit → 0).
+    val intDigitsToRight = IntArray(tokens.size)
+    var c = 0
+    for (i in intEnd - 1 downTo 0) {
+      intDigitsToRight[i] = c
+      if (tokens[i].kind == TokenKind.DIGIT) c++
+    }
+
+    val result = ArrayList<KeyedSlot>(tokens.size)
+    var cum = 0f
+    var fracPos = 0
+    for (i in tokens.indices) {
+      val t = tokens[i]; val w = widths[i]; val center = cum + w / 2f
+      val key = when (t.kind) {
+        TokenKind.DIGIT -> if (decIdx >= 0 && i > decIdx) "F${fracPos++}" else "I${intDigitsToRight[i]}"
+        TokenKind.GROUP_SEPARATOR -> "G${intDigitsToRight[i]}"
+        TokenKind.DECIMAL_SEPARATOR -> "DEC"
+        TokenKind.SIGN -> "S"
+        else -> "O$i"
+      }
+      result.add(KeyedSlot(key, t.kind, t.text, center, w, total))
+      cum += w
+    }
+    return result
   }
 
   fun buildPerGlyphPlan(
