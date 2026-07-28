@@ -84,3 +84,6 @@ android/generated
 
 # React Native Nitro Modules
 nitrogen/
+
+# local analysis media (screen recordings)
+docs/tune/

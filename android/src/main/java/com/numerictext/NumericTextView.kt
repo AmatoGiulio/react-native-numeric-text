@@ -1037,12 +1037,17 @@ class NumericTextView(context: Context) : View(context) {
   // newest value; per-slot, only the columns whose character actually changed retarget (carrying
   // their velocity), so a rapid burst becomes one continuous per-column roll.
   private fun retargetTransition() {
-    if (springValue >= 1f) {
-      activePlan?.let { settledValue = it.newValue; settledText = it.newFormatted }
-      springValue = (springValue - 1f).coerceAtLeast(0f)
-    }
+    // The next hop rolls FROM the segment currently on screen — i.e. the IN-FLIGHT target — not
+    // from the pre-transition settledText, which stays stale until the running segment settles.
+    // Using the stale value collapsed A→B→A patterns (999→1,000→999): while the 999→1,000 grow was
+    // still animating, settledText was still "999", so the incoming "999" looked like a no-op and
+    // the animation was cancelled to a jump. Baselining on the in-flight target fixes it.
+    val inflightTarget = activePlan?.newFormatted ?: settledText
+    val inflightValue = activePlan?.newValue ?: settledValue
+    if (springValue >= 1f) springValue = (springValue - 1f).coerceAtLeast(0f)
+    settledValue = inflightValue; settledText = inflightTarget
 
-    val oldFormatted = settledText
+    val oldFormatted = inflightTarget
     val newFormatted = formatNumber(numericValue)
     if (newFormatted == oldFormatted) {
       cancelAnimation(); settleTo(oldFormatted); return
