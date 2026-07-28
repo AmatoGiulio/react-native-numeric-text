@@ -159,6 +159,15 @@ class NumericTextView(context: Context) : View(context) {
     var off: Float = 0f
     var offV: Float = 0f
     var offTarget: Float = 0f
+    /**
+     * Where this glyph heads when it leaves. The offset target itself is DERIVED each tick from the
+     * live presence target, so movement and fading are released together by the cascade.
+     *
+     * Setting the offset target directly at schedule time let a glyph travel while its presence
+     * target was still queued behind an exit stagger: on 9,999 -> 1,000 the outgoing nines slid
+     * upward at full presence, perfectly sharp, before they began to fade.
+     */
+    var exitOff: Float = 0f
     var travelMul: Float = 1f      // roll = 1; a structural birth spawns much further out
     var minScale: Float = 0.9f
     var driftMul: Float = 0f       // outward X displacement while absent (births/deaths only)
@@ -549,7 +558,8 @@ class NumericTextView(context: Context) : View(context) {
         p = 0f; v = 0f
         // Born on the arrival side. A structural birth spawns much further out and much softer;
         // a same-slot roll starts just off the baseline.
-        off = -dir.toFloat(); offV = 0f; offTarget = 0f   // waiting on the arrival side
+        off = -dir.toFloat(); offV = 0f; offTarget = off   // waiting on the arrival side
+        exitOff = dir * 2f
         travelMul = if (current == null && structural) enterTravelFactor else 1f
         minScale = if (current == null && structural) enterMinScale else rollDepthMin
         driftMul = if (current == null && structural) enterSpawnXFactor else 0f
@@ -557,7 +567,7 @@ class NumericTextView(context: Context) : View(context) {
       }
       g.w = ks.width
       g.xRelTarget = xRelOf(ks)
-      g.offTarget = 0f                       // arriving (or coming back) to the baseline
+      g.exitOff = dir * 2f                   // where it will go if it later leaves
       if (revived == null) col.glyphs.add(g)
 
       // Retire EVERY glyph that is not the one arriving, and let each carry on down the strip on
@@ -578,7 +588,7 @@ class NumericTextView(context: Context) : View(context) {
         // Aim well past the baseline, not just to +1: a glyph that asymptotes at +1 parks 0.15 of
         // a line height below the digit and lingers there while it fades, so a fast roll built up a
         // pale motionless cluster just under the number instead of a stream leaving the frame.
-        other.offTarget = dir * 2f                                 // continue through and clear out
+        other.exitOff = dir * 2f                                   // continue through and clear out
         if (structural) {
           other.minScale = exitMinScale; other.driftMul = exitDriftOut; other.travelMul = 1f
         }
@@ -621,7 +631,7 @@ class NumericTextView(context: Context) : View(context) {
       if (newKeys.contains(k)) continue
       for (g in col.glyphs) {
         if (g.effectiveTarget <= 0f) continue
-        g.offTarget = dir * 2f
+        g.exitOff = dir * 2f
         g.minScale = exitMinScale; g.driftMul = exitDriftOut; g.travelMul = 1f
         g.xRelTarget = g.xRel                  // frozen: dying glyphs do not ride the reflow
         g.delay = 0f
@@ -702,6 +712,13 @@ class NumericTextView(context: Context) : View(context) {
         // be excluded from the cascade, and why nothing rippled once a transition was interrupted.
         val (p, v) = TransitionLogic.springIntegrate(g.p, g.v, g.target, springStiffness, springDampingRatio, dt)
         g.p = p; g.v = v
+        // Movement is released by the same stagger as the fade: while a change is still queued the
+        // glyph holds where it is, so nothing ever slides at full presence.
+        g.offTarget = when {
+          g.pendingTarget >= 0f -> g.off
+          g.target >= 0.5f -> 0f
+          else -> g.exitOff
+        }
         val (o, ov) = TransitionLogic.springIntegrate(g.off, g.offV, g.offTarget, springStiffness, springDampingRatio, dt)
         g.off = o; g.offV = ov
         val (x, xv) = TransitionLogic.springIntegrate(g.xRel, g.xv, g.xRelTarget, xStiffness, xDampingRatio, dt)
