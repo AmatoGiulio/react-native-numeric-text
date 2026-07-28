@@ -585,10 +585,10 @@ class NumericTextView(context: Context) : View(context) {
       var newestRetired: GlyphState? = null
       for (other in col.glyphs) {
         if (other === g || other.effectiveTarget <= 0f) continue   // already on its way out
-        // Aim well past the baseline, not just to +1: a glyph that asymptotes at +1 parks 0.15 of
-        // a line height below the digit and lingers there while it fades, so a fast roll built up a
-        // pale motionless cluster just under the number instead of a stream leaving the frame.
-        other.exitOff = dir * 2f                                   // continue through and clear out
+        // Two units, so the glyph keeps drifting clear instead of parking just off the baseline —
+        // a fast roll needs departures to leave the frame, not pile up. The rate is what matters,
+        // not the destination: see offStiffness below.
+        other.exitOff = dir * 2f
         if (structural) {
           other.minScale = exitMinScale; other.driftMul = exitDriftOut; other.travelMul = 1f
         }
@@ -710,7 +710,12 @@ class NumericTextView(context: Context) : View(context) {
         // presence spring runs even during a stagger — the delay gates only the target flip. It
         // used to freeze the glyph, which is why a staggered column that was already moving had to
         // be excluded from the cascade, and why nothing rippled once a transition was interrupted.
-        val (p, v) = TransitionLogic.springIntegrate(g.p, g.v, g.target, springStiffness, springDampingRatio, dt)
+        // A DEPARTING glyph sheds its presence faster than it travels. Its destination is two units
+        // away so it always clears the frame (a fast roll needs departures to leave, not pile up),
+        // but at a matched rate it was still nearly opaque by the time it had visibly moved — that
+        // is what made the nines of 9,999 -> 1,000 rise while crisp.
+        val pK = if (g.target >= 0.5f) springStiffness else springStiffness * 4f
+        val (p, v) = TransitionLogic.springIntegrate(g.p, g.v, g.target, pK, springDampingRatio, dt)
         g.p = p; g.v = v
         // Movement is released by the same stagger as the fade: while a change is still queued the
         // glyph holds where it is, so nothing ever slides at full presence.
@@ -719,7 +724,14 @@ class NumericTextView(context: Context) : View(context) {
           g.target >= 0.5f -> 0f
           else -> g.exitOff
         }
-        val (o, ov) = TransitionLogic.springIntegrate(g.off, g.offV, g.offTarget, springStiffness, springDampingRatio, dt)
+        // A DEPARTING glyph must fade faster than it travels, or it is still nearly opaque by the
+        // time it has visibly moved — that is what made the nines of 9,999 -> 1,000 rise while
+        // crisp. Its destination is two units away so it always clears out, but a quarter of the
+        // stiffness halves the rate, so it covers roughly one unit in the time it sheds its
+        // presence and drifts the rest of the way once it is already invisible.
+        // An ARRIVING glyph keeps the presence spring's own rate, so it lands as it solidifies.
+        val offK = if (g.target >= 0.5f) springStiffness else springStiffness * 0.25f
+        val (o, ov) = TransitionLogic.springIntegrate(g.off, g.offV, g.offTarget, offK, springDampingRatio, dt)
         g.off = o; g.offV = ov
         val (x, xv) = TransitionLogic.springIntegrate(g.xRel, g.xv, g.xRelTarget, xStiffness, xDampingRatio, dt)
         g.xRel = x; g.xv = xv
