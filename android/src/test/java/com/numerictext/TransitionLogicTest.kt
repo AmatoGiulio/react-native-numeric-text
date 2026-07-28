@@ -475,4 +475,71 @@ class TransitionLogicTest {
     assertEquals(true, plan.slots.any { it.changed && it.oldToken?.text == "1" && it.newToken?.text == "2" })
     assertEquals(true, plan.slots.any { it.changed && it.oldToken?.text == "9" && it.newToken?.text == "0" })
   }
+
+  // ── Continuous presence model ──
+  //
+  // These pin the properties the presence model exists for: a glyph's look is a pure function of
+  // its current presence, so an interrupted transition can reverse instead of restarting.
+
+  @Test
+  fun presence_endpointsAreCleanExtremes() {
+    // Fully absent: invisible and maximally soft. Fully present: opaque and perfectly sharp.
+    assertEquals(0f, TransitionLogic.presenceAlpha(0f), 0.001f)
+    assertEquals(1f, TransitionLogic.presenceBlur(0f), 0.001f)
+    assertEquals(1f, TransitionLogic.presenceAlpha(1f), 0.001f)
+    assertEquals(0f, TransitionLogic.presenceBlur(1f), 0.001f)
+  }
+
+  @Test
+  fun presence_crossingKeepsBothGlyphsSubstantial() {
+    // The crossing must not read as the digit fading out. Measured on the reference, the dominant
+    // glyph of a crossing sits at 0.66-0.76 of a settled digit's darkness, so an exactly
+    // complementary fade (0.5 each, less the blur's opacity coupling) is too pale.
+    assertEquals(0.66f, TransitionLogic.presenceAlpha(0.5f), 0.02f)
+    for (p in listOf(0.25f, 0.4f, 0.5f, 0.6f, 0.75f)) {
+      val sum = TransitionLogic.presenceAlpha(p) + TransitionLogic.presenceAlpha(1f - p)
+      assertTrue("pair should exceed one glyph of ink at $p, was $sum", sum > 1.05f)
+      assertTrue("but not pile up into a dark blob at $p, was $sum", sum < 1.45f)
+    }
+  }
+
+  @Test
+  fun presence_blurIsSoftMidFlightAndResolvesCleanly() {
+    // Mid-flight a glyph must be clearly out of focus…
+    assertTrue(TransitionLogic.presenceBlur(0.5f) >= 0.5f)
+    assertTrue(TransitionLogic.presenceBlur(0.8f) >= 0.15f)
+    // …but the tail must be short enough that the transition actually looks finished. A sub-linear
+    // curve left a residual blur that, at a large font size, still measured several pixels.
+    assertTrue(TransitionLogic.presenceBlur(0.98f) < 0.03f)
+  }
+
+  @Test
+  fun presence_offsetGoesPastBaselineOnOvershoot() {
+    // Presence is fed in unclamped so the spring's overshoot carries the glyph past its resting
+    // baseline and back — the settle bounce.
+    assertEquals(1f, TransitionLogic.presenceOffsetFraction(0f), 0.001f)
+    assertEquals(0f, TransitionLogic.presenceOffsetFraction(1f), 0.001f)
+    assertTrue(TransitionLogic.presenceOffsetFraction(1.05f) < 0f)
+  }
+
+  @Test
+  fun presence_scaleSpansMinToFull() {
+    assertEquals(0.72f, TransitionLogic.presenceScale(0f, 0.72f), 0.001f)
+    assertEquals(1f, TransitionLogic.presenceScale(1f, 0.72f), 0.001f)
+  }
+
+  @Test
+  fun springStep_retargetPreservesVelocity() {
+    // A glyph caught mid-exit and retargeted back to present must keep moving in the direction it
+    // already had for at least one step — that continuity IS the "back" the reference shows.
+    var p = 1f; var v = 0f
+    repeat(6) { val (x, vv) = TransitionLogic.springStep(p, v, 0f, 150f, 0.85f, 1f / 60f); p = x; v = vv }
+    assertTrue("should be mid-flight, was $p", p in 0.2f..0.95f)
+    val vAtReversal = v
+    assertTrue("should still be heading out", vAtReversal < 0f)
+    val (pAfter, vAfter) = TransitionLogic.springStep(p, v, 1f, 150f, 0.85f, 1f / 60f)
+    // Momentum survives the retarget: it is still moving away for this step, decelerating.
+    assertTrue(pAfter < p)
+    assertTrue(vAfter > vAtReversal)
+  }
 }

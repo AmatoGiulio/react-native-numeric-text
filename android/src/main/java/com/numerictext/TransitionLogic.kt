@@ -204,6 +204,34 @@ object TransitionLogic {
     return Pair(x, v)
   }
 
+  /** Longest integration step before a stiff spring starts to visibly judder (~240 Hz). */
+  const val SPRING_SUB_STEP = 1f / 240f
+
+  /**
+   * Integrate the spring over [dt] in fixed sub-steps.
+   *
+   * Semi-implicit Euler's error grows with stiffness × dt, so a stiff spring driven straight from
+   * the frame delta tracks the frame pacing rather than the clock: on an emulator, where frame
+   * times are irregular, that showed up as a continuous roll trembling instead of gliding
+   * (measured: 77% of frames reversed the ink's vertical direction against the reference's 19%).
+   * Sub-stepping decouples the motion from frame jitter without changing the spring itself.
+   */
+  fun springIntegrate(
+    value: Float, velocity: Float, goal: Float,
+    stiffness: Float, dampingRatio: Float, dt: Float
+  ): Pair<Float, Float> {
+    var x = value
+    var v = velocity
+    var remaining = dt
+    while (remaining > 0f) {
+      val step = min(remaining, SPRING_SUB_STEP)
+      val r = springStep(x, v, goal, stiffness, dampingRatio, step)
+      x = r.first; v = r.second
+      remaining -= step
+    }
+    return Pair(x, v)
+  }
+
   // Complementary crossfade: both glyphs ~0.5 at the midpoint → heavy overlap so the
   // blurred old + blurred new read as a single soft smear.
   fun oldOpacity(progress: Float): Float = 1f - smootherstep(progress)
@@ -269,6 +297,85 @@ object TransitionLogic {
     minScale + (1f - minScale) * easeOutBack(n)
   /** Fraction of the (short) entry travel still to cover; slight overshoot gives the settle. */
   fun enterOffsetFraction(n: Float): Float = 1f - easeOutBack(n)
+
+  // ── Continuous presence model (default PER_GLYPH renderer) ──
+  //
+  // The lifecycle curves above map a *phase timer* to a property, so the only way to interrupt one
+  // is to restart it — which is why a rapid preset spam read as a series of flat, complete
+  // changes. The reference does something else: every glyph carries a continuous PRESENCE
+  // p ∈ [0,1] (0 = fully absent, 1 = settled and sharp) driven by a spring toward 0 or 1, and every
+  // visual property is a pure function of the CURRENT p. Retargeting only moves the goal, so a
+  // glyph caught at p = 0.4 on its way out springs back from 0.4 carrying its velocity — the
+  // "back" the reference shows, and the reason its spam never re-sharpens: presses arrive faster
+  // than the spring settles, so p hovers mid-range and the number stays a soft grey mass.
+  //
+  // p is deliberately NOT clamped by the caller before the offset is taken: the spring overshoots
+  // past 1 and the glyph rides slightly past its resting baseline before settling back.
+
+  /**
+   * Opacity. Deliberately MORE than complementary in the middle: at p = 0.5 this gives 0.66, so
+   * two glyphs crossing sum to about 1.3 glyphs of ink rather than exactly 1.
+   *
+   * That matches the reference, where the dominant glyph of a crossing measures 0.66–0.76 of a
+   * settled digit's darkness — the pair reads as two distinct digits contending for the slot. An
+   * exactly complementary fade put each at 0.5, and after the blur's opacity coupling ~0.44, which
+   * made a fast run look like the digit had faded out rather than changed. The extra ink is not
+   * double-counted visually because the two glyphs sit at different points along the roll.
+   */
+  fun presenceAlpha(p: Float): Float =
+    Math.pow(p.coerceIn(0f, 1f).toDouble(), 0.6).toFloat()
+
+  /**
+   * Softness — linear in the presence deficit.
+   *
+   * A sub-linear exponent (0.5) gave a very long tail: with a large font the peak blur radius is
+   * tens of pixels, so even a residual (1−p) of 0.001 still read as soft, and a transition never
+   * looked like it had finished. Linear still leaves a glyph clearly out of focus while it is
+   * mid-flight (0.2 of full blur at p = 0.8) and lets it resolve cleanly by p ≈ 0.98.
+   */
+  fun presenceBlur(p: Float): Float = 1f - p.coerceIn(0f, 1f)
+
+  /**
+   * Depth: an absent glyph is small and grows into place as it resolves.
+   *
+   * Strongly convex in (1−p), fitted to the iOS reference's 1→9,999 growth, where a glyph's ink
+   * height against its own settled height measured 0.97 / 0.96 / 0.94 / 0.87 / 0.72 at presences of
+   * roughly 0.78 / 0.65 / 0.58 / 0.33 / 0.17. A glyph therefore stays near full size for most of
+   * its arrival and only the barely-present ones read as small.
+   */
+  fun presenceScale(p: Float, minScale: Float): Float {
+    val a = 1f - p.coerceIn(0f, 1f)
+    return 1f - (1f - minScale) * Math.pow(a.toDouble(), 2.2).toFloat()
+  }
+
+  /**
+   * Residual displacement along the roll axis, as a fraction of the travel: full at p = 0, zero at
+   * p = 1, and NEGATIVE past 1 — that is the settle bounce, which is why `p` is taken unclamped and
+   * why the power below preserves sign.
+   *
+   * The exponent is fitted to the same reference frames, where a glyph's rise above its settled
+   * centre measured 0.08 / 0.17 / 0.20 / 0.38 / 0.53 glyph-heights at those same presences: the
+   * arriving glyph hangs high early and then drops into place late, rather than sliding linearly.
+   */
+  fun presenceOffsetFraction(p: Float): Float {
+    val a = 1f - p
+    val m = Math.pow(abs(a).toDouble(), 1.43).toFloat()
+    return if (a < 0f) -m else m
+  }
+
+  /**
+   * Shapes a glyph's position along the roll axis (−1 = waiting on the arrival side, 0 = at the
+   * baseline, +1 = gone out the far side) into the fraction of the travel actually drawn.
+   *
+   * Same convex exponent fitted to the reference's growth frames: a glyph hangs out near the end of
+   * its travel and then covers the last stretch to the baseline quickly. Sign-preserving, so it
+   * stays continuous as a glyph passes through the baseline and carries on out the other side —
+   * which is what makes a continuous roll read as rotation rather than as a bounce.
+   */
+  fun rollOffsetShape(off: Float): Float {
+    val m = Math.pow(abs(off).toDouble(), 1.43).toFloat()
+    return if (off < 0f) -m else m
+  }
 
   // ── Trajectory helpers ──
 
