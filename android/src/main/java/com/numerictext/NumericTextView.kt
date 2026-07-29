@@ -340,6 +340,9 @@ class NumericTextView(context: Context) : View(context) {
    */
   private var paintGeneration = 0
 
+  /** The width [settleTo] last asked for, so it only asks again when the answer changes. */
+  private var lastDesiredWidth = -1
+
   // Soft vertical mask paint (reused, updated when font metrics change) — block renderer only.
   private val verticalMaskPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
     xfermode = PorterDuffXfermode(PorterDuff.Mode.DST_IN)
@@ -402,17 +405,33 @@ class NumericTextView(context: Context) : View(context) {
 
   // ── Measurement ──
 
+  /**
+   * Horizontal headroom, per side: a dying glyph drifts outward and every moving glyph carries a
+   * blur halo, so the ink reaches past the text's own advance and the outermost digits were being
+   * clipped at the view's edge mid-transition.
+   */
+  private fun hHeadroom(): Float = textHeightPx * blurFactor * 2f + overscanHorizontal
+
+  /**
+   * The width this view asks for when nothing is animating.
+   *
+   * [settleTo] compares against this rather than deriving its own figure. It used to measure the
+   * bare text with no headroom and compare that to `measuredWidth`, which includes headroom on
+   * both sides — about 175 px of it at 88 sp. The two could not agree, so every settle ended with
+   * a `requestLayout()`, and the relayout blanked the view for a frame: press +, watch the roll
+   * finish, then see the number flash out and back. It stayed hidden only because the JS-side
+   * minimum used to be wider than both figures, which collapsed them onto the same number.
+   */
+  private fun settledDesiredWidth(text: String): Int =
+    ceil(advanceOf(text) + 2f * hHeadroom() + paddingLeft + paddingRight).toInt()
+
   override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
     val textHeight = textHeightPx
-    // Horizontal headroom matters as much as vertical: a dying glyph drifts outward and every
-    // moving glyph carries a blur halo, so the ink reaches past the text's own advance and the
-    // outermost digits were being clipped at the view's edge mid-transition.
-    val hHeadroom = textHeight * blurFactor * 2f + overscanHorizontal
     val desiredWidth = if (animator != null && activePlan != null) {
-      ceil(max(activePlan!!.oldWidth, activePlan!!.newWidth) + 2f * hHeadroom + paddingLeft + paddingRight).toInt()
+      ceil(max(activePlan!!.oldWidth, activePlan!!.newWidth) + 2f * hHeadroom() + paddingLeft + paddingRight).toInt()
     } else {
-      val t = if (settledText.isNotEmpty()) settledText else "0"
-      ceil(advanceOf(t) + 2f * hHeadroom + paddingLeft + paddingRight).toInt()
+      settledDesiredWidth(if (settledText.isNotEmpty()) settledText else "0")
+        .also { lastDesiredWidth = it }
     }
     // Headroom so the roll + blur halo aren't hard-clipped at the view's own bounds.
     val vHeadroom = textHeight * verticalHeadroomFactor
@@ -607,7 +626,19 @@ class NumericTextView(context: Context) : View(context) {
     val localBaseline = margin - fmAscent
 
     var node = g.node
-    if (node == null) { node = RenderNode("slotGlyph"); g.node = node; g.nodeCh = null }
+    if (node == null) {
+      node = RenderNode("slotGlyph")
+      // A node holds exactly one glyph, so nothing inside it can overlap anything else inside it.
+      // Left at its default, an alpha below 1 makes the framework rasterise the node into an
+      // offscreen buffer first so the alpha applies to the composite — which costs a buffer per
+      // moving glyph per frame, and rasterises the text through a different path than the settled
+      // glyphs beside it, which are drawn straight onto the canvas. Saying there is no overlap
+      // lets the alpha be applied directly, so a glyph looks the same the frame before it settles
+      // as the frame after, when it switches to the sharp path.
+      node.setHasOverlappingRendering(false)
+      g.node = node
+      g.nodeCh = null
+    }
     if (g.nodeCh != ch || g.nodeGen != paintGeneration) {
       node.setPosition(0, 0, nodeW, nodeH)
       val rec = node.beginRecording()
@@ -1386,8 +1417,18 @@ class NumericTextView(context: Context) : View(context) {
     // Settled: global spring at the goal AND slow, every column at rest, AND no value change in
     // the last ~160ms. The recency guard keeps the ticker alive during a rapid hold, so each
     // press re-bases and rolls continuously instead of settling and dead-starting between presses.
+    //
+    // The goal test is `abs(x - 1f)`, which bounds the spring on both sides. It used to also
+    // require `x >= 1f`, i.e. that the spring be at or ABOVE its goal — and at damping 0.9 the
+    // global spring overshoots exactly once, early, then converges from below for good. The
+    // per-glyph arrival springs ring far longer at damping 0.32, so by the time `slotsAtRest()`
+    // turns true the global spring has been under 1 for a long while and the condition could no
+    // longer be met. The transition never formally ended: the animator ran forever (measured: 210
+    // frames rendered across 4 idle seconds), `settleTo` was never called, and the glyphs that had
+    // moved sat on the threshold of `isStill`, flipping between the sharp path and the RenderNode
+    // path frame to frame — which is what read as the settled number flashing.
     val quiet = (now - lastValueChangeNanos) > 160_000_000L
-    if (x >= 1f && quiet && slotsAtRest() && abs(x - 1f) < 0.002f && abs(v) < 0.02f) {
+    if (quiet && slotsAtRest() && abs(x - 1f) < 0.002f && abs(v) < 0.02f) {
       if (!completionFired) { completionFired = true; springValue = 1f; springVelocity = 0f; settleTo(formatNumber(numericValue)) }
       return
     }
@@ -1449,8 +1490,12 @@ class NumericTextView(context: Context) : View(context) {
     springValue = 1f; springVelocity = 0f
     updateContentDescription(); invalidate()
     val a = animator; animator = null; a?.removeAllListeners(); a?.cancel()
-    val dw = ceil(textPaint.measureText(text) + paddingLeft + paddingRight).toInt().coerceAtLeast(suggestedMinimumWidth)
-    if (measuredWidth != dw) requestLayout()
+    // Ask for a layout only when the width we want has actually changed. Comparing against
+    // `measuredWidth` cannot work: that has been through resolveSize and the parent's constraints,
+    // so it legitimately differs from what we asked for, and the mismatch made every settle
+    // relayout — which blanks the view for a frame.
+    val dw = settledDesiredWidth(text)
+    if (dw != lastDesiredWidth) { lastDesiredWidth = dw; requestLayout() }
   }
 
   private fun cancelAnimation() {
