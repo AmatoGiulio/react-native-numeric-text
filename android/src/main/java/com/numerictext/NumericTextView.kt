@@ -88,11 +88,17 @@ class NumericTextView(context: Context) : View(context) {
   // at +333, where 0.45 gave -0.02 and was back at zero by +283.
   //
   // The spring's overshoot is NOT the drawn overshoot: rollOffsetShape raises it to the power 1.43,
-  // so a 35% ring (0.32) draws as 0.35^1.43 = 0.23 of the travel, i.e. 0.035 line-heights — which
-  // measured as 0.02 and is why 0.45 -> 0.32 moved nothing visible. Landing 0.05 needs the raw ring
-  // at ~45%, hence 0.24.
+  // so a 31% ring draws as 0.31^1.43 = 0.19 of the travel. Landing the reference's 0.05 line-heights
+  // needs the raw ring at ~45% (damping 0.24) — but at that value the settle reads as too much on
+  // the device. 0.35 turned out to be a full retreat (the drawn ring measured back at 0.02, the
+  // value from before any of this), so this sits at 0.28: ~0.04 line-heights drawn, between the two.
+  // The bounce should be felt, not seen. The numbers say what differs; only the eye says whether it
+  // is right.
+  //
+  // Note the grid in template_fit resolves 0.023 line-heights, so a target of 0.04 reads as either
+  // 0.02 or 0.05 there — this one is set by eye between two measurements, not by a measurement.
   // Presence keeps 0.9: the bounce is positional, an opacity that overshoots just flickers.
-  private val arriveDampingRatio: Float = 0.24f
+  private val arriveDampingRatio: Float = 0.28f
   // Velocity that maps to full roll blur (position+velocity blend below). Scales with the spring:
   // peak presence velocity is ~5.0 at stiffness 150 but ~7.4 at 340, so keeping the old 9 here made
   // the velocity term 45% stronger than it was tuned to be. It then pulsed on every digit change —
@@ -130,7 +136,7 @@ class NumericTextView(context: Context) : View(context) {
   // cascade the reference shows there.
   private val cascadeSpamMs: Float = 90f
   // How much faster than the presence spring a ROLL's departure fades. See pK below.
-  private val rollExitFadeRate: Float = 1.0f
+  private val rollExitFadeRate: Float = 1.3f
   // How far out of place a fading glyph may be and still be revived, as a fraction of line-height.
   private val reviveMaxDriftFactor: Float = 0.12f
   private var lastChangeUptimeMs: Long = 0L
@@ -824,6 +830,11 @@ class NumericTextView(context: Context) : View(context) {
         // 0.37 / 0.14 / 0.06 / 0.04 at x4 and 0.57 / 0.21 / 0.09 / 0.05 at x1.8 — the reference's
         // crossfade is far more weighted to the outgoing glyph early on than any of those. The
         // pile-up it guarded against is re-checked on a press-and-hold after every change here.
+        // Held above the 1.0 that matched the measurement: at 1.0 the outgoing glyph lingers long
+        // enough to read as a visible second digit rather than as the weight of the roll, and two
+        // scenes ran past the reference's own duration (-1 -> 0 at 450 ms against 300). 1.6 was too
+        // far back — it measured 0.59 / 0.22 at +33 / +83 ms, near the 0.57 / 0.21 of before any of
+        // this — so 1.3 splits it against the reference's 0.78 / 0.30.
         val pK = if (g.target >= 0.5f || g.structuralExit) springStiffness else springStiffness * rollExitFadeRate
         val (p, v) = TransitionLogic.springIntegrate(g.p, g.v, g.target, pK, springDampingRatio, dt)
         g.p = p; g.v = v
