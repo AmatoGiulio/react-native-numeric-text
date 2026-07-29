@@ -82,10 +82,17 @@ class NumericTextView(context: Context) : View(context) {
   // reference overshoots its final position by ~10% and eases back over ~9 frames (METHODOLOGY
   // §5.5); at 0.9 the glyph crept in monotonically and the landing read as a stop, not a settle.
   // A second-order step overshoots by exp(-piZ/sqrt(1-Z^2)); 0.62 (~9%) measured a +0.02-0.03
-  // line-height rebound against the reference's +0.05-0.07, and +0.10 against its +0.24 on an
-  // isolated roll, so the ring was tripled to 0.45 (~20%).
+  // line-height rebound against the reference's +0.05-0.07, so the ring was tripled to 0.45 (~20%).
+  // Lowered again once the template fit could follow the ARRIVING glyph alone: on 2,577 -> 2,576
+  // the reference's new glyph sits at -0.05 line-heights from +233 to +283 ms and is still at -0.02
+  // at +333, where 0.45 gave -0.02 and was back at zero by +283.
+  //
+  // The spring's overshoot is NOT the drawn overshoot: rollOffsetShape raises it to the power 1.43,
+  // so a 35% ring (0.32) draws as 0.35^1.43 = 0.23 of the travel, i.e. 0.035 line-heights — which
+  // measured as 0.02 and is why 0.45 -> 0.32 moved nothing visible. Landing 0.05 needs the raw ring
+  // at ~45%, hence 0.24.
   // Presence keeps 0.9: the bounce is positional, an opacity that overshoots just flickers.
-  private val arriveDampingRatio: Float = 0.45f
+  private val arriveDampingRatio: Float = 0.24f
   // Velocity that maps to full roll blur (position+velocity blend below). Scales with the spring:
   // peak presence velocity is ~5.0 at stiffness 150 but ~7.4 at 340, so keeping the old 9 here made
   // the velocity term 45% stronger than it was tuned to be. It then pulsed on every digit change —
@@ -122,6 +129,8 @@ class NumericTextView(context: Context) : View(context) {
   // at zero — while the example's presets, which set two values 400 ms apart, must get the full
   // cascade the reference shows there.
   private val cascadeSpamMs: Float = 90f
+  // How much faster than the presence spring a ROLL's departure fades. See pK below.
+  private val rollExitFadeRate: Float = 1.0f
   // How far out of place a fading glyph may be and still be revived, as a fraction of line-height.
   private val reviveMaxDriftFactor: Float = 0.12f
   private var lastChangeUptimeMs: Long = 0L
@@ -808,7 +817,14 @@ class NumericTextView(context: Context) : View(context) {
         // is what made the nines of 9,999 -> 1,000 rise while crisp.
         // A structural DEATH is exempt: it mirrors the birth, so it keeps the presence spring's own
         // rate and stays readable over the whole roll instead of dissolving before it has moved.
-        val pK = if (g.target >= 0.5f || g.structuralExit) springStiffness else springStiffness * 4f
+        // A ROLL's departure and its arrival now run at the SAME rate. x4 was there so a continuous
+        // roll could not pile up crisp ink, but separating the two glyphs by template fit
+        // (.agent/tools/template_fit.py) on 2,577 -> 2,576 puts the reference's outgoing glyph at
+        // 0.78 / 0.30 / 0.17 / 0.10 of its settled opacity at +33 / +83 / +133 / +183 ms against our
+        // 0.37 / 0.14 / 0.06 / 0.04 at x4 and 0.57 / 0.21 / 0.09 / 0.05 at x1.8 — the reference's
+        // crossfade is far more weighted to the outgoing glyph early on than any of those. The
+        // pile-up it guarded against is re-checked on a press-and-hold after every change here.
+        val pK = if (g.target >= 0.5f || g.structuralExit) springStiffness else springStiffness * rollExitFadeRate
         val (p, v) = TransitionLogic.springIntegrate(g.p, g.v, g.target, pK, springDampingRatio, dt)
         g.p = p; g.v = v
         // Movement is released by the same stagger as the fade: while a change is still queued the

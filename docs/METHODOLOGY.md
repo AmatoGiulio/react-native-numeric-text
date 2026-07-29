@@ -270,7 +270,7 @@ Kept on purpose — this is the part that saves time next time.
 | One shared spring can drive all properties per slot | Onset/termination differ per property; per-property curves are required |
 | A stronger Gaussian blur alone reproduces the soft look | Blur preserves ink; the lightness comes from blur-coupled opacity |
 | The roll's long settle tail is a second, softer positional mode | Built it; no effect on a roll — `rollOffsetShape`'s `\|x\|^1.43` crushes a small residual to 0.008 line-heights |
-| …then it must be the roll's departure fading too soon | Halved its fade rate; the residual and the duration both stayed put |
+| …then it must be the roll's departure fading too soon | Right, but unprovable with a mixed window: halving the rate moved nothing *that probe could see*. Template fitting then measured the outgoing glyph alone and put it twice too fast, and the arrival's overshoot 2.5× too shallow |
 
 ## 7. Reproducibility notes
 
@@ -292,9 +292,15 @@ Kept on purpose — this is the part that saves time next time.
    per-ROI settled references; robust onsets (>2% change sustained ≥2 frames).
 2. **3×3 sub-ROI grids per slot** — automates the spy-window trick; the onset order of the
    nine cells yields the entry vector (top-before-bottom = from above, etc.).
-3. **Template fitting**: model each frame as
-   `a_old·blur(T_old, σ_old, x_old, y_old) + a_new·blur(T_new, σ_new, x_new, y_new)` and grid-search
-   the parameters — fully separates the old/new contributions that single-window curves mix.
+3. ~~**Template fitting**~~ — built, `.agent/tools/template_fit.py`, and now the technique of record
+   for anything involving both glyphs at once. Each frame is modelled as
+   `a_old·blur(T_old, σ_old, y_old) + a_new·blur(T_new, σ_new, y_new)`, with the templates taken from
+   the same recording's own settled frames. The amplitudes are linear given the shifts and blurs, so
+   only (dy, σ) are searched: the templates for every combination are precomputed once, their Gram
+   matrix with them, and each frame becomes a closed-form 2×2 solve evaluated over the whole grid at
+   once — exact over the grid, no local minima, ~1.4 s per transition. It returns per glyph, per
+   frame: opacity, position along the roll axis, and blur radius. Two hypotheses that single-window
+   probes could neither confirm nor refute (see §6) were settled by it in one run.
 4. **Loss-based tuning**: define `L = Σ wᵢ·errorᵢ` over onset/occupancy/centroid/dispersion/settle
    against the reference curves, and let the knob set be optimised instead of hand-tuned.
 

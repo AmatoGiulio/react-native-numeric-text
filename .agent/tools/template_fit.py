@@ -1,0 +1,197 @@
+#!/usr/bin/env python3
+"""Separate the OLD and NEW glyph of a transition, per frame.
+
+Every probe used so far (ink timelines, moments) reads one window that holds both glyphs at once,
+so a centroid shift has at least two readings — old ink lingering on one side, or new ink arriving
+from the other — and no experiment driven by that number can tell them apart. Two attempts at the
+roll's settle tail died on exactly this (METHODOLOGY §6).
+
+This is §8.3 of the methodology: model each frame as
+
+    D(x, y, t) ≈ a_old · T_old(y − dy_old, σ_old) + a_new · T_new(y − dy_new, σ_new)
+
+where T_c is the glyph's own settled ink taken from the SAME recording (same font, same size, same
+renderer), shifted along the roll axis and blurred. Fitting gives, per frame and per glyph, its
+opacity `a`, its position `dy` and its softness `σ` — the three quantities the single-window
+probes could only see summed.
+
+Method: the amplitudes are linear given the shifts and blurs, so only (dy, σ) are searched. The
+templates for every (dy, σ) are precomputed once, their Gram matrix with them, and each frame is
+then a closed-form 2×2 solve over the whole grid at once — exact over the grid, no local minima.
+
+Usage:
+    python3 template_fit.py --video ref.mov --platform ios --onset 606 --column -1
+"""
+import argparse
+import subprocess
+import numpy as np
+
+W, H = 600, 213          # scaled crop; 1.6 line-heights tall
+FONT = H / 1.6           # px per line-height after scaling (~133)
+FPS = 60
+
+CROP = {                 # w, h, x, y in source pixels — a box 4.5 × 1.6 line-heights on the number
+    'ios':     (1160, 412, 23, 464),
+    'android': (992, 353, 44, 414),
+}
+
+# Search grid. 3 px is 0.023 of a line height; the reference's residual tail is ~0.05, so the grid
+# resolves it four times over. ±72 px covers ±0.54 line-heights, past the 0.48 a birth spawns from.
+DY = np.arange(-72, 73, 3)
+SIGMA = np.array([0.01, 2, 4, 6, 9, 12, 16, 21, 27])
+
+
+def decode(path, platform):
+    w, h, x, y = CROP[platform]
+    vf = f"fps={FPS},crop={w}:{h}:{x}:{y},scale={W}:{H},format=gray"
+    cmd = ['ffmpeg', '-v', 'error', '-i', path, '-vf', vf, '-f', 'rawvideo', '-pix_fmt', 'gray', '-']
+    raw = subprocess.run(cmd, capture_output=True).stdout
+    n = len(raw) // (W * H)
+    return np.frombuffer(raw[:n * W * H], dtype=np.uint8).reshape(n, H, W)
+
+
+def background(frames):
+    """The page's own level, measured per video rather than assumed (iOS 244, Android 242)."""
+    return float(np.median(frames[::37, :5, :]))
+
+
+def ink(frames, bg):
+    return np.clip(bg - 2.0 - frames.astype(np.float32), 0, None)
+
+
+def columns(frame_ink, min_frac=0.06):
+    prof = frame_ink.sum(axis=0)
+    on = prof > prof.max() * min_frac
+    groups, s = [], None
+    for i, v in enumerate(on):
+        if v and s is None:
+            s = i
+        elif not v and s is not None:
+            if i - s > 4:
+                groups.append((s, i))
+            s = None
+    if s is not None:
+        groups.append((s, len(on)))
+    return groups
+
+
+def gaussian1d(sigma):
+    r = max(1, int(3 * sigma))
+    x = np.arange(-r, r + 1, dtype=np.float32)
+    k = np.exp(-0.5 * (x / sigma) ** 2)
+    return k / k.sum()
+
+
+def blur(img, sigma):
+    if sigma <= 0.05:
+        return img.copy()
+    k = gaussian1d(sigma)
+    pad = len(k) // 2
+    a = np.pad(img, ((pad, pad), (pad, pad)), mode='constant')
+    a = np.apply_along_axis(lambda m: np.convolve(m, k, mode='valid'), 1, a)
+    a = np.apply_along_axis(lambda m: np.convolve(m, k, mode='valid'), 0, a)
+    return a
+
+
+def shift_y(img, dy):
+    out = np.zeros_like(img)
+    if dy == 0:
+        out[:] = img
+    elif dy > 0:
+        out[dy:] = img[:-dy]
+    else:
+        out[:dy] = img[-dy:]
+    return out
+
+
+def template_stack(tpl):
+    """Every (dy, σ) variant of one glyph, flattened, plus the index table."""
+    rows, idx = [], []
+    for s_i, s in enumerate(SIGMA):
+        b = blur(tpl, s)
+        for d_i, d in enumerate(DY):
+            rows.append(shift_y(b, int(d)).ravel())
+            idx.append((d_i, s_i))
+    return np.asarray(rows, dtype=np.float32), np.asarray(idx)
+
+
+def fit(frames, onset, column=-1, span=60, bg=None, verbose=True):
+    """Fit both glyphs over [onset−4, onset+span). Returns a dict of per-frame parameter arrays."""
+    bg = background(frames) if bg is None else bg
+    end = onset + span
+    settled_new = ink(frames[end - 10:end + 1], bg).mean(axis=0)
+    settled_old = ink(frames[onset - 10:onset - 2], bg).mean(axis=0)
+
+    x0, x1 = columns(settled_new)[column]
+    # Widen so a displaced or blurred glyph is not clipped differently from its template.
+    xa, xb = max(0, x0 - 24), min(W, x1 + 24)
+
+    t_old = settled_old[:, xa:xb]
+    t_new = settled_new[:, xa:xb]
+    if verbose:
+        print(f'# column x={x0}-{x1} (roi {xa}-{xb}), background {bg:.0f}, '
+              f'{len(DY)}x{len(SIGMA)} grid per glyph')
+
+    To, idx = template_stack(t_old)
+    Tn, _ = template_stack(t_new)
+
+    goo = (To * To).sum(axis=1)                    # (P,)
+    gnn = (Tn * Tn).sum(axis=1)                    # (P,)
+    gon = To @ Tn.T                                # (P, P) — the expensive part, done once
+    goo64, gnn64, gon64 = goo.astype(np.float64), gnn.astype(np.float64), gon.astype(np.float64)
+
+    out = {k: [] for k in ('t', 'a_old', 'dy_old', 's_old', 'a_new', 'dy_new', 's_new', 'resid')}
+    for f in range(onset - 4, end):
+        d = ink(frames[f:f + 1], bg)[0, :, xa:xb].ravel()
+        bo = (To @ d).astype(np.float64)
+        bn = (Tn @ d).astype(np.float64)
+        # Closed-form 2x2 least squares for every (old, new) pair at once.
+        # float64: the Gram entries run to ~1e8, and a near-singular pair (two templates that are
+        # nearly the same picture) squares that when the amplitude blows up before clipping.
+        det = goo64[:, None] * gnn64[None, :] - gon64 ** 2
+        bad = np.abs(det) < 1e-3 * (goo64[:, None] * gnn64[None, :])
+        det = np.where(bad, 1.0, det)
+        ao = (gnn[None, :] * bo[:, None] - gon * bn[None, :]) / det
+        an = (goo[:, None] * bn[None, :] - gon * bo[:, None]) / det
+        ao = np.clip(np.where(bad, 0.0, ao), 0, None)
+        an = np.clip(np.where(bad, 0.0, an), 0, None)
+        # Residual of the clipped solution.
+        dd = float(d.astype(np.float64) @ d.astype(np.float64))
+        r = (dd
+             - 2 * (ao * bo[:, None] + an * bn[None, :])
+             + ao ** 2 * goo64[:, None] + an ** 2 * gnn64[None, :] + 2 * ao * an * gon64)
+        i, j = np.unravel_index(np.argmin(r), r.shape)
+        out['t'].append((f - onset) / FPS * 1000)
+        out['a_old'].append(float(ao[i, j])); out['dy_old'].append(float(DY[idx[i][0]]) / FONT)
+        out['s_old'].append(float(SIGMA[idx[i][1]]) / FONT)
+        out['a_new'].append(float(an[i, j])); out['dy_new'].append(float(DY[idx[j][0]]) / FONT)
+        out['s_new'].append(float(SIGMA[idx[j][1]]) / FONT)
+        out['resid'].append(float(np.sqrt(max(r[i, j], 0)) / max(np.linalg.norm(d), 1e-6)))
+    return {k: np.asarray(v) for k, v in out.items()}
+
+
+def report(res, label, step=3):
+    print(f'-- {label}   (dy and σ in line-heights, a as a fraction of the settled glyph)')
+    k = range(0, len(res['t']), step)
+    print('   t(ms) :', ' '.join(f'{res["t"][i]:6.0f}' for i in k))
+    print('   a_old :', ' '.join(f'{res["a_old"][i]:6.2f}' for i in k))
+    print('   dy_old:', ' '.join(f'{res["dy_old"][i]:+6.2f}' if res['a_old'][i] > 0.05 else '     .' for i in k))
+    print('   σ_old :', ' '.join(f'{res["s_old"][i]:6.2f}' if res['a_old'][i] > 0.05 else '     .' for i in k))
+    print('   a_new :', ' '.join(f'{res["a_new"][i]:6.2f}' for i in k))
+    print('   dy_new:', ' '.join(f'{res["dy_new"][i]:+6.2f}' if res['a_new'][i] > 0.05 else '     .' for i in k))
+    print('   σ_new :', ' '.join(f'{res["s_new"][i]:6.2f}' if res['a_new'][i] > 0.05 else '     .' for i in k))
+    print(f'   fit residual: median {np.median(res["resid"]):.3f}, worst {res["resid"].max():.3f} '
+          f'(fraction of the frame\'s own ink norm)')
+
+
+if __name__ == '__main__':
+    ap = argparse.ArgumentParser()
+    ap.add_argument('--video', required=True)
+    ap.add_argument('--platform', required=True, choices=['ios', 'android'])
+    ap.add_argument('--onset', type=int, required=True)
+    ap.add_argument('--column', type=int, default=-1)
+    ap.add_argument('--span', type=int, default=60)
+    ap.add_argument('--label', default='')
+    a = ap.parse_args()
+    frames = decode(a.video, a.platform)
+    report(fit(frames, a.onset, a.column, a.span), a.label or a.video)
