@@ -78,6 +78,14 @@ class NumericTextView(context: Context) : View(context) {
   private val springStiffness: Float = 340f
   // Just under-damped: keeps a slight settle in the roll's direction without a long ringing tail.
   private val springDampingRatio: Float = 0.9f
+  // Damping of the ROLL AXIS spring for an ARRIVING glyph only — this is the settle bounce. The
+  // reference overshoots its final position by ~10% and eases back over ~9 frames (METHODOLOGY
+  // §5.5); at 0.9 the glyph crept in monotonically and the landing read as a stop, not a settle.
+  // A second-order step overshoots by exp(-piZ/sqrt(1-Z^2)); 0.62 (~9%) measured a +0.02-0.03
+  // line-height rebound against the reference's +0.05-0.07, and +0.10 against its +0.24 on an
+  // isolated roll, so the ring was tripled to 0.45 (~20%).
+  // Presence keeps 0.9: the bounce is positional, an opacity that overshoots just flickers.
+  private val arriveDampingRatio: Float = 0.45f
   // Velocity that maps to full roll blur (position+velocity blend below). Scales with the spring:
   // peak presence velocity is ~5.0 at stiffness 150 but ~7.4 at 340, so keeping the old 9 here made
   // the velocity term 45% stronger than it was tuned to be. It then pulsed on every digit change —
@@ -441,7 +449,9 @@ class NumericTextView(context: Context) : View(context) {
   private fun isStill(g: GlyphState, scrub: Float?): Boolean =
     scrub == null && g.target >= 1f && g.pendingTarget < 0f && g.delay <= 0f &&
       g.p >= 0.999f && abs(g.v) < 0.01f && abs(g.xRel - g.xRelTarget) < 0.3f &&
-      abs(g.off) < 0.004f
+      // offV matters now that an arrival bounces: it crosses its target at full speed, and without
+      // this it would be drawn sharp and unshifted for that one frame, then jump back out.
+      abs(g.off) < 0.004f && abs(g.offV) < 0.02f
 
   private fun drawGlyph(canvas: Canvas, text: String, centerX: Float, baseline: Float, paint: TextPaint) {
     if (text.isEmpty()) return
@@ -711,7 +721,7 @@ class NumericTextView(context: Context) : View(context) {
 
   private fun isSettled(g: GlyphState): Boolean =
     g.delay <= 0f && g.pendingTarget < 0f && abs(g.p - g.target) < 0.004f && abs(g.v) < 0.03f &&
-      abs(g.off - g.offTarget) < 0.01f &&
+      abs(g.off - g.offTarget) < 0.01f && abs(g.offV) < 0.05f &&
       abs(g.xRel - g.xRelTarget) < 0.35f && abs(g.xv) < 2f
 
   private fun tickSlots(dt: Float) {
@@ -757,7 +767,10 @@ class NumericTextView(context: Context) : View(context) {
         // presence and drifts the rest of the way once it is already invisible.
         // An ARRIVING glyph keeps the presence spring's own rate, so it lands as it solidifies.
         val offK = if (g.target >= 0.5f || g.structuralExit) springStiffness else springStiffness * 0.25f
-        val (o, ov) = TransitionLogic.springIntegrate(g.off, g.offV, g.offTarget, offK, springDampingRatio, dt)
+        // The settle bounce is the arrival's alone: a departure that rang would swing back toward
+        // the baseline it is trying to leave.
+        val offZ = if (g.target >= 0.5f) arriveDampingRatio else springDampingRatio
+        val (o, ov) = TransitionLogic.springIntegrate(g.off, g.offV, g.offTarget, offK, offZ, dt)
         g.off = o; g.offV = ov
         val (x, xv) = TransitionLogic.springIntegrate(g.xRel, g.xv, g.xRelTarget, xStiffness, xDampingRatio, dt)
         g.xRel = x; g.xv = xv
