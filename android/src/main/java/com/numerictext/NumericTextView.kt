@@ -98,7 +98,7 @@ class NumericTextView(context: Context) : View(context) {
   // Note the grid in template_fit resolves 0.023 line-heights, so a target of 0.04 reads as either
   // 0.02 or 0.05 there — this one is set by eye between two measurements, not by a measurement.
   // Presence keeps 0.9: the bounce is positional, an opacity that overshoots just flickers.
-  private val arriveDampingRatio: Float = 0.28f
+  private val arriveDampingRatio: Float = 0.32f
   // Velocity that maps to full roll blur (position+velocity blend below). Scales with the spring:
   // peak presence velocity is ~5.0 at stiffness 150 but ~7.4 at 340, so keeping the old 9 here made
   // the velocity term 45% stronger than it was tuned to be. It then pulsed on every digit change —
