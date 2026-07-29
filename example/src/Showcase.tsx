@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useState } from 'react';
 import {
   Animated,
   Easing,
@@ -6,8 +6,12 @@ import {
   StyleSheet,
   Text,
   View,
+  useAnimatedValue,
 } from 'react-native';
 import { NumericText } from 'react-native-numeric-text';
+import { Caption } from './Caption';
+import { ActionButton } from './controls/ActionButton';
+import { useHoldRepeat } from './controls/useHoldRepeat';
 import { useSequencePlayer } from './sequence';
 import {
   SHOWCASE,
@@ -26,15 +30,20 @@ type Props = { onOpenLab: () => void };
  * Everything the comparison lab needs — the SwiftUI toggle, the presets, the diagnostics — lives
  * on the other screen. This one is meant to be pointed at a camera, so nothing appears on it that
  * would not survive being recorded.
+ *
+ * Play and reset are real native buttons, SwiftUI on iOS and Jetpack Compose on Android. The
+ * increment and decrement pair are not, and cannot be: neither native button reports press-down
+ * and press-up, only a completed press, and a control that accelerates while held needs to know
+ * it is still being held. See `controls/ActionButton.types.ts`.
  */
 export function Showcase({ onOpenLab }: Props) {
   const [value, setValue] = useState(SHOWCASE_START);
   const [caption, setCaption] = useState('');
   const [playing, setPlaying] = useState(false);
-  const progress = useRef(new Animated.Value(0)).current;
+  const progress = useAnimatedValue(0);
 
   // An empty phase keeps the previous caption up: a scene's silent setup step should not blank
-  // the line for 300 ms before the scene it is setting up.
+  // the line before the scene it sets up.
   const onPhase = useCallback((phase: string) => {
     if (phase) setCaption(phase);
   }, []);
@@ -67,25 +76,16 @@ export function Showcase({ onOpenLab }: Props) {
     setCaption('');
   }, [stop, progress]);
 
-  // Press and hold to repeat — the renderer's hardest case is reachable with a thumb, not only
-  // from the scripted run.
-  const holdRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const startHold = useCallback(
-    (dir: number) => {
-      if (playing) return;
-      setValue((v) => v + dir);
-      if (holdRef.current) clearInterval(holdRef.current);
-      holdRef.current = setInterval(() => setValue((v) => v + dir), 30);
-    },
-    [playing]
-  );
-  const stopHold = useCallback(() => {
-    if (holdRef.current) {
-      clearInterval(holdRef.current);
-      holdRef.current = null;
-    }
+  const bump = useCallback((direction: number) => {
+    setValue((v) => v + direction);
   }, []);
-  useEffect(() => () => stopHold(), [stopHold]);
+  const hold = useHoldRepeat(bump);
+
+  const reset = useCallback(() => {
+    if (playing) return;
+    hold.stop();
+    setValue(SHOWCASE_START);
+  }, [playing, hold]);
 
   return (
     <View style={styles.screen}>
@@ -107,9 +107,7 @@ export function Showcase({ onOpenLab }: Props) {
           maximumFractionDigits={3}
           style={styles.number}
         />
-        <Text style={styles.caption} numberOfLines={2}>
-          {caption}
-        </Text>
+        <Caption text={caption} />
       </View>
 
       <View style={styles.controls}>
@@ -120,47 +118,40 @@ export function Showcase({ onOpenLab }: Props) {
           />
         </View>
 
-        <Pressable
-          style={({ pressed }) => [
-            styles.playBtn,
-            playing && styles.playBtnActive,
-            pressed && styles.pressed,
-          ]}
-          onPress={playing ? stopSequence : startSequence}
-          accessibilityRole="button"
-        >
-          <Text style={[styles.playText, playing && styles.playTextActive]}>
-            {playing ? 'Stop' : `Play the sequence · ${DURATION_LABEL}`}
-          </Text>
-        </Pressable>
+        <View style={styles.actions}>
+          <ActionButton
+            label={playing ? 'Stop' : `Play · ${DURATION_LABEL}`}
+            icon={playing ? 'stop' : 'play'}
+            onPress={playing ? stopSequence : startSequence}
+          />
+          <ActionButton
+            label="Reset"
+            icon="reset"
+            variant="secondary"
+            onPress={reset}
+          />
+        </View>
 
         <View style={styles.row}>
           <Pressable
             style={({ pressed }) => [styles.circle, pressed && styles.pressed]}
-            onPressIn={() => startHold(-1)}
-            onPressOut={stopHold}
+            onPressIn={() => !playing && hold.start(-1)}
+            onPressOut={hold.stop}
             accessibilityLabel="Decrement, hold to repeat"
           >
             <Text style={styles.circleText}>−</Text>
           </Pressable>
           <Pressable
             style={({ pressed }) => [styles.circle, pressed && styles.pressed]}
-            onPress={() => !playing && setValue(SHOWCASE_START)}
-            accessibilityLabel="Reset"
-          >
-            <Text style={styles.resetText}>⟲</Text>
-          </Pressable>
-          <Pressable
-            style={({ pressed }) => [styles.circle, pressed && styles.pressed]}
-            onPressIn={() => startHold(1)}
-            onPressOut={stopHold}
+            onPressIn={() => !playing && hold.start(1)}
+            onPressOut={hold.stop}
             accessibilityLabel="Increment, hold to repeat"
           >
             <Text style={styles.circleText}>+</Text>
           </Pressable>
         </View>
 
-        <Text style={styles.hint}>Hold + or − to roll continuously</Text>
+        <Text style={styles.hint}>Hold + or − — it speeds up as you hold</Text>
       </View>
     </View>
   );
@@ -202,15 +193,6 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: INK,
   },
-  // Reserved height, so a caption appearing or leaving never nudges the number off centre.
-  caption: {
-    height: 44,
-    fontSize: 15,
-    lineHeight: 21,
-    textAlign: 'center',
-    color: '#7c7c88',
-    letterSpacing: 0.1,
-  },
 
   controls: {
     alignItems: 'center',
@@ -231,23 +213,10 @@ const styles = StyleSheet.create({
     transformOrigin: 'left',
   },
 
-  playBtn: {
-    paddingHorizontal: 28,
-    paddingVertical: 15,
-    borderRadius: 999,
-    backgroundColor: INK,
-  },
-  playBtnActive: {
-    backgroundColor: '#e7e7ec',
-  },
-  playText: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#ffffff',
-    letterSpacing: 0.2,
-  },
-  playTextActive: {
-    color: INK,
+  actions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
   },
 
   row: {
@@ -267,11 +236,6 @@ const styles = StyleSheet.create({
     fontWeight: '500',
     color: INK,
     lineHeight: 32,
-  },
-  resetText: {
-    fontSize: 22,
-    color: '#6a6a75',
-    lineHeight: 26,
   },
   pressed: {
     opacity: 0.6,
