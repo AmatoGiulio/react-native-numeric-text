@@ -269,6 +269,8 @@ Kept on purpose — this is the part that saves time next time.
 | Enters wait their positional turn in the cascade | They start early (compressed stagger); waiting creates an empty hole the reference never shows |
 | One shared spring can drive all properties per slot | Onset/termination differ per property; per-property curves are required |
 | A stronger Gaussian blur alone reproduces the soft look | Blur preserves ink; the lightness comes from blur-coupled opacity |
+| The roll's long settle tail is a second, softer positional mode | Built it; no effect on a roll — `rollOffsetShape`'s `\|x\|^1.43` crushes a small residual to 0.008 line-heights |
+| …then it must be the roll's departure fading too soon | Halved its fade rate; the residual and the duration both stayed put |
 
 ## 7. Reproducibility notes
 
