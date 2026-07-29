@@ -158,8 +158,14 @@ class NumericTextView(context: Context) : View(context) {
   // always above its final place. 2.5 then overshot the other way, to +0.10 with 0.42 of the ink;
   // 2.9 splits them onto the reference's +0.06.
   private val rollExitFadeFast: Float = 2.9f
-  // How much faster an ARRIVING glyph gains presence when changes crowd. See pK below.
-  private val arrivePresenceFast: Float = 2.6f
+  // How much faster an ARRIVING glyph resolves when changes crowd. The two are SEPARATE because
+  // presence carries three things — opacity, depth scale and blur — while the offset carries only
+  // position. Speeding both by 2.6 landed the digit centred but at full size and sharp the moment
+  // it appeared, which is the depth cue gone. The reference keeps them apart: during a hold its
+  // rolling digit is aligned with its still neighbours to within 0.005 of a line height, yet its
+  // darkest pixel is only 0.43 of a settled glyph's — in place, but far from resolved.
+  private val arrivePresenceFast: Float = 1.5f
+  private val arriveOffsetFast: Float = 2.6f
   private var changeSpacing: Float = 1f   // 1 = isolated change, 0 = spam; see cascadeSpamMs
   // Where a roll's departure asymptotes, in travel units, drawn through rollOffsetShape's 1.43
   // power. Measured on a press-and-hold in the example app — the same 30 ms repeat on both sides —
@@ -918,7 +924,14 @@ class NumericTextView(context: Context) : View(context) {
         // presence and drifts the rest of the way once it is already invisible.
         // An ARRIVING glyph keeps the presence spring's own rate, so it lands as it solidifies.
         val offK = when {
-          g.target >= 0.5f -> springStiffness
+          // Same speed-up as its presence, so an arrival LANDS as it lights up. Accelerating only
+          // the presence left the digit bright but still in flight: measured against its own still
+          // neighbours in the same frame, ours sat 0.16 line-heights above them during a hold where
+          // the reference sits at -0.005. That is the "positioned toward the top" of the report,
+          // and the earlier probe missed it by comparing the column to its own settled position
+          // instead of to the digits beside it.
+          g.target >= 0.5f ->
+            springStiffness * (1f + (1f - changeSpacing) * (arriveOffsetFast - 1f))
           // Same multiplier as its presence, so a death covers the same distance before it is gone.
           g.structuralExit -> springStiffness * deathRate * deathRate
           else -> springStiffness * 0.25f
