@@ -16,6 +16,7 @@ interface NativeProps extends ViewProps {
   readonly reduceMotion?: string;
   readonly fontSize?: Float;
   readonly fontWeight?: string;
+  readonly fontFamily?: string;
   readonly textColor?: ColorValue;
   readonly debugTransitionStrategy?: string;
   readonly debugManualProgress?: Double;

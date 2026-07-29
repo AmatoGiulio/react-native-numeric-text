@@ -19,6 +19,7 @@ import android.provider.Settings
 import android.text.TextPaint
 import android.view.View
 import android.view.animation.LinearInterpolator
+import com.facebook.react.common.assets.ReactFontManager
 import java.text.DecimalFormatSymbols
 import java.text.NumberFormat
 import java.util.Locale
@@ -42,6 +43,7 @@ class NumericTextView(context: Context) : View(context) {
   var numericReduceMotion: String = "system"; private set
   var numericFontSize: Float = 48f; private set
   var numericFontWeight: String = "normal"; private set
+  var numericFontFamily: String = NumericTextFonts.BUNDLED; private set
   var numericTextColor: Int = Color.BLACK; private set
 
   // Debug-only
@@ -1217,8 +1219,9 @@ class NumericTextView(context: Context) : View(context) {
 
   fun setLocale(v: String) {
     if (v == numericLocale) return
-    numericLocale = v; currentFormatterLocale = null; recalcFormatter(); textLayersNeedRebuild = true
-    maskPaintNeedsUpdate = true; requestLayout()
+    // The paint follows the locale, not just the formatter: the locale decides which numerals are
+    // drawn, and so whether the bundled face can draw them at all.
+    numericLocale = v; currentFormatterLocale = null; recalcFormatter(); recalcTextPaint(); requestLayout()
     if (animator == null) { settledText = formatNumber(settledValue); updateContentDescription(); invalidate() }
   }
   fun setDirection(v: String) { numericDirection = v }
@@ -1247,6 +1250,10 @@ class NumericTextView(context: Context) : View(context) {
   fun setFontWeight(v: String) {
     if (v == numericFontWeight) return
     numericFontWeight = v; recalcTextPaint(); textLayersNeedRebuild = true; maskPaintNeedsUpdate = true; requestLayout(); invalidate()
+  }
+  fun setFontFamily(v: String) {
+    if (v == numericFontFamily) return
+    numericFontFamily = v; recalcTextPaint(); textLayersNeedRebuild = true; maskPaintNeedsUpdate = true; requestLayout(); invalidate()
   }
   fun setTextColor(v: Int) {
     if (v == numericTextColor) return
@@ -1418,11 +1425,41 @@ class NumericTextView(context: Context) : View(context) {
     textPaint.color = numericTextColor
     textPaint.textSize = numericFontSize * resources.displayMetrics.scaledDensity
     textPaint.isAntiAlias = true; textPaint.isSubpixelText = true
-    val w = when (numericFontWeight) { "bold" -> Typeface.BOLD; "normal" -> Typeface.NORMAL
-      else -> { val n = numericFontWeight.toIntOrNull() ?: Typeface.NORMAL; if (n >= 700) Typeface.BOLD else Typeface.NORMAL } }
-    textPaint.typeface = Typeface.create(Typeface.DEFAULT, w)
+    textPaint.typeface = resolveTypeface()
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) textPaint.fontFeatureSettings = "tnum"
     textLayersNeedRebuild = true; maskPaintNeedsUpdate = true
+  }
+
+  /**
+   * The bundled face by default, the system face when asked for "system", and a consumer-registered
+   * family for anything else. The bundled one is only kept if it can actually draw this locale's
+   * numerals — see [localeGlyphProbe].
+   */
+  private fun resolveTypeface(): Typeface {
+    val weight = NumericTextFonts.weightOf(numericFontWeight)
+    val systemStyle = if (weight >= 700) Typeface.BOLD else Typeface.NORMAL
+    val system = Typeface.create(Typeface.DEFAULT, systemStyle)
+    if (numericFontFamily == NumericTextFonts.SYSTEM) return system
+    if (numericFontFamily != NumericTextFonts.BUNDLED) {
+      return try {
+        ReactFontManager.getInstance().getTypeface(numericFontFamily, systemStyle, context.assets)
+      } catch (_: RuntimeException) { system }
+    }
+    val bundled = NumericTextFonts.bundled(context.assets, weight) ?: return system
+    // Ask before committing: a locale that formats with Arabic-Indic or Devanagari digits would
+    // otherwise draw tofu, since the bundled face is Latin-script only.
+    val probePaint = TextPaint(textPaint); probePaint.typeface = bundled
+    return if (NumericTextFonts.canRender(probePaint, localeGlyphProbe())) bundled else system
+  }
+
+  /** Every character this locale's number formatting can produce: its ten digits, and its marks. */
+  private fun localeGlyphProbe(): String {
+    val sym = try { DecimalFormatSymbols.getInstance(resolveLocale()) } catch (_: Exception) { return "0123456789,.-" }
+    val zero = sym.zeroDigit
+    val sb = StringBuilder()
+    for (i in 0..9) sb.append(zero + i)
+    sb.append(sym.groupingSeparator).append(sym.decimalSeparator).append(sym.minusSign)
+    return sb.toString()
   }
 
   private fun getTextHeight(): Float { val fm = textPaint.fontMetrics; return fm.descent - fm.ascent }

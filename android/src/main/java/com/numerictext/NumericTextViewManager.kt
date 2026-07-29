@@ -75,6 +75,11 @@ class NumericTextViewManager : SimpleViewManager<NumericTextView>(),
     view?.setFontWeight(weight ?: "normal")
   }
 
+  @ReactProp(name = "fontFamily")
+  override fun setFontFamily(view: NumericTextView?, family: String?) {
+    view?.setFontFamily(family ?: NumericTextFonts.BUNDLED)
+  }
+
   @ReactProp(name = "textColor")
   override fun setTextColor(view: NumericTextView?, color: Int?) {
     view?.setTextColor(color ?: android.graphics.Color.BLACK)

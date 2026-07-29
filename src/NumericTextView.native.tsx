@@ -85,6 +85,11 @@ export function NumericTextView({
           ? (flattened.fontWeight as string)
           : undefined
       }
+      fontFamily={
+        typeof flattened.fontFamily === 'string'
+          ? (flattened.fontFamily as string)
+          : undefined
+      }
       textColor={
         typeof flattened.color === 'string'
           ? (flattened.color as string)
