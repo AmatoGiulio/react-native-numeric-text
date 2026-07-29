@@ -322,8 +322,25 @@ object TransitionLogic {
    * made a fast run look like the digit had faded out rather than changed. The extra ink is not
    * double-counted visually because the two glyphs sit at different points along the roll.
    */
-  fun presenceAlpha(p: Float): Float =
-    Math.pow(p.coerceIn(0f, 1f).toDouble(), 0.6).toFloat()
+  fun presenceAlpha(p: Float): Float {
+    val c = p.coerceIn(0f, 1f)
+    // 0.6 up to the crossing, steepening to 1.5 at full presence. A single flatter exponent (0.85)
+    // delayed the tail correctly but dragged the crossing down with it, to 0.55 — below the 0.66
+    // the reference measures, which is the whole point of the sub-linear curve.
+    val e = 0.6f + TAIL_FLATTEN * 2f * max(0f, c - 0.5f)
+    return Math.pow(c.toDouble(), e.toDouble()).toFloat()
+  }
+
+  /**
+   * How much later the LAST of the opacity arrives, without moving the crossing.
+   *
+   * Measured on the arriving ink's mass in the landing column: the reference reaches half its
+   * settled ink at 100-117 ms — which we already match — but 90% at 217-233 ms and 98% at
+   * 300-333 ms, where the plain 0.6 curve put us at 183-200 and 233-250. The onset is right and the
+   * TAIL is short, so the curve is bent at the top rather than the spring slowed (slowing the
+   * spring would push the matching 50% point out too).
+   */
+  private const val TAIL_FLATTEN = 0.45f
 
   /**
    * Softness — linear in the presence deficit.
