@@ -99,6 +99,14 @@ class NumericTextView(context: Context) : View(context) {
   // 0.02 or 0.05 there — this one is set by eye between two measurements, not by a measurement.
   // Presence keeps 0.9: the bounce is positional, an opacity that overshoots just flickers.
   private val arriveDampingRatio: Float = 0.32f
+  // A structural BIRTH spawns enterTravelFactor further out, and a spring's overshoot is a fraction
+  // of the distance it covers — so the same damping rings 3x wider there. The reference does not:
+  // fitted per column on 1 -> 9,999, every arriving glyph overshoots by +0.05 line-heights whether
+  // it is a roll or a birth, where ours rang +0.09 to +0.11 on the births. Damped harder so the
+  // absolute settle matches instead of the ratio: 0.6 overcorrected to +0.02, and the drawn ring
+  // goes through rollOffsetShape's 1.43 power, so landing 0.05 out of a 0.48 travel needs a raw
+  // overshoot near 21%, not 10%.
+  private val birthDampingRatio: Float = 0.44f
   // Velocity that maps to full roll blur (position+velocity blend below). Scales with the spring:
   // peak presence velocity is ~5.0 at stiffness 150 but ~7.4 at 340, so keeping the old 9 here made
   // the velocity term 45% stronger than it was tuned to be. It then pulsed on every digit change —
@@ -652,8 +660,14 @@ class NumericTextView(context: Context) : View(context) {
         // a same-slot roll starts just off the baseline.
         off = -dir.toFloat(); offV = 0f; offTarget = off   // waiting on the arrival side
         exitOff = dir * 2f
-        travelMul = if (current == null && structural) enterTravelFactor else 1f
-        minScale = if (current == null && structural) enterMinScale else rollDepthMin
+        // In a STRUCTURAL change every affected column is a lifecycle, not a roll (METHODOLOGY
+        // §5.2) — including one that already existed. Requiring `current == null` here meant the
+        // units column, which is the one carrying the old value, arrived as a short roll: fitted
+        // per column on 1 -> 9,999 at matched opacity, its blur measured 0.03 of a line height
+        // against the reference's 0.09, while every other column matched. That is the "the last
+        // digits arrive unblurred" of the report.
+        travelMul = if (structural) enterTravelFactor else 1f
+        minScale = if (structural) enterMinScale else rollDepthMin
         driftMul = if (current == null && structural) enterSpawnXFactor else 0f
         xRel = xRelOf(ks)
       }
@@ -871,7 +885,11 @@ class NumericTextView(context: Context) : View(context) {
         }
         // The settle bounce is the arrival's alone: a departure that rang would swing back toward
         // the baseline it is trying to leave.
-        val offZ = if (g.target >= 0.5f) arriveDampingRatio else springDampingRatio
+        val offZ = when {
+          g.target < 0.5f -> springDampingRatio
+          g.travelMul > 1.5f -> birthDampingRatio      // structural birth: far spawn, same settle
+          else -> arriveDampingRatio
+        }
         val (o, ov) = TransitionLogic.springIntegrate(g.off, g.offV, g.offTarget, offK, offZ, dt)
         g.off = o; g.offV = ov
         val (x, xv) = TransitionLogic.springIntegrate(g.xRel, g.xv, g.xRelTarget, xStiffness, xDampingRatio, dt)

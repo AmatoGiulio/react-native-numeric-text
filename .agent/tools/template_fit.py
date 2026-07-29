@@ -148,15 +148,26 @@ def fit(frames, onset, column=-1, span=60, bg=None, verbose=True):
         # Closed-form 2x2 least squares for every (old, new) pair at once.
         # float64: the Gram entries run to ~1e8, and a near-singular pair (two templates that are
         # nearly the same picture) squares that when the amplitude blows up before clipping.
-        det = goo64[:, None] * gnn64[None, :] - gon64 ** 2
-        bad = np.abs(det) < 1e-3 * (goo64[:, None] * gnn64[None, :])
-        det = np.where(bad, 1.0, det)
-        ao = (gnn[None, :] * bo[:, None] - gon * bn[None, :]) / det
-        an = (goo[:, None] * bn[None, :] - gon * bo[:, None]) / det
-        ao = np.clip(np.where(bad, 0.0, ao), 0, None)
-        an = np.clip(np.where(bad, 0.0, an), 0, None)
-        # Residual of the clipped solution.
         dd = float(d.astype(np.float64) @ d.astype(np.float64))
+        # Single-template fits, needed as a fallback and as the answer whenever one of the two
+        # glyphs does not exist: a BIRTH has no old glyph in its column, so that template is all
+        # zeros. Testing degeneracy against goo*gnn alone compares 0 < 0, misses it, and the solve
+        # divides by zero — which is what filled the reference's newly-created columns with NaN.
+        ao_solo = np.clip(np.where(goo64 > 1e-6, bo / np.where(goo64 > 1e-6, goo64, 1.0), 0.0), 0, None)
+        an_solo = np.clip(np.where(gnn64 > 1e-6, bn / np.where(gnn64 > 1e-6, gnn64, 1.0), 0.0), 0, None)
+        r_o = dd - 2 * ao_solo * bo + ao_solo ** 2 * goo64
+        r_n = dd - 2 * an_solo * bn + an_solo ** 2 * gnn64
+
+        det = goo64[:, None] * gnn64[None, :] - gon64 ** 2
+        scale = np.maximum(goo64[:, None] * gnn64[None, :], 1e-9)
+        bad = (np.abs(det) < 1e-3 * scale) | (goo64[:, None] < 1e-6) | (gnn64[None, :] < 1e-6)
+        safe_det = np.where(bad, 1.0, det)
+        ao = np.clip((gnn64[None, :] * bo[:, None] - gon64 * bn[None, :]) / safe_det, 0, None)
+        an = np.clip((goo64[:, None] * bn[None, :] - gon64 * bo[:, None]) / safe_det, 0, None)
+        # Where the pair is degenerate, keep whichever single template explains the frame better.
+        keep_old = r_o[:, None] <= r_n[None, :]
+        ao = np.where(bad, np.where(keep_old, ao_solo[:, None], 0.0), ao)
+        an = np.where(bad, np.where(keep_old, 0.0, an_solo[None, :]), an)
         r = (dd
              - 2 * (ao * bo[:, None] + an * bn[None, :])
              + ao ** 2 * goo64[:, None] + an ** 2 * gnn64[None, :] + 2 * ao * an * gon64)
@@ -168,6 +179,69 @@ def fit(frames, onset, column=-1, span=60, bg=None, verbose=True):
         out['s_new'].append(float(SIGMA[idx[j][1]]) / FONT)
         out['resid'].append(float(np.sqrt(max(r[i, j], 0)) / max(np.linalg.norm(d), 1e-6)))
     return {k: np.asarray(v) for k, v in out.items()}
+
+
+def fit_dying(frames, onset, span=60, bg=None, min_gap=6, settle_at=None):
+    """One template per DYING column: a column that holds ink before the change and none after.
+
+    A death is a single glyph, so the two-template solve degenerates. Here each pre-transition
+    column gets its own single-template fit — opacity, position and blur per frame — which is what
+    tells apart "the glyphs leave one at a time" from "they all fade together", something a summed
+    window can only see as a drop in ink.
+    """
+    bg = background(frames) if bg is None else bg
+    end = onset + span
+    # settle_at: where to read the layout the change is heading for. It defaults to the end of the
+    # window, but a preset that sets a second value 400 ms later never settles inside it, and then
+    # every column looks alive and none is classed as dying.
+    sa = (end - 10) if settle_at is None else settle_at
+    settled = ink(frames[sa:sa + 8], bg).mean(axis=0)
+    pre = ink(frames[onset - 10:onset - 2], bg).mean(axis=0)
+    live_after = np.zeros(W, bool)
+    for a, b in columns(settled):
+        live_after[max(0, a - min_gap):min(W, b + min_gap)] = True
+
+    out = []
+    for x0, x1 in columns(pre):
+        if live_after[x0:x1].any():
+            continue                                   # something settles here; not a clean death
+        xa, xb = max(0, x0 - 20), min(W, x1 + 20)
+        T, idx = template_stack(pre[:, xa:xb])
+        g = (T * T).sum(axis=1).astype(np.float64)
+        g = np.where(g < 1e-6, 1e-6, g)
+        rows = {'x': (x0, x1), 't': [], 'a': [], 'dy': [], 's': []}
+        for f in range(onset - 4, end):
+            d = ink(frames[f:f + 1], bg)[0, :, xa:xb].ravel()
+            b_ = (T @ d).astype(np.float64)
+            a_ = np.clip(b_ / g, 0, None)
+            r = float(d @ d) - 2 * a_ * b_ + a_ ** 2 * g
+            i = int(np.argmin(r))
+            rows['t'].append((f - onset) / FPS * 1000)
+            rows['a'].append(float(a_[i]))
+            rows['dy'].append(float(DY[idx[i][0]]) / FONT)
+            rows['s'].append(float(SIGMA[idx[i][1]]) / FONT)
+        out.append({k: (np.asarray(v) if k != 'x' else v) for k, v in rows.items()})
+    return out
+
+
+def report_dying(res, label, step=3):
+    print(f'-- {label}: {len(res)} dying columns (opacity as a fraction of the settled glyph)')
+    if not res:
+        return
+    k = range(0, len(res[0]['t']), step)
+    print('   t(ms)  :', ' '.join(f'{res[0]["t"][i]:6.0f}' for i in k))
+    for j, c in enumerate(res):
+        print(f'   col{j} a :', ' '.join(f'{c["a"][i]:6.2f}' for i in k))
+    for j, c in enumerate(res):
+        a = c['a']; a0 = a[:4].mean()
+        rel = np.nonzero(a < 0.5 * a0)[0]; rel = rel[rel >= 4]
+        start = np.nonzero(a < 0.9 * a0)[0]; start = start[start >= 4]
+        half = (rel[0] - 4) / FPS * 1000 if len(rel) else float('nan')
+        t0 = (start[0] - 4) / FPS * 1000 if len(start) else float('nan')
+        live = a > 0.06 * a0
+        trav = np.abs(c['dy'][live]).max() if live.any() else 0.0
+        print(f'   col{j}: starts to go at {t0:4.0f} ms, half gone at {half:4.0f} ms, '
+              f'travels {trav:.2f} line-heights while visible')
 
 
 def report(res, label, step=3):

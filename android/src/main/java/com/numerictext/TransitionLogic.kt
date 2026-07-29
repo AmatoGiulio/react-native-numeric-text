@@ -347,10 +347,21 @@ object TransitionLogic {
    *
    * A sub-linear exponent (0.5) gave a very long tail: with a large font the peak blur radius is
    * tens of pixels, so even a residual (1−p) of 0.001 still read as soft, and a transition never
-   * looked like it had finished. Linear still leaves a glyph clearly out of focus while it is
-   * mid-flight (0.2 of full blur at p = 0.8) and lets it resolve cleanly by p ≈ 0.98.
+   * looked like it had finished. Linear resolved cleanly but landed too sharp: fitted per column on
+   * 1 -> 9,999, the reference's arriving glyphs peak at 0.12-0.16 of a line height of blur, ours at
+   * 0.05-0.12, and the later a column arrived the sharper it turned up. 0.75 lifts the middle of the
+   * curve (0.59 against 0.50 at p = 0.5, 0.41 against 0.30 at p = 0.7) while still reaching zero at
+   * p = 1, so a glyph resolves at the same moment but is softer on the way in.
    */
-  fun presenceBlur(p: Float): Float = 1f - p.coerceIn(0f, 1f)
+  fun presenceBlur(p: Float): Float {
+    val a = 1f - p.coerceIn(0f, 1f)
+    // Linear, with a bump over the middle: 4·p·a is 1 at half presence and 0 at both ends, so the
+    // tail stays exactly as short as the linear curve's while the flight is softer.
+    return (a * (1f + BLUR_MID_LIFT * 4f * p.coerceIn(0f, 1f) * a)).coerceIn(0f, 1f)
+  }
+
+  /** Extra softness at half presence, as a fraction of the linear curve. See [presenceBlur]. */
+  private const val BLUR_MID_LIFT = 0.5f
 
   /**
    * Softness of a DYING glyph — deliberately lagged, and with no velocity term.
