@@ -353,12 +353,26 @@ object TransitionLogic {
    * curve (0.59 against 0.50 at p = 0.5, 0.41 against 0.30 at p = 0.7) while still reaching zero at
    * p = 1, so a glyph resolves at the same moment but is softer on the way in.
    */
-  fun presenceBlur(p: Float): Float {
-    val a = 1f - p.coerceIn(0f, 1f)
+  @JvmOverloads
+  fun presenceBlur(p: Float, softness: Float = 1f): Float {
+    val c = p.coerceIn(0f, 1f)
+    val a = 1f - c
     // Linear, with a bump over the middle: 4·p·a is 1 at half presence and 0 at both ends, so the
     // tail stays exactly as short as the linear curve's while the flight is softer.
-    return (a * (1f + BLUR_MID_LIFT * 4f * p.coerceIn(0f, 1f) * a)).coerceIn(0f, 1f)
+    //
+    // `softness` is 1 for a change that stands alone and falls toward 0 as they crowd. A glyph in a
+    // continuous roll never gets near full presence, so it never leaves the soft part of the curve
+    // and the whole roll reads as a smear; the same curve is exactly right for a single arrival.
+    // Both the bump and the exponent scale with it, and neither touches WHERE any glyph is — which
+    // is why this sharpens a fast roll without moving the centre the fade rate governs.
+    val lift = BLUR_MID_LIFT * softness
+    val bumped = (a * (1f + lift * 4f * c * a)).coerceIn(0f, 1f)
+    val exp = 1f + (1f - softness) * BLUR_SPAM_FALLOFF
+    return if (exp <= 1.001f) bumped else Math.pow(bumped.toDouble(), exp.toDouble()).toFloat()
   }
+
+  /** How much faster softness falls with presence when changes crowd. See [presenceBlur]. */
+  private const val BLUR_SPAM_FALLOFF = 0.4f
 
   /**
    * Extra softness at half presence, as a fraction of the linear curve. See [presenceBlur].

@@ -499,7 +499,7 @@ class NumericTextView(context: Context) : View(context) {
         TransitionLogic.deathBlur(pc)
       } else {
         max(
-          TransitionLogic.presenceBlur(pc),
+          TransitionLogic.presenceBlur(pc, changeSpacing),
           (abs(g.v) / blurVelocityRef).coerceIn(0f, 1f) * 0.6f
         )
       }
