@@ -137,6 +137,14 @@ class NumericTextView(context: Context) : View(context) {
   private val cascadeSpamMs: Float = 90f
   // How much faster than the presence spring a ROLL's departure fades. See pK below.
   private val rollExitFadeRate: Float = 1.3f
+  // How much faster a structural DEATH runs than the presence spring — BOTH its springs, so the
+  // trajectory keeps its shape and is simply played faster. Fitted per glyph on 1,000 -> 1, where
+  // the composition loses four glyphs in sequence (.agent/tools/template_fit.py, single-template
+  // mode): each of the reference's dying digits goes from full to half opacity in 50 ms, ours took
+  // 83. That 1.6x also stretched the gap between consecutive deaths — a slower fade reaches the
+  // 90%-gone mark later — so the two glyphs left together as a pair rather than one at a time.
+  // Time in a second-order system scales as 1/sqrt(stiffness), hence the square below.
+  private val deathRate: Float = 1.4f
   // How far out of place a fading glyph may be and still be revived, as a fraction of line-height.
   private val reviveMaxDriftFactor: Float = 0.12f
   private var lastChangeUptimeMs: Long = 0L
@@ -835,7 +843,11 @@ class NumericTextView(context: Context) : View(context) {
         // scenes ran past the reference's own duration (-1 -> 0 at 450 ms against 300). 1.6 was too
         // far back — it measured 0.59 / 0.22 at +33 / +83 ms, near the 0.57 / 0.21 of before any of
         // this — so 1.3 splits it against the reference's 0.78 / 0.30.
-        val pK = if (g.target >= 0.5f || g.structuralExit) springStiffness else springStiffness * rollExitFadeRate
+        val pK = when {
+          g.target >= 0.5f -> springStiffness
+          g.structuralExit -> springStiffness * deathRate * deathRate
+          else -> springStiffness * rollExitFadeRate
+        }
         val (p, v) = TransitionLogic.springIntegrate(g.p, g.v, g.target, pK, springDampingRatio, dt)
         g.p = p; g.v = v
         // Movement is released by the same stagger as the fade: while a change is still queued the
@@ -851,7 +863,12 @@ class NumericTextView(context: Context) : View(context) {
         // stiffness halves the rate, so it covers roughly one unit in the time it sheds its
         // presence and drifts the rest of the way once it is already invisible.
         // An ARRIVING glyph keeps the presence spring's own rate, so it lands as it solidifies.
-        val offK = if (g.target >= 0.5f || g.structuralExit) springStiffness else springStiffness * 0.25f
+        val offK = when {
+          g.target >= 0.5f -> springStiffness
+          // Same multiplier as its presence, so a death covers the same distance before it is gone.
+          g.structuralExit -> springStiffness * deathRate * deathRate
+          else -> springStiffness * 0.25f
+        }
         // The settle bounce is the arrival's alone: a departure that rang would swing back toward
         // the baseline it is trying to leave.
         val offZ = if (g.target >= 0.5f) arriveDampingRatio else springDampingRatio
