@@ -26,7 +26,9 @@ const PRESETS: Preset[] = [
 type Impl = 'reference' | 'library';
 type ReduceMode = 'system' | 'always' | 'never';
 
-export default function App() {
+type LabProps = { onOpenShowcase: () => void };
+
+export function Lab({ onOpenShowcase }: LabProps) {
   const [value, setValue] = useState(SEQUENCE_START);
   const [impl, setImpl] = useState<Impl>('library');
   const [reduceMotion, setReduceMotion] = useState<ReduceMode>('system');
@@ -71,6 +73,10 @@ export default function App() {
 
   return (
     <ScrollView style={styles.screen} contentContainerStyle={styles.content}>
+      <Pressable style={styles.backBtn} onPress={onOpenShowcase}>
+        <Text style={styles.backText}>← Demo</Text>
+      </Pressable>
+
       {/* Implementation under test — the SAME `value` drives both, so the same scripted
           sequence produces comparable recordings on iOS (reference) and Android (library). */}
       <View style={styles.segment}>
@@ -206,6 +212,19 @@ const styles = StyleSheet.create({
     paddingTop: 100,
     paddingBottom: 60,
     paddingHorizontal: 20,
+  },
+  backBtn: {
+    alignSelf: 'flex-start',
+    marginBottom: 16,
+    paddingHorizontal: 14,
+    paddingVertical: 7,
+    borderRadius: 999,
+    backgroundColor: '#e8e8ed',
+  },
+  backText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#6a6a75',
   },
   segment: {
     flexDirection: 'row',

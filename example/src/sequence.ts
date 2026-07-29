@@ -114,7 +114,8 @@ export const SEQUENCE_DURATION = SEQUENCE.reduce((sum, s) => sum + s.hold, 0);
 export function useSequencePlayer(
   onValue: (v: number) => void,
   onPhase?: (phase: string) => void,
-  onDone?: () => void
+  onDone?: () => void,
+  steps: Step[] = SEQUENCE
 ) {
   const timers = useRef<ReturnType<typeof setTimeout>[]>([]);
 
@@ -126,7 +127,7 @@ export function useSequencePlayer(
   const play = useCallback(() => {
     stop();
     let t = 0;
-    for (const step of SEQUENCE) {
+    for (const step of steps) {
       const at = t;
       timers.current.push(
         setTimeout(() => {
@@ -137,7 +138,7 @@ export function useSequencePlayer(
       t += step.hold;
     }
     timers.current.push(setTimeout(() => onDone?.(), t));
-  }, [onValue, onPhase, onDone, stop]);
+  }, [onValue, onPhase, onDone, steps, stop]);
 
   useEffect(() => stop, [stop]);
 
