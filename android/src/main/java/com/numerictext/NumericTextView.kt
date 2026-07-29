@@ -117,6 +117,12 @@ class NumericTextView(context: Context) : View(context) {
   // change the leftmost changed column leads). Kept SUBTLE — a large delay turns the cascade into
   // a visibly sequential, machine-like wave.
   private val staggerSeconds: Float = 0.04f
+  // Below this gap between two changes the exit cascade is off, and it fades in linearly up to
+  // twice it. A hold on +/- repeats every 30 ms and the scripted burst every 45 ms — both must land
+  // at zero — while the example's presets, which set two values 400 ms apart, must get the full
+  // cascade the reference shows there.
+  private val cascadeSpamMs: Float = 90f
+  private var lastChangeUptimeMs: Long = 0L
 
   private var formatter: NumberFormat? = null
   private var currentFormatterLocale: Locale? = null
@@ -550,7 +556,7 @@ class NumericTextView(context: Context) : View(context) {
     // reference — 9,999→1: exit 9(-82) → exit ,(-47) → exit 9(-12) → ENTER 1(0) → exit 9(+35).
     // `stagger = false` means "release this glyph now": the cascade sequences a change starting
     // from rest, but a glyph that is already on screen must not be held back by it (see below).
-    data class Phase(val g: GlyphState, val x: Float, val isExit: Boolean, val stagger: Boolean = true)
+    data class Phase(val g: GlyphState, val x: Float, val key: String, val isExit: Boolean, val stagger: Boolean = true)
     val phases = ArrayList<Phase>()
 
     // EXITS lose their cascade once the composition is already moving. A staggered exit is held at
@@ -562,7 +568,21 @@ class NumericTextView(context: Context) : View(context) {
     // ARRIVALS keep their cascade always. They wait at zero presence, so staggering them cannot pin
     // a column sharp — and it is what makes a continuous roll read as rolling rather than as every
     // column flipping in lockstep.
-    val fromRest = slotsAtRest()
+    // How much of the exit cascade survives, from how long ago the LAST change came in — not from
+    // whether the composition happens to be at rest.
+    //
+    // The all-or-nothing "at rest" gate dropped the cascade for a preset that sets its value twice
+    // 400 ms apart (measured on 1.9 -> 2.0: the reference holds the dying ".9" 150 ms, ours released
+    // it at 0), and "at rest" could not recover in time anyway because the horizontal reflow spring
+    // is deliberately slow (~0.4 s). What the gate is actually protecting against is changes
+    // arriving FASTER than the cascade can play: a spam at 30-45 ms per change, where a staggered
+    // exit is reset before its turn and so sits sharp — measured 46-64% of moving frames sharp on
+    // the right-hand columns against 1-3% on the left, a split the reference does not have.
+    // Elapsed time says that directly.
+    val now = android.os.SystemClock.uptimeMillis()
+    val sinceLastChange = (now - lastChangeUptimeMs).toFloat()
+    lastChangeUptimeMs = now
+    val restFraction = ((sinceLastChange - cascadeSpamMs) / cascadeSpamMs).coerceIn(0f, 1f)
 
     for (ks in newLayout) {
       newKeys.add(ks.key)
@@ -628,7 +648,7 @@ class NumericTextView(context: Context) : View(context) {
         if (newestRetired == null || other.p > newestRetired.p) newestRetired = other
       }
       // Only the most present departure joins the cascade; the rest are already leaving.
-      newestRetired?.let { phases.add(Phase(it, it.xRel, isExit = true)) }
+      newestRetired?.let { phases.add(Phase(it, it.xRel, ks.key, isExit = true)) }
 
       // Safety cap. Spent glyphs drop out on their own at p ~ 0, which at this cadence keeps a
       // column near half a dozen; this only guards against an unbounded pile-up.
@@ -654,7 +674,7 @@ class NumericTextView(context: Context) : View(context) {
       val fresh = revived == null
       val outgoingHoldsInk = newestRetired == null || newestRetired.target >= 0.5f
       if (fresh) g.target = 0f
-      phases.add(Phase(g, g.xRelTarget, isExit = false, stagger = fresh && outgoingHoldsInk))
+      phases.add(Phase(g, g.xRelTarget, ks.key, isExit = false, stagger = fresh && outgoingHoldsInk))
     }
 
     // Columns that no longer exist: every glyph in them heads for zero presence, fading essentially
@@ -669,7 +689,7 @@ class NumericTextView(context: Context) : View(context) {
         g.structuralExit = true
         g.xRelTarget = g.xRel                  // frozen: dying glyphs do not ride the reflow
         g.delay = 0f
-        phases.add(Phase(g, g.xRel, isExit = true))
+        phases.add(Phase(g, g.xRel, k, isExit = true))
       }
     }
 
@@ -686,14 +706,27 @@ class NumericTextView(context: Context) : View(context) {
     // the whole number moved in lockstep instead of rippling. A stagger is safe now because it only
     // gates the target flip; the glyph keeps springing toward its current goal meanwhile.
     phases.sortBy { it.x }
-    var exitOrdinal = 0
     var entersSeen = 0
-    for ((i, ph) in phases.withIndex()) {
+    // COLUMN ordinal, not phase ordinal: a changed column contributes an exit AND an arrival at the
+    // same x, and the reference releases them on one clock keyed to WHERE the column is.
+    // Measured per column on the reference (first frame each old column's own ink moves):
+    //   1,000 -> 1     33 / 50 / 83 / 133 / 183 ms   (~45 ms per column)
+    //   1,000 -> 999   17 / 50 / 100 / 133 / 167 ms  (~40 ms per column)
+    // A dense exit ordinal plus the old `entersSeen * 0.5` handoff stretched ours to 17 / 33 / 117 /
+    // 183 / 233 — the right-hand columns left ~65 ms apart instead of ~40. The handoff it encoded
+    // (10 -> 9: the "0" holds until the "9" shows) is implicit here: a column's exit is keyed to its
+    // own position, which already puts it after everything to its left.
+    // Ordered by the leftmost x each column touches. Keying on the raw x does NOT work: a column's
+    // departure sits at its OLD position and its arrival at its NEW one, so the two would count as
+    // two separate columns and the ordinal would run at phase rate again.
+    val colOrder = phases.groupBy { it.key }.entries
+      .sortedBy { e -> e.value.minOf { it.x } }
+      .map { it.key }
+    for (ph in phases) {
+      val columnIndex = colOrder.indexOf(ph.key)
       when {
-        // An exit that follows an arrival waits half a step extra — the reference's "handoff":
-        // in 10→9 the "0" stays firm until the "9" is perceptible.
         ph.isExit -> {
-          ph.g.armDelay(if (fromRest) (exitOrdinal++ + entersSeen * 0.5f) * staggerSeconds else 0f)
+          ph.g.armDelay(restFraction * columnIndex * staggerSeconds)
           ph.g.aimAt(0f)
         }
         // Already on screen: no stagger, come back now.
