@@ -158,6 +158,8 @@ class NumericTextView(context: Context) : View(context) {
   // always above its final place. 2.5 then overshot the other way, to +0.10 with 0.42 of the ink;
   // 2.9 splits them onto the reference's +0.06.
   private val rollExitFadeFast: Float = 2.9f
+  // How much faster an ARRIVING glyph gains presence when changes crowd. See pK below.
+  private val arrivePresenceFast: Float = 2.6f
   private var changeSpacing: Float = 1f   // 1 = isolated change, 0 = spam; see cascadeSpamMs
   // Where a roll's departure asymptotes, in travel units, drawn through rollOffsetShape's 1.43
   // power. Measured on a press-and-hold in the example app — the same 30 ms repeat on both sides —
@@ -886,7 +888,15 @@ class NumericTextView(context: Context) : View(context) {
         // far back — it measured 0.59 / 0.22 at +33 / +83 ms, near the 0.57 / 0.21 of before any of
         // this — so 1.3 splits it against the reference's 0.78 / 0.30.
         val pK = when {
-          g.target >= 0.5f -> springStiffness
+          // An ARRIVING glyph gains presence faster when changes crowd. In a continuous roll the
+          // incoming digit never gets time to darken, so the column reads as a pale smudge and the
+          // number looks unbalanced toward its left — measured on a press-and-hold, the whole
+          // composition's ink centre sits 0.24 line-heights left of where it settles against the
+          // reference's 0.08, while the edges do not move at all: nothing is sliding, the last
+          // digit is simply too faint to carry its side. Presence only — the roll's PACE comes from
+          // the offset spring and stays where it was tuned.
+          g.target >= 0.5f ->
+            springStiffness * (1f + (1f - changeSpacing) * (arrivePresenceFast - 1f))
           g.structuralExit -> springStiffness * deathRate * deathRate
           // Isolated: linger and roll out. Spam: clear out before the next digit lands on top.
           else -> springStiffness *
