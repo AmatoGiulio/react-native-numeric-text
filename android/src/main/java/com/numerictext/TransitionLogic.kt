@@ -353,6 +353,18 @@ object TransitionLogic {
   fun presenceBlur(p: Float): Float = 1f - p.coerceIn(0f, 1f)
 
   /**
+   * Softness of a DYING glyph — deliberately lagged, and with no velocity term.
+   *
+   * The reference removes the glyphs of a shrinking composition one at a time and each stays crisp
+   * while it thins: on 1,000 -> 1 its peak ink is still 100% with total mass at 79%, and 1.8x the
+   * mass by the time three quarters have gone. A linear softness (plus the roll's velocity term,
+   * which peaks the instant a departure is released) blurred them all together instead, at a
+   * peak/mass ratio of ~1.05 the whole way — the grey smear that a big shrink read as.
+   */
+  fun deathBlur(p: Float): Float =
+    Math.pow((1f - p.coerceIn(0f, 1f)).toDouble(), 1.6).toFloat()
+
+  /**
    * Depth: an absent glyph is small and grows into place as it resolves.
    *
    * Strongly convex in (1−p), fitted to the iOS reference's 1→9,999 growth, where a glyph's ink

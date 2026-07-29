@@ -432,10 +432,22 @@ class NumericTextView(context: Context) : View(context) {
       val p = presenceOf(g)
       val pc = p.coerceIn(0f, 1f)
       // Softness leads presence, with a velocity term so a fast roll smears more than a slow one.
-      val blurAmt = max(
-        TransitionLogic.presenceBlur(pc),
-        (abs(g.v) / blurVelocityRef).coerceIn(0f, 1f) * 0.6f
-      )
+      //
+      // A structural DEATH is the exception: it stays SHARP while it thins and only softens near
+      // the end. Measured on 1,000 -> 1, where four glyphs die in sequence, the reference's peak ink
+      // holds at 100% while total mass is already down to 79% and reaches 1.8x the mass by the time
+      // it is a quarter gone — one glyph at full darkness while the others have left. Ours faded and
+      // blurred them as a group (peak/mass ~1.05 throughout), which is what read as a grey smear.
+      // The velocity term is what did it: a departure's presence velocity is highest the moment it
+      // is released, so it went soft before it had lost any ink.
+      val blurAmt = if (g.structuralExit && g.target < 0.5f) {
+        TransitionLogic.deathBlur(pc)
+      } else {
+        max(
+          TransitionLogic.presenceBlur(pc),
+          (abs(g.v) / blurVelocityRef).coerceIn(0f, 1f) * 0.6f
+        )
+      }
       val alpha = (TransitionLogic.presenceAlpha(pc) * (1f - blurAlphaDrop * blurAmt) * 255f)
         .toInt().coerceIn(0, 255)
       if (alpha <= 0) continue
