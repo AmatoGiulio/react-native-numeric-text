@@ -122,6 +122,8 @@ class NumericTextView(context: Context) : View(context) {
   // at zero — while the example's presets, which set two values 400 ms apart, must get the full
   // cascade the reference shows there.
   private val cascadeSpamMs: Float = 90f
+  // How far out of place a fading glyph may be and still be revived, as a fraction of line-height.
+  private val reviveMaxDriftFactor: Float = 0.12f
   private var lastChangeUptimeMs: Long = 0L
 
   private var formatter: NumberFormat? = null
@@ -597,7 +599,18 @@ class NumericTextView(context: Context) : View(context) {
       // Tried refusing to revive one that had already travelled most of the way out, on the theory
       // that hauling it back fights the roll — measured worse (47% of moving frames scrolling
       // downward against 63% for plain revival), so reuse stays unconditional.
-      val revived = col.glyphs.lastOrNull { it.ch == ks.char }
+      // …but only if it is still standing roughly WHERE the new layout wants it. A revival keeps
+      // the glyph's live xRel, so one left over from a wider composition springs in sideways: on
+      // 999 -> 1,000 followed by 99 -> 100, the zeros of "1,000" were revived for "100" from half a
+      // line-height to the right, and the number read as digits sliding in from the sides instead
+      // of rolling. Measured as ink sitting beside the settled digits, that case ran 19% at +67 ms
+      // and 18% at +133 against the reference's 6% and 1.8% — while the same change from rest
+      // matched it (3.8 / 1.6 vs 2.6 / 0.6). Same-layout revival, which is what the A→B→A of a
+      // spam needs and what the earlier measurement defended, has a drift of zero and is untouched.
+      val reviveMaxDrift = getTextHeight() * reviveMaxDriftFactor
+      val revived = col.glyphs.lastOrNull {
+        it.ch == ks.char && abs(it.xRel - xRelOf(ks)) <= reviveMaxDrift
+      }
       val g = revived ?: GlyphState(ks.char).apply {
         p = 0f; v = 0f
         // Born on the arrival side. A structural birth spawns much further out and much softer;
