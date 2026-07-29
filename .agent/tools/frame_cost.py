@@ -25,8 +25,9 @@ import sys
 import time
 
 PKG = "numerictext.example"
-# The '+' button, in device pixels on the Pixel_8 AVD.
-HOLD_X, HOLD_Y = 646, 1098
+# Default '+' button, in device pixels on the Pixel_8 AVD's showcase screen. The lab screen puts
+# it elsewhere, so both are overridable.
+HOLD_X, HOLD_Y = 749, 2069
 
 # Columns are looked up by name, not position: the CSV has gained fields over Android versions
 # (FrameTimelineVsyncId, WorkloadTarget, …), so fixed indices silently read the wrong clock.
@@ -41,10 +42,9 @@ def adb(serial, *args, binary=False):
     return out.stdout if binary else out.stdout.decode(errors="replace")
 
 
-def collect(serial, hold_ms):
+def collect(serial, hold_ms, x=HOLD_X, y=HOLD_Y):
     adb(serial, "shell", "dumpsys", "gfxinfo", PKG, "reset")
-    adb(serial, "shell", "input", "swipe",
-        str(HOLD_X), str(HOLD_Y), str(HOLD_X), str(HOLD_Y), str(hold_ms))
+    adb(serial, "shell", "input", "swipe", str(x), str(y), str(x), str(y), str(hold_ms))
     time.sleep(1)
     return adb(serial, "shell", "dumpsys", "gfxinfo", PKG, "framestats")
 
@@ -103,11 +103,13 @@ def main():
     ap.add_argument("--runs", type=int, default=3)
     ap.add_argument("--hold-ms", type=int, default=6000)
     ap.add_argument("--label", default="")
+    ap.add_argument("--x", type=int, default=HOLD_X)
+    ap.add_argument("--y", type=int, default=HOLD_Y)
     args = ap.parse_args()
 
     record, gpu = [], []
     for i in range(args.runs):
-        r, g = parse(collect(args.serial, args.hold_ms))
+        r, g = parse(collect(args.serial, args.hold_ms, args.x, args.y))
         print(f"run {i + 1}: {len(r)} frames", file=sys.stderr)
         record += r
         gpu += g

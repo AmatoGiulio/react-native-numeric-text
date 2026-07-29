@@ -270,9 +270,6 @@ class NumericTextView(context: Context) : View(context) {
     var delay: Float = 0f          // cascade stagger before `pendingTarget` is applied
     var pendingTarget: Float = -1f
     var node: RenderNode? = null
-    /** What [node] currently holds. A recording survives until the glyph or the paint changes. */
-    var nodeCh: String? = null
-    var nodeGen: Int = -1
 
     /**
      * Where this glyph is headed once its stagger elapses. Scheduling MUST read this rather than
@@ -596,18 +593,19 @@ class NumericTextView(context: Context) : View(context) {
    * Draws one moving glyph through its own [RenderNode], carrying the blur (RenderEffect, API 31+),
    * the depth scale about the glyph's baseline, the roll translation and the crossfade alpha.
    *
-   * Two things here are deliberate and were not always true.
-   *
-   * The recording is kept. Only the node's *properties* animate, and none of them require the
-   * display list to change, so the glyph is re-recorded solely when the character or the paint
-   * does. It used to re-record every glyph on every frame — a `measureText`, a `drawText` and a
-   * begin/end recording pair per glyph per frame, all producing an identical display list.
-   *
    * The node is glyph-sized, not view-sized. A node covering the whole view meant every moving
    * glyph composited — and blurred — a full-view layer, so the fill cost was glyphs × view area
    * and a longer number cost proportionally more of the screen. It is now glyphs × glyph area,
    * with [BLUR_MARGIN_FACTOR] of headroom so a DECAL blur still has room to fall off inside the
    * node's own bounds instead of being cut at its edge.
+   *
+   * The glyph IS re-recorded every frame, at its true sub-pixel position, and that is deliberate.
+   * Recording once and moving the node with a fractional `translationX` is cheaper — it was worth
+   * about 12 ms of display-list work per frame at the median — but it resamples a raster that was
+   * rasterised for a different sub-pixel phase, so a moving glyph is filtered while a settled one,
+   * drawn straight onto the canvas, is not. The two do not match, and the frame where a glyph
+   * crosses from one path to the other reads as a flash. Sub-pixel text positioning has to come
+   * from the text call, not from a transform applied to a cached layer.
    */
   @SuppressLint("NewApi")
   private fun drawSlotGlyphNode(
@@ -621,38 +619,33 @@ class NumericTextView(context: Context) : View(context) {
     val margin = ceil(textHeightPx * blurFactor * BLUR_MARGIN_FACTOR)
     val nodeW = ceil(advance + 2f * margin).toInt()
     val nodeH = ceil(textHeightPx + 2f * margin).toInt()
-    // Where the glyph's advance-centre and baseline sit inside the node's own box.
-    val localCentreX = margin + advance / 2f
-    val localBaseline = margin - fmAscent
+
+    // The node's box is placed on whole pixels; everything fractional stays inside the recording,
+    // where the text call resolves it the same way the sharp path does.
+    val left = Math.round(cx - margin - advance / 2f)
+    val top = Math.round(bl + translationY - (margin - fmAscent))
+    val localCentreX = (cx - margin - advance / 2f) - left + margin + advance / 2f
+    val localBaseline = (bl + translationY - (margin - fmAscent)) - top + (margin - fmAscent)
 
     var node = g.node
     if (node == null) {
       node = RenderNode("slotGlyph")
       // A node holds exactly one glyph, so nothing inside it can overlap anything else inside it.
-      // Left at its default, an alpha below 1 makes the framework rasterise the node into an
-      // offscreen buffer first so the alpha applies to the composite — which costs a buffer per
-      // moving glyph per frame, and rasterises the text through a different path than the settled
-      // glyphs beside it, which are drawn straight onto the canvas. Saying there is no overlap
-      // lets the alpha be applied directly, so a glyph looks the same the frame before it settles
-      // as the frame after, when it switches to the sharp path.
+      // Left at its default, an alpha below 1 makes the framework rasterise it into an offscreen
+      // buffer first so the alpha applies to the composite — a buffer per moving glyph per frame,
+      // and another way for the two paths to disagree.
       node.setHasOverlappingRendering(false)
       g.node = node
-      g.nodeCh = null
     }
-    if (g.nodeCh != ch || g.nodeGen != paintGeneration) {
-      node.setPosition(0, 0, nodeW, nodeH)
-      val rec = node.beginRecording()
-      textPaint.alpha = 255; textPaint.maskFilter = null
-      rec.drawText(ch, margin, localBaseline, textPaint)
-      node.endRecording()
-      node.pivotX = localCentreX
-      node.pivotY = localBaseline
-      g.nodeCh = ch
-      g.nodeGen = paintGeneration
-    }
-
-    node.translationX = cx - localCentreX
-    node.translationY = (bl + translationY) - localBaseline
+    node.setPosition(left, top, left + nodeW, top + nodeH)
+    val rec = node.beginRecording()
+    textPaint.alpha = 255; textPaint.maskFilter = null
+    rec.drawText(ch, localCentreX - advance / 2f, localBaseline, textPaint)
+    node.endRecording()
+    node.pivotX = localCentreX
+    node.pivotY = localBaseline
+    node.translationX = 0f
+    node.translationY = 0f
     node.scaleX = scale
     node.scaleY = scale
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
