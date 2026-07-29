@@ -22,6 +22,12 @@ Seventeen commits, `e8fb79a`..`11f6c74`, all Android. Each fixes one measured de
 | `a0f7782` | deaths half-lived 83 ms against the reference's 50 |
 | `2d083a8` | the last digits of a growth arrived unblurred; the settle ring was 2× too wide on births |
 | `1b0a468`, `44cb58c`, `7f6f37d`, `d4809cb`, `11f6c74` | the continuous roll: centring, pace, crispness, density, depth |
+| `3f822bd` | the number drew in whatever the vendor's system sans was — now a bundled Sunghyun Sans |
+
+**The font commit moves the measurement baseline.** Every tuning above is in normalised line-height
+units, so none of it is invalidated; but glyph *shapes* changed, so any filmstrip or template fit
+captured before `3f822bd` compares against a different Android face than the one shipping now.
+Re-capture the Android side before reading a new ink/mass or template-fit number against an old one.
 
 ## The knobs, and what each is answerable to
 
