@@ -360,8 +360,16 @@ object TransitionLogic {
     return (a * (1f + BLUR_MID_LIFT * 4f * p.coerceIn(0f, 1f) * a)).coerceIn(0f, 1f)
   }
 
-  /** Extra softness at half presence, as a fraction of the linear curve. See [presenceBlur]. */
-  private const val BLUR_MID_LIFT = 0.5f
+  /**
+   * Extra softness at half presence, as a fraction of the linear curve. See [presenceBlur].
+   *
+   * 0.5 matched the reference's arrival blur on a growth but softened everything mid-flight,
+   * including a continuous roll, where a glyph never gets near full presence and so never leaves
+   * the lifted part of the curve: measured on a press-and-hold, frames at 90% of a settled glyph's
+   * darkness fell to 2.2% against the reference's 6.8%. 0.32 keeps most of the growth's softness
+   * without blurring a fast roll into a smear.
+   */
+  private const val BLUR_MID_LIFT = 0.32f
 
   /**
    * Softness of a DYING glyph — deliberately lagged, and with no velocity term.

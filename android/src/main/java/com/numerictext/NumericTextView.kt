@@ -151,7 +151,13 @@ class NumericTextView(context: Context) : View(context) {
   // 0.71 / 0.33 of its opacity at +33 / +83 ms), while a continuous roll should not stack four
   // half-faded glyphs below the line (fitted: the reference's column median sits +0.06 during a
   // 30 ms hold, ours +0.17). Same signal as the cascade gate decides which case this is.
-  private val rollExitFadeFast: Float = 4f
+  //
+  // 4 emptied the column instead: during a hold the reference carries 0.60 of a settled glyph's
+  // ink at any moment and we carried 0.19, which reads as a roll that is too pale, too quick and
+  // sitting high — with the departures gone, all that is left is the arriving glyph, which is
+  // always above its final place. 2.5 then overshot the other way, to +0.10 with 0.42 of the ink;
+  // 2.9 splits them onto the reference's +0.06.
+  private val rollExitFadeFast: Float = 2.9f
   private var changeSpacing: Float = 1f   // 1 = isolated change, 0 = spam; see cascadeSpamMs
   // Where a roll's departure asymptotes, in travel units, drawn through rollOffsetShape's 1.43
   // power. Measured on a press-and-hold in the example app — the same 30 ms repeat on both sides —
