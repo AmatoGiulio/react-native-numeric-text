@@ -143,8 +143,26 @@ class NumericTextView(context: Context) : View(context) {
   // at zero — while the example's presets, which set two values 400 ms apart, must get the full
   // cascade the reference shows there.
   private val cascadeSpamMs: Float = 90f
-  // How much faster than the presence spring a ROLL's departure fades. See pK below.
+  // How much faster than the presence spring a ROLL's departure fades, when the change stands
+  // alone. See pK below.
   private val rollExitFadeRate: Float = 1.3f
+  // …and when changes are arriving faster than a transition can play. Both readings are right and
+  // they conflict: an isolated roll should show its old digit roll out (fitted: the reference is at
+  // 0.71 / 0.33 of its opacity at +33 / +83 ms), while a continuous roll should not stack four
+  // half-faded glyphs below the line (fitted: the reference's column median sits +0.06 during a
+  // 30 ms hold, ours +0.17). Same signal as the cascade gate decides which case this is.
+  private val rollExitFadeFast: Float = 4f
+  private var changeSpacing: Float = 1f   // 1 = isolated change, 0 = spam; see cascadeSpamMs
+  // Where a roll's departure asymptotes, in travel units, drawn through rollOffsetShape's 1.43
+  // power. Measured on a press-and-hold in the example app — the same 30 ms repeat on both sides —
+  // as how far the rolling column's ink sits below where it settles: the reference holds a median
+  // of +0.06 line-heights and never passes +0.12, while 2.0 units and then 1.15 (0.40 and 0.18
+  // drawn) parked ours at +0.17, which is the digit visibly sinking during a continuous roll.
+  // Ours parks AT the asymptote because departures linger there. Pulling the asymptote in helped
+  // (0.8 drew 0.11 and measured +0.12) but could not reach the reference, which does not park at
+  // all: on an ISOLATED roll its outgoing glyph is still visible 0.14 away, yet during a hold the
+  // column's median sits at +0.06 — it passes through and is gone. See rollExitFadeFast.
+  private val rollExitOff: Float = 1.0f
   // How much faster a structural DEATH runs than the presence spring — BOTH its springs, so the
   // trajectory keeps its shape and is simply played faster. Fitted per glyph on 1,000 -> 1, where
   // the composition loses four glyphs in sequence (.agent/tools/template_fit.py, single-template
@@ -628,6 +646,7 @@ class NumericTextView(context: Context) : View(context) {
     val sinceLastChange = (now - lastChangeUptimeMs).toFloat()
     lastChangeUptimeMs = now
     val restFraction = ((sinceLastChange - cascadeSpamMs) / cascadeSpamMs).coerceIn(0f, 1f)
+    changeSpacing = restFraction
 
     for (ks in newLayout) {
       newKeys.add(ks.key)
@@ -659,7 +678,7 @@ class NumericTextView(context: Context) : View(context) {
         // Born on the arrival side. A structural birth spawns much further out and much softer;
         // a same-slot roll starts just off the baseline.
         off = -dir.toFloat(); offV = 0f; offTarget = off   // waiting on the arrival side
-        exitOff = dir * 2f
+        exitOff = dir * rollExitOff
         // In a STRUCTURAL change every affected column is a lifecycle, not a roll (METHODOLOGY
         // §5.2) — including one that already existed. Requiring `current == null` here meant the
         // units column, which is the one carrying the old value, arrived as a short roll: fitted
@@ -673,7 +692,7 @@ class NumericTextView(context: Context) : View(context) {
       }
       g.w = ks.width
       g.xRelTarget = xRelOf(ks)
-      g.exitOff = dir * 2f                   // where it will go if it later leaves
+      g.exitOff = dir * rollExitOff          // where it will go if it later leaves
       g.structuralExit = false               // it is arriving; a later death re-arms this
       if (revived == null) col.glyphs.add(g)
 
@@ -692,10 +711,13 @@ class NumericTextView(context: Context) : View(context) {
       var newestRetired: GlyphState? = null
       for (other in col.glyphs) {
         if (other === g || other.effectiveTarget <= 0f) continue   // already on its way out
-        // Two units, so the glyph keeps drifting clear instead of parking just off the baseline —
-        // a fast roll needs departures to leave the frame, not pile up. The rate is what matters,
-        // not the destination: see offStiffness below.
-        other.exitOff = dir * 2f
+        // Where a ROLL's departure heads. Two units was set when departures faded four times faster
+        // than they moved and so were invisible long before arriving; now that they linger (see
+        // rollExitFadeRate) the same destination is visible all the way down, and a continuous roll
+        // showed the outgoing digit sinking far below the line instead of staying centred.
+        // rollOffsetShape's 1.43 power turns 2 units into 0.40 of a line height, where the template
+        // fit puts the reference's outgoing glyph at 0.14 before it is gone.
+        other.exitOff = dir * rollExitOff
         if (structural) {
           other.minScale = exitMinScale; other.driftMul = exitDriftOut
           // A structural death is the birth run backwards: it covers the same 1 unit (× the birth's
@@ -860,7 +882,9 @@ class NumericTextView(context: Context) : View(context) {
         val pK = when {
           g.target >= 0.5f -> springStiffness
           g.structuralExit -> springStiffness * deathRate * deathRate
-          else -> springStiffness * rollExitFadeRate
+          // Isolated: linger and roll out. Spam: clear out before the next digit lands on top.
+          else -> springStiffness *
+            (rollExitFadeRate + (1f - changeSpacing) * (rollExitFadeFast - rollExitFadeRate))
         }
         val (p, v) = TransitionLogic.springIntegrate(g.p, g.v, g.target, pK, springDampingRatio, dt)
         g.p = p; g.v = v
