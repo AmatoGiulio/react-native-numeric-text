@@ -270,6 +270,9 @@ class NumericTextView(context: Context) : View(context) {
     var delay: Float = 0f          // cascade stagger before `pendingTarget` is applied
     var pendingTarget: Float = -1f
     var node: RenderNode? = null
+    /** What [node] currently holds. A recording survives until the glyph or the paint changes. */
+    var nodeCh: String? = null
+    var nodeGen: Int = -1
 
     /**
      * Where this glyph is headed once its stagger elapses. Scheduling MUST read this rather than
@@ -313,6 +316,30 @@ class NumericTextView(context: Context) : View(context) {
     textAlign = Paint.Align.LEFT
   }
 
+  // ── Per-frame scratch and paint-derived caches ──
+  //
+  // Everything below is derived from `textPaint` and changes only when the paint does, but was
+  // being recomputed inside the draw and tick loops — where the cost is paid once per glyph per
+  // frame and so grows with the digit count.
+
+  /** Reused by the spring integrator so a tick allocates nothing. */
+  private val springOut = FloatArray(2)
+
+  /** `Paint.getFontMetrics()` allocates on every call; these are refreshed by [recalcTextPaint]. */
+  private var fmAscent = 0f
+  private var fmDescent = 0f
+  private var textHeightPx = 0f
+
+  /** Advance width per glyph string, cleared whenever the paint changes. */
+  private val advanceCache = HashMap<String, Float>(24)
+
+  /**
+   * Bumped by [recalcTextPaint]. A glyph's recorded [RenderNode] is only valid for the generation
+   * it was recorded in, so this is what invalidates the recordings when size, weight, colour or
+   * typeface change.
+   */
+  private var paintGeneration = 0
+
   // Soft vertical mask paint (reused, updated when font metrics change) — block renderer only.
   private val verticalMaskPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
     xfermode = PorterDuffXfermode(PorterDuff.Mode.DST_IN)
@@ -333,6 +360,10 @@ class NumericTextView(context: Context) : View(context) {
   private val travelFactor = 0.15f
   // blurFactor: peak per-digit blur radius as a fraction of line-height. Lower = softer/greyer.
   private val blurFactor = 0.16f
+  // Headroom around a glyph's own RenderNode, in multiples of the peak blur radius. A DECAL blur
+  // treats everything outside the node as transparent, so the falloff has to fit inside the node
+  // or the halo is sliced off square at its edge; three radii is past where the Gaussian is visible.
+  private val BLUR_MARGIN_FACTOR = 3f
   // Extra height (per side, × line-height) reserved so the blur/roll can breathe.
   private val verticalHeadroomFactor = 0.16f
   // Depth scale: a rolling glyph shrinks toward this as it leaves and grows back on arrival,
@@ -372,8 +403,7 @@ class NumericTextView(context: Context) : View(context) {
   // ── Measurement ──
 
   override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
-    val fm = textPaint.fontMetrics
-    val textHeight = fm.descent - fm.ascent
+    val textHeight = textHeightPx
     // Horizontal headroom matters as much as vertical: a dying glyph drifts outward and every
     // moving glyph carries a blur halo, so the ink reaches past the text's own advance and the
     // outermost digits were being clipped at the view's edge mid-transition.
@@ -382,7 +412,7 @@ class NumericTextView(context: Context) : View(context) {
       ceil(max(activePlan!!.oldWidth, activePlan!!.newWidth) + 2f * hHeadroom + paddingLeft + paddingRight).toInt()
     } else {
       val t = if (settledText.isNotEmpty()) settledText else "0"
-      ceil(textPaint.measureText(t) + 2f * hHeadroom + paddingLeft + paddingRight).toInt()
+      ceil(advanceOf(t) + 2f * hHeadroom + paddingLeft + paddingRight).toInt()
     }
     // Headroom so the roll + blur halo aren't hard-clipped at the view's own bounds.
     val vHeadroom = textHeight * verticalHeadroomFactor
@@ -462,7 +492,7 @@ class NumericTextView(context: Context) : View(context) {
     val cx = width / 2f
     val cy = height / 2f
     val bl = baselineY(cy)
-    canvas.drawText(settledText, cx - textPaint.measureText(settledText) / 2f, bl, textPaint)
+    canvas.drawText(settledText, cx - advanceOf(settledText) / 2f, bl, textPaint)
   }
 
   // ── Per-slot renderer (faithful SwiftUI numericText) ──
@@ -488,7 +518,7 @@ class NumericTextView(context: Context) : View(context) {
     // Pass 1 — settled, still glyphs. Sharp and cheap.
     textPaint.maskFilter = null; textPaint.alpha = 255
     for (c in columns.values) for (g in c.glyphs) {
-      if (isStill(g, scrub)) drawGlyph(canvas, g.ch, centreX + g.xRel, bl, textPaint)
+      if (isStill(g, scrub)) drawGlyph(canvas, g.ch, centreX + g.xRel, bl)
     }
 
     // Pass 2 — everything in motion, each glyph a pure function of its own presence.
@@ -522,7 +552,7 @@ class NumericTextView(context: Context) : View(context) {
       val scale = TransitionLogic.presenceScale(pc, g.minScale)
       val radius = maxBlurPx * blurAmt
       if (nodeCapable) {
-        g.node = drawSlotGlyphNode(canvas, g.node, g.ch, centreX + g.xRel + xDrift, bl, yOff, scale, alpha, radius)
+        drawSlotGlyphNode(canvas, g, centreX + g.xRel + xDrift, bl, yOff, scale, alpha, radius)
       } else {
         drawGlyphBlurred(canvas, g.ch, centreX + g.xRel + xDrift, bl + yOff, alpha, radius * 0.6f)
       }
@@ -538,29 +568,60 @@ class NumericTextView(context: Context) : View(context) {
       // this it would be drawn sharp and unshifted for that one frame, then jump back out.
       abs(g.off) < 0.004f && abs(g.offV) < 0.02f
 
-  private fun drawGlyph(canvas: Canvas, text: String, centerX: Float, baseline: Float, paint: TextPaint) {
+  private fun drawGlyph(canvas: Canvas, text: String, centerX: Float, baseline: Float) {
     if (text.isEmpty()) return
-    canvas.drawText(text, centerX - paint.measureText(text) / 2f, baseline, paint)
+    canvas.drawText(text, centerX - advanceOf(text) / 2f, baseline, textPaint)
   }
 
-  // Records one glyph into a reused per-slot RenderNode and applies the column's transforms:
-  // a vertical-only blur (RenderEffect, API 31+), a depth scale about the glyph pivot, the roll
-  // translation, and the crossfade alpha. Reusing the node avoids per-frame allocation.
+  /**
+   * Draws one moving glyph through its own [RenderNode], carrying the blur (RenderEffect, API 31+),
+   * the depth scale about the glyph's baseline, the roll translation and the crossfade alpha.
+   *
+   * Two things here are deliberate and were not always true.
+   *
+   * The recording is kept. Only the node's *properties* animate, and none of them require the
+   * display list to change, so the glyph is re-recorded solely when the character or the paint
+   * does. It used to re-record every glyph on every frame — a `measureText`, a `drawText` and a
+   * begin/end recording pair per glyph per frame, all producing an identical display list.
+   *
+   * The node is glyph-sized, not view-sized. A node covering the whole view meant every moving
+   * glyph composited — and blurred — a full-view layer, so the fill cost was glyphs × view area
+   * and a longer number cost proportionally more of the screen. It is now glyphs × glyph area,
+   * with [BLUR_MARGIN_FACTOR] of headroom so a DECAL blur still has room to fall off inside the
+   * node's own bounds instead of being cut at its edge.
+   */
   @SuppressLint("NewApi")
   private fun drawSlotGlyphNode(
-    canvas: Canvas, existing: RenderNode?, ch: String,
+    canvas: Canvas, g: GlyphState,
     cx: Float, bl: Float, translationY: Float, scale: Float, alpha: Int, blurRadiusY: Float
-  ): RenderNode? {
-    if (alpha <= 0 || ch.isEmpty()) return existing
-    val node = existing ?: RenderNode("slotGlyph")
-    node.setPosition(0, 0, width, height)
-    val rec = node.beginRecording()
-    textPaint.alpha = 255; textPaint.maskFilter = null
-    rec.drawText(ch, cx - textPaint.measureText(ch) / 2f, bl, textPaint)
-    node.endRecording()
-    node.pivotX = cx
-    node.pivotY = bl
-    node.translationY = translationY
+  ) {
+    val ch = g.ch
+    if (alpha <= 0 || ch.isEmpty()) return
+
+    val advance = advanceOf(ch)
+    val margin = ceil(textHeightPx * blurFactor * BLUR_MARGIN_FACTOR)
+    val nodeW = ceil(advance + 2f * margin).toInt()
+    val nodeH = ceil(textHeightPx + 2f * margin).toInt()
+    // Where the glyph's advance-centre and baseline sit inside the node's own box.
+    val localCentreX = margin + advance / 2f
+    val localBaseline = margin - fmAscent
+
+    var node = g.node
+    if (node == null) { node = RenderNode("slotGlyph"); g.node = node; g.nodeCh = null }
+    if (g.nodeCh != ch || g.nodeGen != paintGeneration) {
+      node.setPosition(0, 0, nodeW, nodeH)
+      val rec = node.beginRecording()
+      textPaint.alpha = 255; textPaint.maskFilter = null
+      rec.drawText(ch, margin, localBaseline, textPaint)
+      node.endRecording()
+      node.pivotX = localCentreX
+      node.pivotY = localBaseline
+      g.nodeCh = ch
+      g.nodeGen = paintGeneration
+    }
+
+    node.translationX = cx - localCentreX
+    node.translationY = (bl + translationY) - localBaseline
     node.scaleX = scale
     node.scaleY = scale
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
@@ -574,7 +635,6 @@ class NumericTextView(context: Context) : View(context) {
     }
     node.alpha = alpha / 255f
     canvas.drawRenderNode(node)
-    return node
   }
 
   // Isotropic-blur fallback for old devices / software canvas; allocates a BlurMaskFilter.
@@ -582,13 +642,13 @@ class NumericTextView(context: Context) : View(context) {
     if (text.isEmpty() || alpha <= 0) return
     textPaint.alpha = alpha
     textPaint.maskFilter = if (radius >= 0.8f) BlurMaskFilter(radius, BlurMaskFilter.Blur.NORMAL) else null
-    canvas.drawText(text, centerX - textPaint.measureText(text) / 2f, baseline, textPaint)
+    canvas.drawText(text, centerX - advanceOf(text) / 2f, baseline, textPaint)
     textPaint.maskFilter = null
   }
 
   // ── Per-slot scheduling ──
 
-  private val slotMeasure: (String) -> Float = { textPaint.measureText(it) }
+  private val slotMeasure: (String) -> Float = { advanceOf(it) }
 
   /** Centre-relative X of a keyed slot: independent of the view's measured width. */
   private fun xRelOf(ks: KeyedSlot): Float = ks.centerFromLeft - ks.totalWidth / 2f
@@ -910,8 +970,8 @@ class NumericTextView(context: Context) : View(context) {
           else -> springStiffness *
             (rollExitFadeRate + (1f - changeSpacing) * (rollExitFadeFast - rollExitFadeRate))
         }
-        val (p, v) = TransitionLogic.springIntegrate(g.p, g.v, g.target, pK, springDampingRatio, dt)
-        g.p = p; g.v = v
+        TransitionLogic.springIntegrateInto(g.p, g.v, g.target, pK, springDampingRatio, dt, springOut)
+        g.p = springOut[0]; g.v = springOut[1]
         // Movement is released by the same stagger as the fade: while a change is still queued the
         // glyph holds where it is, so nothing ever slides at full presence.
         g.offTarget = when {
@@ -945,10 +1005,10 @@ class NumericTextView(context: Context) : View(context) {
           g.travelMul > 1.5f -> birthDampingRatio      // structural birth: far spawn, same settle
           else -> arriveDampingRatio
         }
-        val (o, ov) = TransitionLogic.springIntegrate(g.off, g.offV, g.offTarget, offK, offZ, dt)
-        g.off = o; g.offV = ov
-        val (x, xv) = TransitionLogic.springIntegrate(g.xRel, g.xv, g.xRelTarget, xStiffness, xDampingRatio, dt)
-        g.xRel = x; g.xv = xv
+        TransitionLogic.springIntegrateInto(g.off, g.offV, g.offTarget, offK, offZ, dt, springOut)
+        g.off = springOut[0]; g.offV = springOut[1]
+        TransitionLogic.springIntegrateInto(g.xRel, g.xv, g.xRelTarget, xStiffness, xDampingRatio, dt, springOut)
+        g.xRel = springOut[0]; g.xv = springOut[1]
         // Fully extinguished and not coming back.
         if (g.target <= 0f && g.pendingTarget < 0f &&
           (g.p <= 0.004f && abs(g.v) < 0.05f || abs(g.off) > 1.7f)) {
@@ -997,11 +1057,11 @@ class NumericTextView(context: Context) : View(context) {
 
     updateMaskPaint(bl)
 
-    val changedClipTop = bl + textPaint.fontMetrics.ascent - travel * 0.3f
-    val changedClipBottom = bl + textPaint.fontMetrics.descent + travel * 0.3f
+    val changedClipTop = bl + fmAscent - travel * 0.3f
+    val changedClipBottom = bl + fmDescent + travel * 0.3f
 
-    val maskTop = bl + textPaint.fontMetrics.ascent - travel * 0.5f
-    val maskBottom = bl + textPaint.fontMetrics.descent + travel * 0.5f
+    val maskTop = bl + fmAscent - travel * 0.5f
+    val maskBottom = bl + fmDescent + travel * 0.5f
 
     canvas.save()
     canvas.clipRect(changedRegionLeft, changedClipTop, changedRegionRight, changedClipBottom)
@@ -1062,8 +1122,8 @@ class NumericTextView(context: Context) : View(context) {
   private fun drawStableRegions(canvas: Canvas, plan: LayerPlan, bl: Float, originX: Float, hProg: Float) {
     textPaint.alpha = 255
 
-    val stableTop = bl + textPaint.fontMetrics.ascent - travel * 0.3f
-    val stableBottom = bl + textPaint.fontMetrics.descent + travel * 0.3f
+    val stableTop = bl + fmAscent - travel * 0.3f
+    val stableBottom = bl + fmDescent + travel * 0.3f
 
     if (plan.commonPrefixUtf16End > 0) {
       val prefixAdv = plan.oldPrefixAdvance + (plan.newPrefixAdvance - plan.oldPrefixAdvance) * hProg
@@ -1133,8 +1193,8 @@ class NumericTextView(context: Context) : View(context) {
   // ── Soft mask (block renderer) ──
 
   private fun updateMaskPaint(bl: Float) {
-    val ascent = textPaint.fontMetrics.ascent
-    val descent = textPaint.fontMetrics.descent
+    val ascent = fmAscent
+    val descent = fmDescent
     val fade = travel * 0.5f
     val top = bl + ascent - fade
     val bottom = bl + descent + fade
@@ -1427,8 +1487,16 @@ class NumericTextView(context: Context) : View(context) {
     textPaint.isAntiAlias = true; textPaint.isSubpixelText = true
     textPaint.typeface = resolveTypeface()
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) textPaint.fontFeatureSettings = "tnum"
+    val fm = textPaint.fontMetrics
+    fmAscent = fm.ascent; fmDescent = fm.descent; textHeightPx = fm.descent - fm.ascent
+    advanceCache.clear()
+    paintGeneration++
     textLayersNeedRebuild = true; maskPaintNeedsUpdate = true
   }
+
+  /** [TextPaint.measureText], memoised — the draw loop measures the same handful of glyphs forever. */
+  private fun advanceOf(text: String): Float =
+    advanceCache.getOrPut(text) { textPaint.measureText(text) }
 
   /**
    * The bundled face by default, the system face when asked for "system", and a consumer-registered
@@ -1462,7 +1530,7 @@ class NumericTextView(context: Context) : View(context) {
     return sb.toString()
   }
 
-  private fun getTextHeight(): Float { val fm = textPaint.fontMetrics; return fm.descent - fm.ascent }
-  private fun baselineY(centerY: Float): Float { val fm = textPaint.fontMetrics; val h = fm.descent - fm.ascent; return centerY + h / 2f - fm.descent }
+  private fun getTextHeight(): Float = textHeightPx
+  private fun baselineY(centerY: Float): Float = centerY + textHeightPx / 2f - fmDescent
   private fun updateContentDescription() { contentDescription = settledText }
 }

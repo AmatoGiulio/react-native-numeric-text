@@ -220,16 +220,37 @@ object TransitionLogic {
     value: Float, velocity: Float, goal: Float,
     stiffness: Float, dampingRatio: Float, dt: Float
   ): Pair<Float, Float> {
+    val out = FloatArray(2)
+    springIntegrateInto(value, velocity, goal, stiffness, dampingRatio, dt, out)
+    return Pair(out[0], out[1])
+  }
+
+  /**
+   * [springIntegrate] writing into [out] (`[value, velocity]`) instead of returning a pair.
+   *
+   * The renderer integrates three springs per glyph per frame, each in 240 Hz sub-steps — seven of
+   * them in a 30 ms frame. Returning `Pair<Float, Float>` allocates the pair *and* boxes both
+   * floats, so the pair-returning form cost ~70 short-lived objects per glyph per frame and grew
+   * linearly with the digit count. This form allocates nothing, and hoists the damping term's
+   * square root out of the sub-step loop since none of its inputs vary within a call.
+   */
+  fun springIntegrateInto(
+    value: Float, velocity: Float, goal: Float,
+    stiffness: Float, dampingRatio: Float, dt: Float, out: FloatArray
+  ) {
+    val damping = 2f * dampingRatio * sqrt(stiffness)
     var x = value
     var v = velocity
     var remaining = dt
     while (remaining > 0f) {
       val step = min(remaining, SPRING_SUB_STEP)
-      val r = springStep(x, v, goal, stiffness, dampingRatio, step)
-      x = r.first; v = r.second
+      val accel = -stiffness * (x - goal) - damping * v
+      v += accel * step
+      x += v * step
       remaining -= step
     }
-    return Pair(x, v)
+    out[0] = x
+    out[1] = v
   }
 
   // Complementary crossfade: both glyphs ~0.5 at the midpoint → heavy overlap so the
