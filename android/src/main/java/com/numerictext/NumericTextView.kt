@@ -168,6 +168,14 @@ class NumericTextView(context: Context) : View(context) {
      * upward at full presence, perfectly sharp, before they began to fade.
      */
     var exitOff: Float = 0f
+    /**
+     * This departure is a structural DEATH (a column disappearing, or a glyph displaced by one on a
+     * structural change) rather than the outgoing half of a roll. The two are separate lifecycles in
+     * the reference (METHODOLOGY §5.2), and only the death is a mirror of a structural birth: same
+     * distance, same spring rates, opposite sign. A roll's departure keeps the fade-fast/travel-slow
+     * bias that stops a continuous roll piling up crisp ink above the baseline.
+     */
+    var structuralExit: Boolean = false
     var travelMul: Float = 1f      // roll = 1; a structural birth spawns much further out
     var minScale: Float = 0.9f
     var driftMul: Float = 0f       // outward X displacement while absent (births/deaths only)
@@ -266,6 +274,12 @@ class NumericTextView(context: Context) : View(context) {
   // Small outward drift of a leaving glyph (fraction of its width, away from the new centre) —
   // the reference's dying digits spread slightly apart as they fade, they don't converge.
   private val exitDriftOut = 0.18f
+  // A structural DEATH is the structural birth mirrored, but slightly shorter: measured on the
+  // reference (1,000 -> 1, 1,000 -> 999, 1.9 -> 2.0), a dying glyph's ink covers 0.31-0.37 of a
+  // line height along the roll axis before it is gone, against the 0.48 a born glyph spawns from.
+  // A full-length mirror (1.0) measured 0.41-0.59 and threw visibly more ink off the line than the
+  // reference does; 0.8 of the birth's distance lands inside the measured band.
+  private val exitTravelOfBirth = 0.8f
 
   private val travel: Float get() = getTextHeight() * travelFactor
 
@@ -568,6 +582,7 @@ class NumericTextView(context: Context) : View(context) {
       g.w = ks.width
       g.xRelTarget = xRelOf(ks)
       g.exitOff = dir * 2f                   // where it will go if it later leaves
+      g.structuralExit = false               // it is arriving; a later death re-arms this
       if (revived == null) col.glyphs.add(g)
 
       // Retire EVERY glyph that is not the one arriving, and let each carry on down the strip on
@@ -590,7 +605,14 @@ class NumericTextView(context: Context) : View(context) {
         // not the destination: see offStiffness below.
         other.exitOff = dir * 2f
         if (structural) {
-          other.minScale = exitMinScale; other.driftMul = exitDriftOut; other.travelMul = 1f
+          other.minScale = exitMinScale; other.driftMul = exitDriftOut
+          // A structural death is the birth run backwards: it covers the same 1 unit (× the birth's
+          // travel factor) that a born glyph spawns from, at the same spring rate. Measured on the
+          // reference, a dying glyph is still visible after ~0.3 line-heights of roll; ours moved
+          // 0.04 and was gone, which read as fading in place rather than rolling out.
+          other.travelMul = enterTravelFactor
+          other.exitOff = dir * exitTravelOfBirth
+          other.structuralExit = true
         }
         other.delay = 0f
         if (newestRetired == null || other.p > newestRetired.p) newestRetired = other
@@ -631,8 +653,10 @@ class NumericTextView(context: Context) : View(context) {
       if (newKeys.contains(k)) continue
       for (g in col.glyphs) {
         if (g.effectiveTarget <= 0f) continue
-        g.exitOff = dir * 2f
-        g.minScale = exitMinScale; g.driftMul = exitDriftOut; g.travelMul = 1f
+        g.minScale = exitMinScale; g.driftMul = exitDriftOut
+        g.travelMul = enterTravelFactor        // mirror of the structural birth (see above)
+        g.exitOff = dir * exitTravelOfBirth
+        g.structuralExit = true
         g.xRelTarget = g.xRel                  // frozen: dying glyphs do not ride the reflow
         g.delay = 0f
         phases.add(Phase(g, g.xRel, isExit = true))
@@ -714,7 +738,9 @@ class NumericTextView(context: Context) : View(context) {
         // away so it always clears the frame (a fast roll needs departures to leave, not pile up),
         // but at a matched rate it was still nearly opaque by the time it had visibly moved — that
         // is what made the nines of 9,999 -> 1,000 rise while crisp.
-        val pK = if (g.target >= 0.5f) springStiffness else springStiffness * 4f
+        // A structural DEATH is exempt: it mirrors the birth, so it keeps the presence spring's own
+        // rate and stays readable over the whole roll instead of dissolving before it has moved.
+        val pK = if (g.target >= 0.5f || g.structuralExit) springStiffness else springStiffness * 4f
         val (p, v) = TransitionLogic.springIntegrate(g.p, g.v, g.target, pK, springDampingRatio, dt)
         g.p = p; g.v = v
         // Movement is released by the same stagger as the fade: while a change is still queued the
@@ -730,7 +756,7 @@ class NumericTextView(context: Context) : View(context) {
         // stiffness halves the rate, so it covers roughly one unit in the time it sheds its
         // presence and drifts the rest of the way once it is already invisible.
         // An ARRIVING glyph keeps the presence spring's own rate, so it lands as it solidifies.
-        val offK = if (g.target >= 0.5f) springStiffness else springStiffness * 0.25f
+        val offK = if (g.target >= 0.5f || g.structuralExit) springStiffness else springStiffness * 0.25f
         val (o, ov) = TransitionLogic.springIntegrate(g.off, g.offV, g.offTarget, offK, springDampingRatio, dt)
         g.off = o; g.offV = ov
         val (x, xv) = TransitionLogic.springIntegrate(g.xRel, g.xv, g.xRelTarget, xStiffness, xDampingRatio, dt)
