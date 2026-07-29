@@ -12,15 +12,33 @@ npm install react-native-numeric-text
 
 ## Usage
 
+```jsx
+import { NumericText } from 'react-native-numeric-text';
 
-```js
-import { NumericTextView } from "react-native-numeric-text";
-
-// ...
-
-<NumericTextView color="tomato" />
+<NumericText value={count} style={{ fontSize: 48, color: 'tomato' }} />;
 ```
 
+Change `value` and it animates; the first render does not. Everything else has a default:
+
+| prop | default | |
+|---|---|---|
+| `value` | — | the number to display |
+| `locale` | `'en-US'` | decides grouping and decimal marks |
+| `direction` | `'automatic'` | `'up'` / `'down'` force a roll direction |
+| `animationDuration` | `80` | ms; scales the springs rather than clamping them |
+| `reduceMotion` | `'system'` | `'always'` never animates, `'never'` ignores the OS setting |
+| `useGrouping` | `true` | `1,000` vs `1000` |
+| `minimumFractionDigits` | `0` | |
+| `maximumFractionDigits` | `3` | |
+| `style` | — | `fontSize`, `fontWeight`, `fontFamily` and `color` drive the renderer |
+
+### Platforms
+
+**Android** animates. **iOS and web** render the number correctly but do not animate it —
+`ios/NumericTextView.mm` is still a placeholder, so rather than showing the empty view it would
+draw, those platforms fall back to a plain `<Text>` with identical formatting. Nothing breaks
+cross-platform; the transition is simply missing until the iOS view calls the real
+`.contentTransition(.numericText())`.
 
 ## Font
 

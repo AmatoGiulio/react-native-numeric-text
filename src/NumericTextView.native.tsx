@@ -1,22 +1,22 @@
-import { useEffect, useState } from 'react';
+import { memo, useEffect, useRef, useState } from 'react';
+import { Platform } from 'react-native';
 import NumericTextViewNativeComponent from './NumericTextViewNativeComponent';
+import { NumericTextFallback } from './NumericTextFallback';
+import { measureBox, widest, type Box } from './measureBox';
+import { resolveTextStyle } from './resolveTextStyle';
+import type { NumericTextDebugProps, NumericTextProps } from './types';
 
-type Props = {
-  value: number;
-  locale?: string;
-  direction?: 'automatic' | 'up' | 'down';
-  animationDuration?: number;
-  reduceMotion?: 'system' | 'always' | 'never';
-  minimumFractionDigits?: number;
-  maximumFractionDigits?: number;
-  useGrouping?: boolean;
-  style?: Record<string, unknown>;
-  testID?: string;
-  debugTransitionStrategy?: 'whole_run' | 'changed_run' | 'per_glyph';
-  debugManualProgress?: number;
-};
+type Props = NumericTextProps & NumericTextDebugProps;
 
-export function NumericTextView({
+/**
+ * Only Android draws today — `ios/NumericTextView.mm` is still a placeholder that renders an empty
+ * view, so routing iOS to the native component would show nothing at all. Until it calls the real
+ * `.contentTransition(.numericText())`, iOS gets the static fallback: the right number, no
+ * animation, rather than a blank space where a number should be.
+ */
+const HAS_NATIVE_RENDERER = Platform.OS === 'android';
+
+function NumericTextViewImpl({
   value,
   locale = 'en-US',
   direction = 'automatic',
@@ -30,40 +30,31 @@ export function NumericTextView({
   debugTransitionStrategy,
   debugManualProgress,
 }: Props) {
-  const flattened = style ?? {};
+  const text = resolveTextStyle(style);
 
-  const fontSize =
-    typeof flattened.fontSize === 'number'
-      ? (flattened.fontSize as number)
-      : undefined;
+  const formatted = value.toLocaleString(locale, {
+    minimumFractionDigits,
+    maximumFractionDigits,
+    useGrouping,
+  });
+  const box = useShrinkHeldBox(
+    measureBox(formatted, text.fontSize),
+    Math.max(animationDuration, 500) + 400
+  );
 
-  const displayValue = Math.abs(Math.round(value));
-  const digitCount = String(displayValue).length;
-  // `+3` covers grouping separators and a sign. Room for the transition's own overspill (blur halo,
-  // outward-drifting dying glyphs) is added by the native view's own measurement instead, so a
-  // whole extra character of layout is not claimed here.
-  const numChars = digitCount + 3;
-
-  // A shrink (9,999 → 1) re-renders with the narrow value immediately, while the wide outgoing
-  // number is still fading on screen — so the box must not follow the value down until the
-  // transition has finished. It may grow at once; it only shrinks late.
-  const [boxChars, setBoxChars] = useState(numChars);
-  const shrinkHoldMs = Math.max(animationDuration, 500) + 400;
-  useEffect(() => {
-    if (numChars >= boxChars) {
-      setBoxChars(numChars);
-      return;
-    }
-    const timer = setTimeout(() => setBoxChars(numChars), shrinkHoldMs);
-    return () => clearTimeout(timer);
-  }, [numChars, boxChars, shrinkHoldMs]);
-
-  const avgCharWidth =
-    typeof flattened.fontSize === 'number'
-      ? (flattened.fontSize as number) * 0.6
-      : 48 * 0.6;
-  const estimatedWidth = Math.ceil(Math.max(boxChars, numChars) * avgCharWidth);
-  const estimatedHeight = Math.ceil((fontSize ?? 48) * 1.5);
+  if (!HAS_NATIVE_RENDERER) {
+    return (
+      <NumericTextFallback
+        value={value}
+        locale={locale}
+        minimumFractionDigits={minimumFractionDigits}
+        maximumFractionDigits={maximumFractionDigits}
+        useGrouping={useGrouping}
+        style={style}
+        testID={testID}
+      />
+    );
+  }
 
   return (
     <NumericTextViewNativeComponent
@@ -75,26 +66,10 @@ export function NumericTextView({
       minimumFractionDigits={minimumFractionDigits}
       maximumFractionDigits={maximumFractionDigits}
       reduceMotion={reduceMotion}
-      fontSize={
-        typeof flattened.fontSize === 'number'
-          ? (flattened.fontSize as number)
-          : undefined
-      }
-      fontWeight={
-        typeof flattened.fontWeight === 'string'
-          ? (flattened.fontWeight as string)
-          : undefined
-      }
-      fontFamily={
-        typeof flattened.fontFamily === 'string'
-          ? (flattened.fontFamily as string)
-          : undefined
-      }
-      textColor={
-        typeof flattened.color === 'string'
-          ? (flattened.color as string)
-          : undefined
-      }
+      fontSize={text.fontSize}
+      fontWeight={text.fontWeight}
+      fontFamily={text.fontFamily}
+      textColor={text.textColor}
       testID={testID}
       debugTransitionStrategy={debugTransitionStrategy}
       debugManualProgress={
@@ -102,13 +77,43 @@ export function NumericTextView({
           ? debugManualProgress
           : undefined
       }
-      style={[
-        style,
-        {
-          minWidth: estimatedWidth,
-          minHeight: estimatedHeight,
-        },
-      ]}
+      style={[style, box]}
     />
   );
 }
+
+/**
+ * The box the view should reserve: grows with the number immediately, shrinks only after
+ * [holdMs], so a departing wider number is not clipped while it is still fading out.
+ */
+function useShrinkHeldBox(target: Box, holdMs: number): Box {
+  const [held, setHeld] = useState(target);
+  // Read inside the effect rather than depending on the object, which is new every render.
+  const targetRef = useRef(target);
+  targetRef.current = target;
+
+  const grew =
+    target.minWidth >= held.minWidth && target.minHeight >= held.minHeight;
+  const settled =
+    target.minWidth === held.minWidth && target.minHeight === held.minHeight;
+
+  useEffect(() => {
+    if (settled) return;
+    if (grew) {
+      setHeld(targetRef.current);
+      return;
+    }
+    const timer = setTimeout(() => setHeld(targetRef.current), holdMs);
+    return () => clearTimeout(timer);
+  }, [settled, grew, target.minWidth, target.minHeight, holdMs]);
+
+  return settled ? target : widest(target, held);
+}
+
+/**
+ * Re-renders only when a prop actually differs. The value changes far more often than anything
+ * else here, and every render of a parent would otherwise walk this whole tree to produce an
+ * identical element.
+ */
+export const NumericTextView = memo(NumericTextViewImpl);
+NumericTextView.displayName = 'NumericTextView';

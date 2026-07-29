@@ -1,36 +1,14 @@
-import { Text } from 'react-native';
+import type { ComponentType } from 'react';
+import { NumericTextFallback } from './NumericTextFallback';
+import type { NumericTextDebugProps, NumericTextProps } from './types';
 
-type Props = {
-  value: number;
-  locale?: string;
-  direction?: string;
-  animationDuration?: number;
-  reduceMotion?: string;
-  minimumFractionDigits?: number;
-  maximumFractionDigits?: number;
-  useGrouping?: boolean;
-  style?: Record<string, unknown>;
-  debugTransitionStrategy?: string;
-  debugManualProgress?: number;
-};
-
-export function NumericTextView({
-  value,
-  locale = 'en-US',
-  direction: _direction,
-  animationDuration: _animationDuration,
-  reduceMotion: _reduceMotion,
-  minimumFractionDigits = 0,
-  maximumFractionDigits = 3,
-  useGrouping = true,
-  style,
-  debugTransitionStrategy: _debugTransitionStrategy,
-  debugManualProgress: _debugManualProgress,
-}: Props) {
-  const formatted = value.toLocaleString(locale, {
-    minimumFractionDigits,
-    maximumFractionDigits,
-    useGrouping,
-  });
-  return <Text style={style}>{formatted}</Text>;
-}
+/**
+ * Platforms with no native renderer (web) get the static, correctly formatted number.
+ *
+ * Typed with the debug props the native entry accepts — and ignoring them — so the component has
+ * one prop type everywhere. This file is also what TypeScript resolves `./NumericTextView` to when
+ * building types, so its signature is the published one.
+ */
+export const NumericTextView = NumericTextFallback as ComponentType<
+  NumericTextProps & NumericTextDebugProps
+>;
