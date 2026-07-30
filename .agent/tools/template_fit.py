@@ -30,9 +30,11 @@ W, H = 600, 213          # scaled crop; 1.6 line-heights tall
 FONT = H / 1.6           # px per line-height after scaling (~133)
 FPS = 60
 
-CROP = {                 # w, h, x, y in source pixels — a box 4.5 × 1.6 line-heights on the number
-    'ios':     (1160, 412, 23, 464),
-    'android': (992, 353, 44, 414),
+CROP = {                 # w, h, x, y in source pixels — a box 4.5 x 1.6 line-heights on the number
+    # Re-derived 2026-07-30 for the sync-marker recordings: iOS 1206x2622 (simctl), Android
+    # 1080x2400. The old values were for earlier captures and silently cropped the wrong region.
+    'ios':     (1134, 403, 36, 958),
+    'android': (1017, 362, 31, 881),
 }
 
 # Search grid. 3 px is 0.023 of a line height; the reference's residual tail is ~0.05, so the grid
