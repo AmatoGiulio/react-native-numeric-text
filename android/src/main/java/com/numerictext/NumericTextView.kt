@@ -156,6 +156,12 @@ class NumericTextView(context: Context) : View(context) {
 
   // Spacing between successive arrivals. Measured on the reference's 1 → 9,999 growth: consecutive
   // columns differ by ~0.2 of presence, which over a 267 ms transition is ~45 ms per arrival.
+  //
+  // Raising this to 0.068 was tried on 2026-07-30 to widen the left→right staircase and measured
+  // BACKWARDS — the visible stagger went from 100 ms to 50 ms. Holding an arrival back longer leaves
+  // the column carried by its DEPARTING glyph for longer, and the departures are staggered by
+  // staggerSeconds, not by this. So the staircase a viewer sees on a multi-column change is set by
+  // the exit cascade; this constant only spaces the arrivals inside it.
   private val enterSpacingSeconds: Float = 0.045f
   private val enterLag: Float = 0.04f
 
@@ -168,6 +174,35 @@ class NumericTextView(context: Context) : View(context) {
   // LEFT→RIGHT cascade (reverse-engineered from the iOS reference at 60fps: on a multi-digit
   // change the leftmost changed column leads). Kept SUBTLE — a large delay turns the cascade into
   // a visibly sequential, machine-like wave.
+  //
+  // Left at 0.04. Raising it to 0.05 was tried on 2026-07-30 to widen the visible staircase and is
+  // the WRONG LEVER, which the measurement below only made clear afterwards: this delays when a
+  // column STARTS, and the reference barely staggers its starts at all.
+  //
+  // Measured on 2,000 → 1,999 (four changing columns), per column, over the middle 50% of the glyph
+  // so a neighbour's blur halo cannot reach it, normalised at +283 ms (the next scripted step lands
+  // at +320 ms, so a later reference measures the wrong target). Both the START (10% of the column's
+  // total change) and the HALFWAY point (50%):
+  //
+  //     iOS      start  17 / 33 / 33 /  50 ms   (span only 33 ms — near simultaneous)
+  //              half   17 / 83 / 117 / 167 ms
+  //              so DURATION 17 / 67 / 100 / 133 ms
+  //
+  //     ours     start   0 /  0 / 33 /  33 ms
+  //              half    0 / 17 /  67 / 117 ms
+  //              so DURATION 0 / 33 /  50 / 100 ms
+  //
+  // The reference's columns all begin within 33 ms of each other; what sweeps left→right is that
+  // each column further right takes LONGER to get through its change — 17 ms for the leftmost
+  // against 133 ms for the units. The wave is made of increasing slowness, not increasing delay.
+  // Ours has the same shape, compressed, and its leftmost column has no duration at all (0 ms: it
+  // simply snaps), which is the "we start the blur too early" that was reported.
+  //
+  // So the open work is a per-column DURATION, not a per-column delay. It cannot be a spring-rate
+  // multiplier as first sketched: making the rightmost column 8x slower means dividing its
+  // stiffness by ~60, and our settle tail is already LONGER than the reference's (767 ms against
+  // 550 ms on this same transition). Whatever lands here has to separate how fast a glyph crosses
+  // from how long it takes to come to rest — today one spring does both.
   private val staggerSeconds: Float = 0.04f
   // Below this gap between two changes the exit cascade is off, and it fades in linearly up to
   // twice it. A hold on +/- repeats every 30 ms and the scripted burst every 45 ms — both must land
