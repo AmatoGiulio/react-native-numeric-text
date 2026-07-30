@@ -197,6 +197,16 @@ class NumericTextView(context: Context) : View(context) {
   // darkest pixel is only 0.43 of a settled glyph's — in place, but far from resolved.
   private val arrivePresenceFast: Float = 1.5f
   private val arriveOffsetFast: Float = 2.6f
+  // Baseline multiplier on the arrival's offset stiffness for an ISOLATED change (changeSpacing =
+  // 1); arriveOffsetFast above is what it ramps toward as changes crowd. Was implicitly 1 (raw
+  // springStiffness), which — with the low-slope scale curve fixed elsewhere — read on a frame grid
+  // as the arriving glyph reaching its resting position by ~117 ms, well before the reference's
+  // roll has visibly finished settling. 0.75 lowers the isolated case's natural frequency, which
+  // delays the raw spring's first crossing of its target by roughly 30 ms without touching the spam
+  // path (arriveOffsetFast is unchanged, so a crowded roll's arrival still snaps in as before). Set
+  // by eye against the frame grid, not measured — an isolated roll's two glyphs overlap too much at
+  // this travel to isolate one glyph's position in the recording directly.
+  private val arriveOffsetBaseline: Float = 0.75f
   private var changeSpacing: Float = 1f   // 1 = isolated change, 0 = spam; see cascadeSpamMs
   // Where a roll's departure asymptotes, in travel units, drawn through rollOffsetShape's 1.43
   // power. Measured on a press-and-hold in the example app — the same 30 ms repeat on both sides —
@@ -870,6 +880,18 @@ class NumericTextView(context: Context) : View(context) {
         // rollOffsetShape's 1.43 power turns 2 units into 0.40 of a line height, where the template
         // fit puts the reference's outgoing glyph at 0.14 before it is gone.
         other.exitOff = dir * rollExitOff
+        // A departing glyph always gets the STRUCTURAL exponent (2.2), never rollScaleExponent —
+        // even in a plain roll. The two roles need opposite curves from the same formula: an
+        // arrival wants a low slope at p = 0 (stays small early, so 0.55), but that same low
+        // exponent gives presenceScale a slope that DIVERGES at p = 1 as presence starts falling,
+        // which shrank the departing glyph within the first sliver of its departure — read on a
+        // frame grid as "the old digit starts scaling and blurring down before the reference does".
+        // 2.2 has the opposite property at that end: near-zero slope at p = 1, so the departure
+        // stays full size for a while before it shrinks, matching what a departing glyph did before
+        // rollScaleExponent existed. Without this, a glyph created as an arrival earlier in its life
+        // (most of them) would carry 0.55 into its own departure, since scaleExponent otherwise
+        // persists across a glyph's roles.
+        other.scaleExponent = 2.2f
         if (structural) {
           other.minScale = exitMinScale; other.driftMul = exitDriftOut
           // A structural death is the birth run backwards: it covers the same 1 unit (× the birth's
@@ -919,7 +941,7 @@ class NumericTextView(context: Context) : View(context) {
       if (newKeys.contains(k)) continue
       for (g in col.glyphs) {
         if (g.effectiveTarget <= 0f) continue
-        g.minScale = exitMinScale; g.driftMul = exitDriftOut
+        g.minScale = exitMinScale; g.driftMul = exitDriftOut; g.scaleExponent = 2.2f
         g.travelMul = enterTravelFactor        // mirror of the structural birth (see above)
         g.exitOff = dir * exitTravelOfBirth
         g.structuralExit = true
@@ -1069,7 +1091,8 @@ class NumericTextView(context: Context) : View(context) {
           // and the earlier probe missed it by comparing the column to its own settled position
           // instead of to the digits beside it.
           g.target >= 0.5f ->
-            springStiffness * (1f + (1f - changeSpacing) * (arriveOffsetFast - 1f))
+            springStiffness * (arriveOffsetBaseline +
+              (1f - changeSpacing) * (arriveOffsetFast - arriveOffsetBaseline))
           // Same multiplier as its presence, so a death covers the same distance before it is gone.
           g.structuralExit -> springStiffness * deathRate * deathRate
           else -> springStiffness * 0.25f
