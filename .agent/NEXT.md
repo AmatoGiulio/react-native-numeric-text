@@ -10,25 +10,33 @@ today because no preset covered the cases the reports are actually about.
 Recordings, grids and per-frame tables are local only. Tools: `roll_shape.py` (new — below),
 `frame_grid.py --stride 1 --count 50`, `template_fit.py`.
 
-### 1. The cascade has collapsed. This is the big one.
+### 1. The roll's per-column stagger is gone — but only the stagger
 
-`1,242 → 1,160`, per-column ink as a fraction of the settled column, from the sync marker:
+**This table replaces a wrong one.** The first Android capture labelled `1,242 → 1,160` actually hit
+the `1,000 → 877` button one row above it, so a structural shrink was compared against the
+reference's plain roll. The conclusion drawn from it — "ours is twice as fast and its floor is much
+deeper" — was an artefact of that. Verify which preset a capture hit by dumping its settled last
+frame; it costs one ffmpeg call.
 
-| t (ms) | 0 | 50 | 100 | 150 | 200 | 250 | 300 | 350 |
-|---|---|---|---|---|---|---|---|---|
-| iOS hundreds | 1.10 | 0.72 | **0.50** | 0.61 | 0.77 | 0.89 | 0.94 | 0.98 |
-| iOS tens | 0.83 | 0.83 | 0.76 | **0.44** | 0.49 | 0.68 | 0.83 | 0.92 |
-| iOS units | 0.83 | 0.83 | 0.83 | 0.83 | 0.59 | **0.41** | 0.56 | 0.74 |
-| ours, every column | 0.93 | **0.31** | 0.42 | 0.88 | 0.98 | 0.99 | 0.99 | 0.99 |
+Corrected, per-column ink as a fraction of that column settled:
 
-The reference's three columns bottom out 100 / 150 / 250 ms in — a 75 ms-per-column staircase over a
-quarter of a second. **Ours bottom out on the same frame as each other**, at +50 ms, and every column
-is back to full ink by +150. The staircase the last three sessions built (`staggerSeconds`,
-`exitSlowPerColumn`, `enterSpacingSeconds`) does not survive the tape: on the continuous-roll grid
-the reference has moved ONLY its hundreds column at +150 ms while ours has already delivered all
-three digits of the next value.
+| t (ms) | 0 | 50 | 100 | 150 | 200 | 250 | 300 | 350 | 400 |
+|---|---|---|---|---|---|---|---|---|---|
+| iOS hundreds | 1.09 | 0.72 | **0.50** | 0.61 | 0.77 | 0.89 | 0.94 | 0.98 | 0.99 |
+| iOS tens | 0.83 | 0.83 | 0.76 | **0.44** | 0.49 | 0.68 | 0.83 | 0.92 | 0.96 |
+| iOS units | 0.83 | 0.83 | 0.83 | 0.83 | 0.59 | **0.41** | 0.56 | 0.74 | 0.87 |
+| ours hundreds | 1.03 | 0.80 | **0.57** | 0.56 | 0.67 | 0.78 | 0.85 | 0.90 | 0.92 |
+| ours tens | 0.84 | 0.65 | **0.52** | 0.54 | 0.65 | 0.76 | 0.84 | 0.90 | 0.92 |
+| ours units | 0.82 | 0.63 | **0.50** | 0.52 | 0.65 | 0.76 | 0.84 | 0.90 | 0.92 |
 
-Ours is also about twice as fast overall and its floor is deeper: 0.31 against 0.50.
+The depth is right (0.50-0.57 against 0.41-0.50) and so is the pace — both take ~450 ms. **What is
+missing is the offset**: the reference's columns bottom out at 100 / 150 / 250 ms and ours bottom
+out together, at 100. Three curves that are individually well fitted and perfectly in phase.
+
+The mechanism is not a mistuned constant. `scheduleSlots` returns early for a plain roll once
+`scheduleRollTape` accepts it, so `staggerSeconds` and `exitSlowPerColumn` are never reached at all;
+the tape's own per-column knob, `rollTapeSlowPerColumn`, is 0. That is where the roll's staircase has
+to be rebuilt, and the target is 50-100 ms between column floors.
 
 ### 2. The structural path is a whole-composition crossfade
 
@@ -129,14 +137,49 @@ and cannot see upward excursion at all. Every "reach up +0.00" in this file belo
 through that window. `roll_shape.decode_band` pads both sides (capped at 0.35 of the block, because
 the +/− buttons sit 0.44 below).
 
+### The structural wave, put back — DONE 2026-07-31, measured
+
+`structuralStaggerSeconds` and `birthSpacingSeconds` at **0.045**, both leads at **0**,
+`birthSlowPerColumn` still 0. Total ink of the whole number, medians of three runs:
+
+| t (ms) | 0 | 66 | 99 | 132 | 165 | 198 | 231 | 264 | 330 | 396 |
+|---|---|---|---|---|---|---|---|---|---|---|
+| `9,950→10,123` iOS | 1.06 | 0.95 | 0.89 | 0.82 | 0.74 | 0.66 | **0.62** | 0.65 | 0.82 | 0.92 |
+| before | 0.95 | **0.34** | 0.50 | 0.81 | 0.81 | 0.97 | 0.99 | 0.99 | 1.00 | 1.00 |
+| **now** | 1.05 | 0.92 | 0.82 | 0.79 | 0.79 | **0.69** | 0.77 | 0.77 | 0.98 | 0.99 |
+| `1,000→999` iOS | 1.18 | 1.11 | 1.09 | 1.03 | 0.93 | 0.81 | **0.71** | 0.71 | 0.83 | 0.93 |
+| before | 1.04 | **0.30** | 0.44 | 0.80 | 0.80 | 0.97 | 0.99 | 0.99 | 0.99 | 1.00 |
+| **now** | 1.13 | 1.03 | **0.83** | 1.01 | 1.01 | 1.04 | 1.00 | 0.99 | 0.99 | 1.00 |
+
+The growth now tracks the reference's whole descent within 0.03-0.07 and bottoms at 0.69 against its
+0.66 on the same frame. The shrink's blink is gone — 0.30 to 0.83 — and it is now a little too
+SHALLOW against 0.71, which is the safe side of the error. The plain roll is unchanged, checked
+column by column against a capture of the same APK before the change.
+
+**What the first attempt got wrong, kept because it is the instructive half.** Adding the leads
+(`structuralExitLead = 0.06`, `substitutionExitLead = 0.025`) alongside the stagger inverted the
+defect instead of fixing it: exits carry the lead and arrivals do not, so every column's departure
+ran 85 ms behind its own arrival and the total ink went 1.18 / 1.28 / **1.43** / 1.40 without ever
+dipping. Two whole numbers on screen at once. The per-column depth had never been the problem — the
+reference's rightmost column dips to 0.24 and ours dipped to 0.22 — so the wave belongs to the
+handover as a whole, not to one side of it.
+
+**Still short, and the hypothesis for it.** Both structural changes still finish ~150 ms before the
+reference, and the shrink's wave is too narrow: three arrivals × 45 ms is 90 ms of spread against
+the reference's ~139. But the growth's six arrivals also spread over ~139 ms in the reference — the
+SAME total, over twice the columns. If that holds on a third transition, the reference normalises
+its structural wave to a fixed duration and divides it by the column count, which no single constant
+can express and which would explain why 0.045 fits the growth and leaves the shrink shallow. Two
+data points is not enough to write code around: measure `1,000 → 877` (3 columns) and
+`1,000 → 10,000` (5) first.
+
 ### What to try next, in order
 
-1. **Put the structural wave back.** The constants and their fits are in the section below; they
-   were zeroed, not superseded. Measure with the total-ink table above — the target is a floor of
-   0.65 at +230 ms, not 0.24 at +66 ms.
-2. **Give the roll back its per-column stagger under the tape.** The tape merges retargets onto one
+1. **Give the roll back its per-column stagger under the tape.** The tape merges retargets onto one
    physical coordinate per column, which is right; what it lost is that column n's coordinate should
-   lag and unroll more slowly than column n−1's.
+   lag and unroll more slowly than column n−1's. `scheduleSlots`'s cascade is unreachable on the
+   roll path, so this has to live in `scheduleRollTape` / `rollTapeSlowPerColumn`. Target: column
+   floors 50-100 ms apart, from section 1.
 3. **Make the roll's mass directional.** Its asymptote and its blur should sit on the side the value
    is travelling FROM, and today both sit below regardless of direction.
 4. Only then the density and sharpness (items 3 above): less ink, softer, longer. Note these three

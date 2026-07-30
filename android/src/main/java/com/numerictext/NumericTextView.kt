@@ -181,9 +181,30 @@ class NumericTextView(context: Context) : View(context) {
   // 0.07 -> 0.076, absorbing arriveCrossSlow's speed-up so that only the first column moves: at
   // 0.58 every arrival comes ~12 ms sooner, and the spacing gives that back at ~6 ms per column.
   private val enterSpacingSeconds: Float = 0.076f
-  // A structural change is one transaction. SwiftUI may give different glyph roles different
-  // visuals, but it does not enqueue a new clock for every column.
-  private val birthSpacingSeconds: Float = 0f
+  // Spacing between the ARRIVALS of a structural change, left→right.
+  //
+  // This was 0 on the reading that "a structural change is one transaction — SwiftUI does not
+  // enqueue a new clock for every column". Measured against the reference on 2026-07-31, that is
+  // wrong, and it is the single largest defect in the renderer. Per final column, ink as a fraction
+  // of that column settled, on `1,000 -> 999`:
+  //
+  //     t (ms)      0    66   132   198   264   330   396   462
+  //     iOS c0   0.34  0.26  0.45  0.72  0.89  0.96  0.99  1.00
+  //     iOS c1   0.78  0.76  0.70  0.45  0.68  0.87  0.95  0.99
+  //     iOS c2   0.78  0.76  0.94  0.35  0.30  0.60  0.83  0.94
+  //     ours     0.29  0.11  0.79  0.97  0.99  0.99  1.00  1.00   (all three columns, identically)
+  //
+  // The reference's columns cross 0.9 at 270 / 350 / 429 ms and ours cross it together at 190. Its
+  // TOTAL ink never falls below 0.65 and takes 260 ms to get there; ours falls to 0.24 inside 66 ms,
+  // because every glyph in the composition fades on the same frame. That frame is a number that has
+  // almost vanished, and it is the blink the reports describe.
+  //
+  // 0.045 rather than the 0.07 the shrink alone suggests: the shrink has three columns and heavy
+  // horizontal reflow through the measurement windows, so its ~70 ms per column is the noisiest of
+  // the three reads available. The growth `9,950 -> 10,123` puts six arrivals across the same 139 ms
+  // of spread (~28 ms each), and the older fit on `1 -> 9,999` measured ~45. Two of the three land
+  // near this value.
+  private val birthSpacingSeconds: Float = 0.045f
   // 0.04 -> 0 on 2026-07-30. With the exit cascade widened to 0.07 this lag was pure delay: the
   // per-glyph fit had every incoming column landing ~40 ms behind the reference with the SAME slope
   // (units crossing 0.1 -> 0.9 in 150 ms on both), i.e. a translation, not a shape error. It cost
@@ -243,8 +264,32 @@ class NumericTextView(context: Context) : View(context) {
   // 550 ms on this same transition). Whatever lands here has to separate how fast a glyph crosses
   // from how long it takes to come to rest — today one spring does both.
   private val staggerSeconds: Float = 0.065f
-  // No queued structural wave: all affected columns are released by the same transaction.
-  private val structuralStaggerSeconds: Float = 0f
+  // The DEPARTURE half of the same wave, and the delay in front of all of it. See
+  // [birthSpacingSeconds] for the measurement that put these back; these three are the other side
+  // of it and were zeroed by the same reading.
+  //
+  // `structuralExitLead` is what makes the old composition stand WHOLE before anything moves. It is
+  // the most directly measured number here: on `9,950 -> 10,123` the reference's right-hand columns
+  // are still at 1.02-1.10 of their settled ink at +132 ms and the leftmost has only just begun at
+  // +99, and on `1,000 -> 999` the whole number is crisp and untouched through +67. Ours starts
+  // dissolving on the first frame.
+  //
+  // `substitutionExitLead` is the extra a glyph waits when its slot is being TAKEN rather than
+  // deleted. A deletion may go as soon as its turn comes; a substitution has to be there until its
+  // replacement carries ink, or the column shows a hole.
+  //
+  // BOTH LEADS ARE 0, and the first attempt at this proves why. At 0.06 / 0.025 they delay a
+  // column's departure by 85 ms past its OWN arrival — exits carry the lead, arrivals do not — and
+  // the blink inverted into a pile-up: total ink on `1,000 -> 999` went 1.18 / 1.28 / 1.43 / 1.40
+  // and never dipped at all, where the reference dips to 0.71. Two whole numbers on screen at once
+  // is not better than none.
+  //
+  // The per-column depth was never the defect. Measured on the rightmost column, the reference dips
+  // to 0.24 and ours dipped to 0.22 — the same hole, in the same column. What was wrong is that all
+  // three columns dug it on the SAME FRAME, and that is a stagger, not a lead. So the wave carries
+  // the whole handover — a column's exit and its arrival share the ordinal, as the code below
+  // already arranges — and neither side of it is pushed past the other.
+  private val structuralStaggerSeconds: Float = 0.045f
   private val structuralExitLead: Float = 0f
   private val substitutionExitLead: Float = 0f
   // Per-column SLOWNESS of a roll's departure — the other half of the reference's wave, and the
@@ -270,6 +315,12 @@ class NumericTextView(context: Context) : View(context) {
   private val exitSlowPerColumn: Float = 0.265f
   // Structural roles may differ in blur/travel, not in their physical duration. The previous 0.65
   // made the third arrival 2.3× slower than the first and created the reported visible wave.
+  //
+  // Left at 0 on 2026-07-31, deliberately, while [birthSpacingSeconds] came back. The roll's wave
+  // IS slowness and this one is not: measured on `1,000 -> 999`, each of the reference's columns
+  // takes a comparable time to recover — c0 goes 0.45 -> 0.93 in 165 ms, c1 0.55 -> 0.92 in 132,
+  // c2 0.30 -> 0.90 in 165 — and only their START differs. Equal ramps at different offsets is a
+  // delay, not a slowness, and giving this one both would double-count the wave.
   private val birthSlowPerColumn: Float = 0f
   private val structuralExitSlowPerColumn: Float = 0.04f
   // Below this gap between two changes every rate is at its CROWDED value, and each blends linearly
@@ -1503,8 +1554,18 @@ class NumericTextView(context: Context) : View(context) {
         // changed column, so it ran at roughly double rate. On 2,577 → 1,000 that put the last
         // column's start at ~0.5 s: longer than the 400 ms the example's presets leave between
         // their two values, so "1,000" never finished forming before it became 999.
+        // A STRUCTURAL arrival's stagger collapses under crowding exactly as its exit's does. The
+        // exits have always been scaled by `restFraction` and the arrivals never were, which was
+        // harmless while the structural steps were 0 and is not now: a digit-count boundary crossed
+        // during a press-and-hold would get staggered arrivals against unstaggered departures, and
+        // that combination is precisely what put two whole compositions on screen at once when it
+        // was tried deliberately (see structuralExitLead). Reasoned, not filmed — a hold that
+        // crosses 9,999 is not scripted in the Showcase, so this guards a case no capture covers.
+        // The roll's own spacing is untouched: `enterScale` is 1 whenever the change is not
+        // structural.
         else -> {
-          ph.g.armDelay(enterLag + entersSeen * enterStep)
+          val enterScale = if (structural) restFraction else 1f
+          ph.g.armDelay(enterLag + entersSeen * enterStep * enterScale)
           ph.g.aimAt(1f)
           entersSeen++
         }
