@@ -431,14 +431,25 @@ object TransitionLogic {
   /**
    * Depth: an absent glyph is small and grows into place as it resolves.
    *
-   * Strongly convex in (1−p), fitted to the iOS reference's 1→9,999 growth, where a glyph's ink
-   * height against its own settled height measured 0.97 / 0.96 / 0.94 / 0.87 / 0.72 at presences of
-   * roughly 0.78 / 0.65 / 0.58 / 0.33 / 0.17. A glyph therefore stays near full size for most of
-   * its arrival and only the barely-present ones read as small.
+   * The default exponent (2.2) is fitted to the iOS reference's 1→9,999 STRUCTURAL growth, where a
+   * glyph's ink height against its own settled height measured 0.97 / 0.96 / 0.94 / 0.87 / 0.72 at
+   * presences of roughly 0.78 / 0.65 / 0.58 / 0.33 / 0.17 — it stays near full size for most of its
+   * arrival and only the barely-present ones read as small.
+   *
+   * That fit is for a BIRTH, not a plain roll, and using it for both was never checked until a frame
+   * grid was compared column by column: at exponent 2.2 the curve's slope at p = 0 is
+   * (1 − minScale) × 2.2, so a rolling glyph is already at 0.80 of settled height by p = 0.1 and
+   * 0.89 by p = 0.3 — a digit that looks essentially arrived a tenth of the way into a transition
+   * most of us would call "just starting". A LOWER exponent inverts the shape: it stays close to
+   * minScale for most of p and only rises steeply as p → 1, which is what "the new digit arrives
+   * from above, small, and only reaches full size as it lands" looks like. Set by inspecting a
+   * frame grid against the reference rather than by a fit — an isolated roll's two glyphs overlap
+   * too much in a short travel for either one's ink to be isolated and measured directly.
    */
-  fun presenceScale(p: Float, minScale: Float): Float {
+  @JvmOverloads
+  fun presenceScale(p: Float, minScale: Float, exponent: Float = 2.2f): Float {
     val a = 1f - p.coerceIn(0f, 1f)
-    return 1f - (1f - minScale) * Math.pow(a.toDouble(), 2.2).toFloat()
+    return 1f - (1f - minScale) * Math.pow(a.toDouble(), exponent.toDouble()).toFloat()
   }
 
   /**

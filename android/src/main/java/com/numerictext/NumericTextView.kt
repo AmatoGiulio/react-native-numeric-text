@@ -141,6 +141,18 @@ class NumericTextView(context: Context) : View(context) {
   // line-height up is a small but solid digit, not a speck, so shrinking it further only removed
   // ink the reference has.
   private val rollDepthMin: Float = 0.75f
+  // presenceScale's curve exponent for a plain roll, against the reference-fitted 2.2 a structural
+  // birth/death uses. Measured 2026-07-30 by comparing a frame grid of an isolated roll column by
+  // column: at 2.2 the arriving/departing glyph is already within 80-90% of settled height a tenth
+  // to a third of the way through its presence, which read exactly as "the new digit is already too
+  // big and grows too fast, and the old one looks big too" — both glyphs share this exponent, so
+  // the same curve was responsible for each. 0.55 keeps a glyph much closer to rollDepthMin through
+  // most of its presence and only rises to full size as p approaches 1, matching a digit that
+  // arrives small from depth and grows into focus right at the end of the roll rather than at the
+  // start. Not fitted to isolated reference ink: at this travel the arriving and departing glyphs
+  // overlap too much for either one's height to be measured in isolation, so this is set by eye
+  // against the reference frame grid, the same way arriveDampingRatio's bounce size is.
+  private val rollScaleExponent: Float = 0.55f
 
   // Spacing between successive arrivals. Measured on the reference's 1 → 9,999 growth: consecutive
   // columns differ by ~0.2 of presence, which over a 267 ms transition is ~45 ms per arrival.
@@ -276,6 +288,9 @@ class NumericTextView(context: Context) : View(context) {
     var structuralExit: Boolean = false
     var travelMul: Float = 1f      // roll = 1; a structural birth spawns much further out
     var minScale: Float = 0.9f
+    // Exponent of presenceScale's convex curve. Birth/exit keep the reference-fitted 2.2; a plain
+    // roll's glyphs get rollScaleExponent instead (see presenceScale's doc for why the two differ).
+    var scaleExponent: Float = 2.2f
     var driftMul: Float = 0f       // outward X displacement while absent (births/deaths only)
     // X is centre-relative (glyph centre minus its layout's half width) so it is independent of
     // the view's measured width, which changes underneath us on requestLayout. It springs to its
@@ -601,7 +616,7 @@ class NumericTextView(context: Context) : View(context) {
       // Unclamped p: the spring's overshoot carries the glyph slightly past its baseline.
       val yOff = travelPx * g.travelMul * TransitionLogic.rollOffsetShape(g.off)
       val xDrift = (if (g.xRelTarget >= 0f) 1f else -1f) * g.w * g.driftMul * (1f - pc)
-      val scale = TransitionLogic.presenceScale(pc, g.minScale)
+      val scale = TransitionLogic.presenceScale(pc, g.minScale, g.scaleExponent)
       val radius = maxBlurPx * blurAmt
       if (nodeCapable) {
         drawSlotGlyphNode(canvas, g, centreX + g.xRel + xDrift, bl, yOff, scale, alpha, radius)
@@ -722,7 +737,7 @@ class NumericTextView(context: Context) : View(context) {
         glyphs.add(GlyphState(ks.char).apply {
           p = 1f; v = 0f; target = 1f
           xRel = xRelOf(ks); xRelTarget = xRel; w = ks.width
-          minScale = rollDepthMin
+          minScale = rollDepthMin; scaleExponent = rollScaleExponent
         })
       }
     }
@@ -823,6 +838,7 @@ class NumericTextView(context: Context) : View(context) {
         // digits arrive unblurred" of the report.
         travelMul = if (structural) enterTravelFactor else 1f
         minScale = if (structural) enterMinScale else rollDepthMin
+        scaleExponent = if (structural) 2.2f else rollScaleExponent
         driftMul = if (current == null && structural) enterSpawnXFactor else 0f
         xRel = xRelOf(ks)
       }
