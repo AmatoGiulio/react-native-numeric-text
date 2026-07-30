@@ -44,6 +44,57 @@ const PRESET_SETTLE_MS = 1200;
 const SYNC_FLASH_MS = 400;
 
 /**
+ * The third preset: the STRUCTURAL shrink, sync-marked like the other two.
+ *
+ * It is not an exotic case — it is what the "−" button does the first time anyone presses it, since
+ * the screen starts at 1,000 and steps by 123. The digit count drops 4 -> 3, which puts the whole
+ * change on the renderer's structural path (every column a birth or a death rather than a roll), and
+ * that path has never been measured against the reference on a shrink of this shape: the fits behind
+ * it come from 1 -> 9,999 and 1,000 -> 1, both far more extreme.
+ *
+ * Same marker trick as the two above, so the onset is read and not inferred.
+ */
+const SHRINK_FROM = 1000;
+const SHRINK_TO = 877;
+const GROW_FROM = 1000;
+const GROW_TO = 10000;
+
+/**
+ * The two changes a real user reports on, neither of which any preset covered.
+ *
+ * `9,950 → 10,123` is the CARRY: the digit count grows 4 → 5, the separator moves one place left,
+ * and every column that stays is also rolling. It is the case where a structural birth, a
+ * horizontal reflow and three simultaneous rolls all run in the same transaction — each measured
+ * alone before, never together.
+ *
+ * `1,000 → 999` is its mirror and the smallest possible shrink: one step of −1 takes four digits to
+ * three, deletes the separator, and every surviving column rolls 0 → 9, i.e. the roll's direction
+ * disagrees with the value's for all three of them. The shrink preset already in the file
+ * (1,000 → 877) shares the structure but not this: there the units roll 0 → 7 with the carry, here
+ * every column does the same thing at once, which is what makes the hole (if there is one) obvious.
+ */
+const CARRY_FROM = 9950;
+const CARRY_TO = 10123;
+const NINES_FROM = 1000;
+const NINES_TO = 999;
+
+/**
+ * A HUMANISED tap cadence — the fourth regime, and the one the complaints are actually made in.
+ *
+ * `taps ×8 · 220ms` is a metronome, and a metronome is not what a thumb does: a person presses in
+ * bursts, two or three quick ones and then a pause, and the renderer's crowding gates blend on
+ * exactly that spacing. A fixed 220 ms therefore samples ONE point of the gate; this samples the
+ * range a hand actually produces, 200-650 ms.
+ *
+ * The gaps are a literal table rather than a seeded generator on purpose: it has to replay
+ * identically on both platforms, and two JS engines agreeing on `Math.random` is not something to
+ * rely on. Read it as "quick-quick-pause", three times over, with the pauses at the two lengths
+ * where the offset gate ([offsetCrowdMs] = 260 ms on Android) has just expired and where it is long
+ * gone.
+ */
+const HUMAN_GAPS = [220, 400, 210, 650, 240, 380, 200, 640, 230, 410, 200];
+
+/**
  * The second preset: a CONTINUOUS roll, scripted.
  *
  * The single change above measures the isolated case. It says nothing about the one a viewer sees
@@ -63,6 +114,30 @@ const HOLD_FROM = 1000;
 const HOLD_STEP_MS = 30;
 const HOLD_TICKS = 14;
 
+/**
+ * The third cadence: TAPS, not a hold — the one a person actually makes.
+ *
+ * 30 ms is a press-and-hold and 1.2 s is a single change, and both are measured. Between them sits
+ * the case every complaint has actually been about: someone pressing the button as fast as a thumb
+ * comfortably goes. It is its own regime because the renderer blends every rate by how long ago the
+ * last change came in, and the blend is finished by ~180 ms — so a 220 ms tap is treated exactly
+ * like a change from rest, and each digit is asked to start a whole roll it will never finish
+ * before the next tap.
+ *
+ * Scripted rather than tapped, for the same reason as the hold above: a hand cannot repeat a
+ * cadence closely enough for two platforms to be answering the same question.
+ */
+const TAP_STEP_MS = 220;
+const TAP_TICKS = 8;
+/**
+ * …and the same run backwards, from where the forward one ends.
+ *
+ * Same eight changes, same columns, same digits, opposite sign — so anything that differs between
+ * the two is the renderer treating up and down differently at a tap cadence, which is the question
+ * that keeps being asked. Both stay at four digits, so neither touches the structural path.
+ */
+const TAP_DOWN_FROM = HOLD_FROM + TAP_TICKS * STEP;
+
 const PLAY_LABEL = `Play · ${Math.round(SEQUENCE_DURATION / 1000)}s`;
 
 type Props = { onOpenLab: () => void };
@@ -80,44 +155,113 @@ export function Showcase({ onOpenLab }: Props) {
     []
   );
 
-  const runPreset = useCallback(() => {
+  const runStep = useCallback((from: number, to: number) => {
     timers.current.forEach(clearTimeout);
     timers.current = [];
     setSyncing(false);
-    setValue(PRESET_FROM);
+    setValue(from);
     timers.current.push(
       setTimeout(() => {
         // One commit: the value the renderer must animate, and the marker that dates it.
-        setValue(PRESET_TO);
+        setValue(to);
         setSyncing(true);
         timers.current.push(setTimeout(() => setSyncing(false), SYNC_FLASH_MS));
       }, PRESET_SETTLE_MS)
     );
   }, []);
 
-  const runHold = useCallback(() => {
+  const runPreset = useCallback(
+    () => runStep(PRESET_FROM, PRESET_TO),
+    [runStep]
+  );
+  // The measurement preset run BACKWARDS. Same three columns, same digits, opposite direction — so
+  // any difference between this and `runPreset` is the renderer treating up and down differently,
+  // which by construction it should not.
+  const runMirror = useCallback(
+    () => runStep(PRESET_TO, PRESET_FROM),
+    [runStep]
+  );
+  const runShrink = useCallback(
+    () => runStep(SHRINK_FROM, SHRINK_TO),
+    [runStep]
+  );
+  const runGrowth = useCallback(() => runStep(GROW_FROM, GROW_TO), [runStep]);
+  const runCarry = useCallback(() => runStep(CARRY_FROM, CARRY_TO), [runStep]);
+  const runNines = useCallback(() => runStep(NINES_FROM, NINES_TO), [runStep]);
+
+  const runTicks = useCallback(
+    (stepMs: number, ticks: number, from = HOLD_FROM, sign = 1) => {
+      timers.current.forEach(clearTimeout);
+      timers.current = [];
+      setSyncing(false);
+      setValue(from);
+      timers.current.push(
+        setTimeout(() => {
+          // Same one-commit trick as runStep: the first tick of the roll and the marker that dates
+          // it land together, so the first dark frame IS the frame the roll started on.
+          setValue(from + sign * STEP);
+          setSyncing(true);
+          timers.current.push(
+            setTimeout(() => setSyncing(false), SYNC_FLASH_MS)
+          );
+          for (let i = 2; i <= ticks; i += 1) {
+            timers.current.push(
+              setTimeout(
+                () => setValue(from + sign * i * STEP),
+                (i - 1) * stepMs
+              )
+            );
+          }
+        }, PRESET_SETTLE_MS)
+      );
+    },
+    []
+  );
+
+  const runHold = useCallback(
+    () => runTicks(HOLD_STEP_MS, HOLD_TICKS),
+    [runTicks]
+  );
+  // The same hold, downward. The roll's SHAPE is directional in the reference — during an increment
+  // its rolling column hangs below the line and during a decrement above it — and a preset that
+  // only goes one way cannot show that, so it went unmeasured while three sessions tuned the roll.
+  const runHoldDown = useCallback(
+    () => runTicks(HOLD_STEP_MS, HOLD_TICKS, HOLD_FROM + HOLD_TICKS * STEP, -1),
+    [runTicks]
+  );
+
+  /**
+   * The humanised run. Same one-commit sync marker as everything else: the first tap and the black
+   * bar land in one React commit, so the first dark frame IS the frame the run started on.
+   */
+  const runHuman = useCallback(() => {
     timers.current.forEach(clearTimeout);
     timers.current = [];
     setSyncing(false);
     setValue(HOLD_FROM);
     timers.current.push(
       setTimeout(() => {
-        // Same one-commit trick as runPreset: the first tick of the roll and the marker that dates
-        // it land together, so the first dark frame IS the frame the roll started on.
         setValue(HOLD_FROM + STEP);
         setSyncing(true);
         timers.current.push(setTimeout(() => setSyncing(false), SYNC_FLASH_MS));
-        for (let i = 2; i <= HOLD_TICKS; i += 1) {
+        let at = 0;
+        HUMAN_GAPS.forEach((gap, i) => {
+          at += gap;
           timers.current.push(
-            setTimeout(
-              () => setValue(HOLD_FROM + i * STEP),
-              (i - 1) * HOLD_STEP_MS
-            )
+            setTimeout(() => setValue(HOLD_FROM + (i + 2) * STEP), at)
           );
-        }
+        });
       }, PRESET_SETTLE_MS)
     );
   }, []);
+  const runTaps = useCallback(
+    () => runTicks(TAP_STEP_MS, TAP_TICKS),
+    [runTicks]
+  );
+  const runTapsDown = useCallback(
+    () => runTicks(TAP_STEP_MS, TAP_TICKS, TAP_DOWN_FROM, -1),
+    [runTicks]
+  );
 
   const onDone = useCallback(() => setPlaying(false), []);
   const { play, stop } = useSequencePlayer(
@@ -190,13 +334,121 @@ export function Showcase({ onOpenLab }: Props) {
 
           <Pressable
             style={({ pressed }) => [styles.preset, pressed && styles.pressed]}
+            onPress={runMirror}
+            disabled={playing}
+            accessibilityRole="button"
+          >
+            <Text style={styles.presetText}>
+              {PRESET_TO.toLocaleString('en-US')} →{' '}
+              {PRESET_FROM.toLocaleString('en-US')}
+            </Text>
+          </Pressable>
+
+          <Pressable
+            style={({ pressed }) => [styles.preset, pressed && styles.pressed]}
+            onPress={runShrink}
+            disabled={playing}
+            accessibilityRole="button"
+          >
+            <Text style={styles.presetText}>
+              {SHRINK_FROM.toLocaleString('en-US')} →{' '}
+              {SHRINK_TO.toLocaleString('en-US')}
+            </Text>
+          </Pressable>
+
+          <Pressable
+            style={({ pressed }) => [styles.preset, pressed && styles.pressed]}
+            onPress={runGrowth}
+            disabled={playing}
+            accessibilityRole="button"
+          >
+            <Text style={styles.presetText}>
+              {GROW_FROM.toLocaleString('en-US')} →{' '}
+              {GROW_TO.toLocaleString('en-US')}
+            </Text>
+          </Pressable>
+
+          <Pressable
+            style={({ pressed }) => [styles.preset, pressed && styles.pressed]}
+            onPress={runCarry}
+            disabled={playing}
+            accessibilityRole="button"
+          >
+            <Text style={styles.presetText}>
+              {CARRY_FROM.toLocaleString('en-US')} →{' '}
+              {CARRY_TO.toLocaleString('en-US')}
+            </Text>
+          </Pressable>
+
+          <Pressable
+            style={({ pressed }) => [styles.preset, pressed && styles.pressed]}
+            onPress={runNines}
+            disabled={playing}
+            accessibilityRole="button"
+          >
+            <Text style={styles.presetText}>
+              {NINES_FROM.toLocaleString('en-US')} →{' '}
+              {NINES_TO.toLocaleString('en-US')}
+            </Text>
+          </Pressable>
+
+          <Pressable
+            style={({ pressed }) => [styles.preset, pressed && styles.pressed]}
+            onPress={runHuman}
+            disabled={playing}
+            accessibilityRole="button"
+            accessibilityLabel="Humanised taps"
+          >
+            <Text style={styles.presetText}>
+              human ×{HUMAN_GAPS.length + 1}
+            </Text>
+          </Pressable>
+
+          <Pressable
+            style={({ pressed }) => [styles.preset, pressed && styles.pressed]}
             onPress={runHold}
             disabled={playing}
             accessibilityRole="button"
             accessibilityLabel="Continuous roll"
           >
             <Text style={styles.presetText}>
-              roll ×{HOLD_TICKS} · {HOLD_STEP_MS}ms
+              roll + ×{HOLD_TICKS} · {HOLD_STEP_MS}ms
+            </Text>
+          </Pressable>
+
+          <Pressable
+            style={({ pressed }) => [styles.preset, pressed && styles.pressed]}
+            onPress={runHoldDown}
+            disabled={playing}
+            accessibilityRole="button"
+            accessibilityLabel="Continuous roll down"
+          >
+            <Text style={styles.presetText}>
+              roll − ×{HOLD_TICKS} · {HOLD_STEP_MS}ms
+            </Text>
+          </Pressable>
+
+          <Pressable
+            style={({ pressed }) => [styles.preset, pressed && styles.pressed]}
+            onPress={runTaps}
+            disabled={playing}
+            accessibilityRole="button"
+            accessibilityLabel="Human taps"
+          >
+            <Text style={styles.presetText}>
+              taps + ×{TAP_TICKS} · {TAP_STEP_MS}ms
+            </Text>
+          </Pressable>
+
+          <Pressable
+            style={({ pressed }) => [styles.preset, pressed && styles.pressed]}
+            onPress={runTapsDown}
+            disabled={playing}
+            accessibilityRole="button"
+            accessibilityLabel="Human taps down"
+          >
+            <Text style={styles.presetText}>
+              taps − ×{TAP_TICKS} · {TAP_STEP_MS}ms
             </Text>
           </Pressable>
         </View>
@@ -306,16 +558,25 @@ const styles = StyleSheet.create({
     backgroundColor: '#000',
   },
 
+  // FIXED height, contents anchored to the bottom. The buttons are measurement scaffolding and
+  // they get added to; in flow, every addition steals height from [stack] and moves the number up
+  // (67 px on Android, 72 on iOS, the last time it happened) — which silently re-crops every
+  // fixed-window probe and reads as a large clean regression that is not real. Reserving the space
+  // once means the number's position is a property of the screen, not of how many presets exist.
   actions: {
+    height: 320,
     alignItems: 'center',
+    justifyContent: 'flex-end',
     gap: 12,
   },
   presetRow: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'center',
     gap: 8,
   },
   preset: {
-    paddingHorizontal: 22,
+    paddingHorizontal: 16,
     paddingVertical: 11,
     borderRadius: 999,
     backgroundColor: QUIET,
