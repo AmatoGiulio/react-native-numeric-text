@@ -856,18 +856,7 @@ class NumericTextView(context: Context) : View(context) {
       g.xRelTarget = xRelOf(ks)
       g.exitOff = dir * rollExitOff          // where it will go if it later leaves
       g.structuralExit = false               // it is arriving; a later death re-arms this
-      // A revived glyph keeps p/v (opacity continuity is the whole point of reviving one) and xRel
-      // (the X spring retargets smoothly on its own), but off/offV are reset to a clean arrival
-      // start. Left alone, a glyph reused mid-departure carries whatever off/offV it had picked up
-      // heading OUT — and when the value's direction reverses (near zero, cycling sign, or simply
-      // ping-ponging on a +/- button), that residual is on the wrong side with real outward
-      // velocity, so the spring has to fight it down before it can even start arriving. Measured on
-      // an isolated "2 -> 1" sitting just after a run of sign flips, the column's centroid rang to
-      // 0.066 of a glyph height against the reference's 0.012 — over 5x — while the SAME kind of
-      // change away from any revival (10 -> 9) measured 0.018 against the reference's 0.018, an
-      // exact match. That is the "rimbalzano" (bounces) reported watching repeated -/+ taps: not the
-      // roll direction, a stale spring being yanked backward by a value it no longer owns.
-      g.off = -dir.toFloat(); g.offV = 0f
+      if (revived == null) col.glyphs.add(g)
 
       // Retire EVERY glyph that is not the one arriving, and let each carry on down the strip on
       // its own. Nothing is merged.
