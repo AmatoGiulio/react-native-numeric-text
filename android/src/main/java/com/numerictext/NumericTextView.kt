@@ -100,7 +100,16 @@ class NumericTextView(context: Context) : View(context) {
   // Note the grid in template_fit resolves 0.023 line-heights, so a target of 0.04 reads as either
   // 0.02 or 0.05 there — this one is set by eye between two measurements, not by a measurement.
   // Presence keeps 0.9: the bounce is positional, an opacity that overshoots just flickers.
-  private val arriveDampingRatio: Float = 0.32f
+  //
+  // Raised from 0.32 when travelFactor went from 0.15 to 0.45. The drawn bounce is a FRACTION of the
+  // travel, so tripling the travel tripled it without anyone changing a damping ratio, and it read
+  // as a spring that had become too pronounced. A second-order system's overshoot is
+  // exp(−πζ/√(1−ζ²)), which rollOffsetShape then raises to 1.43: at ζ = 0.32 that is 0.35 ringing
+  // and 0.22 of the travel drawn, so 0.10 line-heights at the new travel against the 0.04 this was
+  // tuned to at the old one. 0.42 rings 0.23 and draws 0.13, landing at 0.058 — deliberately a
+  // little above the old value, because the old travel was itself too short for the bounce to have
+  // been judged at the right size.
+  private val arriveDampingRatio: Float = 0.42f
   // A structural BIRTH spawns enterTravelFactor further out, and a spring's overshoot is a fraction
   // of the distance it covers — so the same damping rings 3x wider there. The reference does not:
   // fitted per column on 1 -> 9,999, every arriving glyph overshoots by +0.05 line-heights whether
@@ -360,20 +369,22 @@ class NumericTextView(context: Context) : View(context) {
   //   travel separates the outgoing/incoming glyphs into two distinct dark ghosts (a tall black
   //   column); a short travel makes them overlap near the baseline so they blend into ONE soft
   //   grey mass — the compact, readable roll SwiftUI produces (verified via iOS/Android frame diff).
-  // 0.15 was fitted to the wrong quantity, and that is why the roll plateaued. It matched the ink's
-  // vertical EXCURSION — where the column's centre of mass goes, 18.8% of a glyph height on the
-  // reference — by making the travel short. But the reference keeps that centroid low while its ink
-  // REACHES far: measured on 2026-07-30, iOS's rolling column puts ink 0.83 glyph-heights above the
-  // resting digit on an increment and 0.52 on a decrement (and, in a burst, 1.14, spanning over four
-  // glyph heights). Ours reached 0.01. Two ways to hold a centroid still, and we picked the one that
-  // deletes the movement: the reference's far glyph is up there but tiny and nearly transparent, so
-  // it weighs almost nothing.
+  // How far past the resting digit the rolling ink reaches, measured on an isolated 2,576 -> 2,577
+  // over the units column alone, in glyph heights, against a verified-still reference frame:
   //
-  // So the travel is now long enough to reach the reference's ink, and the centroid is held down
-  // where the reference holds it — by [presenceAlpha]'s low-presence gate and [rollDepthMin] instead
-  // of by refusing to move. 0.95 puts a glyph at p≈0 about 0.95 line-heights up, less the depth
-  // shrink, which lands its top edge near the measured 0.83.
-  private val travelFactor = 0.95f
+  //     reference   0.059 above   0.102 below
+  //     0.15        0.019         0.057        (too tight — the column barely leaves its box)
+  //     0.95        0.133         0.167        (too far, both ways)
+  //
+  // Interpolating between the two measured points puts both numbers on the reference at 0.45, and
+  // the two agree to within 0.05 of each other, which is the check that the relationship is linear.
+  //
+  // 0.95 came from a measurement taken inside a band that included the "+" button. A button is a
+  // hard-edged object, so it reported the same reach at every ink threshold — the signature that
+  // was read at the time as "the reference's arriving glyph is a solid digit a full glyph-height up"
+  // and is really just a button. The reference's roll is compact, as the original note here said.
+  // Any band used for this has to stop above y = 0.55 of the screen, where the buttons start.
+  private val travelFactor = 0.45f
   // blurFactor: peak per-digit blur radius as a fraction of line-height. Lower = softer/greyer.
   private val blurFactor = 0.16f
   // Headroom around a glyph's own RenderNode, in multiples of the peak blur radius. A DECAL blur
@@ -383,7 +394,7 @@ class NumericTextView(context: Context) : View(context) {
   // Extra height (per side, × line-height) reserved so the blur/roll can breathe. It has to cover
   // the full travel plus the blur's halo, or the glyph waiting above the line is sliced off square
   // at the view's edge — which would hide exactly the ink this travel exists to show.
-  private val verticalHeadroomFactor = 1.10f
+  private val verticalHeadroomFactor = 0.60f
   // Depth scale: a rolling glyph shrinks toward this as it leaves and grows back on arrival,
   // so the motion reads as a digit rotating on a cylinder rather than a flat 2D guillotine.
   // Depth: the leaving glyph shrinks more (it recedes), the arriving one barely scales — it
@@ -394,11 +405,9 @@ class NumericTextView(context: Context) : View(context) {
   // fade-in-place read as "the final number at low opacity" — too recognisable.
   // Fitted to the reference growth: a structural birth bottoms out around 0.6 of full size.
   private val enterMinScale = 0.6f
-  // A multiplier on travelFactor, so it has to move whenever that does: a structural birth still
-  // spawns from the 0.48 of a line height measured on the reference, which is now BELOW the roll's
-  // own travel rather than above it — a born digit appears closer to its slot than a rolling one,
-  // which is what the reference does.
-  private val enterTravelFactor = 0.5f
+  // A multiplier on travelFactor, so it moves whenever that does and a structural birth keeps
+  // spawning from the 0.48 of a line height measured on the reference (0.45 × 1.07).
+  private val enterTravelFactor = 1.07f
   // Horizontal spawn displacement of a born glyph, as a fraction of its width: it appears
   // displaced toward the composition's growing edge (e.g. the trailing "5" from the right) and
   // slides to its slot. Direction derived from geometry — no hardcoding.
