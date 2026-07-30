@@ -6,19 +6,11 @@
 
 NS_ASSUME_NONNULL_BEGIN
 
+/**
+ * The Fabric component view. It draws nothing itself: the number is rendered by
+ * `NumericTextSwiftUIHost`, a SwiftUI `Text` with `.contentTransition(.numericText())`.
+ */
 @interface NumericTextView : RCTViewComponentView
-
-@property (nonatomic, assign) double numericValue;
-@property (nonatomic, copy) NSString *numericLocale;
-@property (nonatomic, copy) NSString *numericDirection;
-@property (nonatomic, assign) double numericAnimationDuration;
-@property (nonatomic, assign) BOOL numericUseGrouping;
-@property (nonatomic, assign) NSInteger numericMinFractionDigits;
-@property (nonatomic, assign) NSInteger numericMaxFractionDigits;
-@property (nonatomic, copy) NSString *numericReduceMotion;
-@property (nonatomic, assign) CGFloat numericFontSize;
-@property (nonatomic, copy) NSString *numericFontWeight;
-@property (nonatomic, strong, nullable) UIColor *numericTextColor;
 
 @end
 

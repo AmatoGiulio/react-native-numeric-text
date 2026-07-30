@@ -8,40 +8,30 @@
 
 #import "RCTFabricComponentsPlugins.h"
 
+// The SwiftUI half of this view. CocoaPods writes the interop header beside the pod's other
+// headers when it builds as a static library, and inside the framework when it does not.
+#if __has_include(<NumericText/NumericText-Swift.h>)
+#import <NumericText/NumericText-Swift.h>
+#else
+#import "NumericText-Swift.h"
+#endif
+
 using namespace facebook::react;
 
 /**
- * iOS NOTE — SwiftUI hosting (Phase 2):
+ * iOS does not reimplement the transition — it asks SwiftUI for the real one.
  *
- * To integrate ContentTransition.numericText, replace the placeholder UIView
- * below with a UIHostingController wrapping the SwiftUI view:
- *
- * struct NumericTextSwiftUI: View {
- *   let text: String
- *   let value: Double
- *   let countsDown: Bool
- *   var body: some View {
- *     Text(text)
- *       .monospacedDigit()
- *       .contentTransition(.numericText(value: value))
- *       .animation(.default, value: value)
- *   }
- * }
- *
- * The hosting controller must be created once in initWithFrame and its rootView
- * updated when props change. Do NOT recreate on every update.
- *
- * This file currently stores props but renders a plain UIView.
- * Update for SwiftUI when iOS build environment is available.
+ * All this class does is translate Fabric props into one call on the SwiftUI host, which is created
+ * once in `initWithFrame:` and updated in place. Recreating it on a prop change would restart the
+ * roll mid-flight, which is exactly the bug the Android renderer spent weeks unlearning.
  */
-
 @implementation NumericTextView {
-    UIView * _view;
+  NumericTextSwiftUIHost *_host;
 }
 
 + (ComponentDescriptorProvider)componentDescriptorProvider
 {
-    return concreteComponentDescriptorProvider<NumericTextViewComponentDescriptor>();
+  return concreteComponentDescriptorProvider<NumericTextViewComponentDescriptor>();
 }
 
 - (instancetype)initWithFrame:(CGRect)frame
@@ -50,9 +40,8 @@ using namespace facebook::react;
     static const auto defaultProps = std::make_shared<const NumericTextViewProps>();
     _props = defaultProps;
 
-    _view = [[UIView alloc] init];
-
-    self.contentView = _view;
+    _host = [[NumericTextSwiftUIHost alloc] initWithFrame:frame];
+    self.contentView = _host;
   }
 
   return self;
@@ -60,44 +49,24 @@ using namespace facebook::react;
 
 - (void)updateProps:(Props::Shared const &)props oldProps:(Props::Shared const &)oldProps
 {
-    const auto &oldViewProps = *std::static_pointer_cast<NumericTextViewProps const>(_props);
-    const auto &newViewProps = *std::static_pointer_cast<NumericTextViewProps const>(props);
+  const auto &next = *std::static_pointer_cast<NumericTextViewProps const>(props);
 
-    if (newViewProps.value != oldViewProps.value) {
-        self.numericValue = newViewProps.value;
-    }
-    if (newViewProps.direction != oldViewProps.direction) {
-        self.numericDirection = RCTNSStringFromString(newViewProps.direction);
-    }
-    if (newViewProps.locale != oldViewProps.locale) {
-        self.numericLocale = RCTNSStringFromString(newViewProps.locale);
-    }
-    if (newViewProps.animationDuration != oldViewProps.animationDuration) {
-        self.numericAnimationDuration = newViewProps.animationDuration;
-    }
-    if (newViewProps.useGrouping != oldViewProps.useGrouping) {
-        self.numericUseGrouping = newViewProps.useGrouping;
-    }
-    if (newViewProps.minimumFractionDigits != oldViewProps.minimumFractionDigits) {
-        self.numericMinFractionDigits = newViewProps.minimumFractionDigits;
-    }
-    if (newViewProps.maximumFractionDigits != oldViewProps.maximumFractionDigits) {
-        self.numericMaxFractionDigits = newViewProps.maximumFractionDigits;
-    }
-    if (newViewProps.reduceMotion != oldViewProps.reduceMotion) {
-        self.numericReduceMotion = RCTNSStringFromString(newViewProps.reduceMotion);
-    }
-    if (newViewProps.fontSize != oldViewProps.fontSize) {
-        self.numericFontSize = newViewProps.fontSize;
-    }
-    if (newViewProps.fontWeight != oldViewProps.fontWeight) {
-        self.numericFontWeight = RCTNSStringFromString(newViewProps.fontWeight);
-    }
-    if (newViewProps.textColor != oldViewProps.textColor) {
-        self.numericTextColor = RCTUIColorFromSharedColor(newViewProps.textColor);
-    }
+  // Every prop is forwarded on every update rather than diffed here. The SwiftUI side ignores an
+  // unchanged value on its own — its animation is scoped to `value` — and a partial forward is how
+  // a number ends up still drawn in the previous font after a style change.
+  [_host applyValue:next.value
+                   locale:RCTNSStringFromString(next.locale)
+                direction:RCTNSStringFromString(next.direction)
+             reduceMotion:RCTNSStringFromString(next.reduceMotion)
+              useGrouping:next.useGrouping
+    minimumFractionDigits:next.minimumFractionDigits
+    maximumFractionDigits:next.maximumFractionDigits
+                 fontSize:next.fontSize
+               fontWeight:RCTNSStringFromString(next.fontWeight)
+               fontFamily:RCTNSStringFromString(next.fontFamily)
+                textColor:RCTUIColorFromSharedColor(next.textColor)];
 
-    [super updateProps:props oldProps:oldProps];
+  [super updateProps:props oldProps:oldProps];
 }
 
 @end

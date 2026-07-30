@@ -1,7 +1,5 @@
 import { memo, useEffect, useRef, useState } from 'react';
-import { Platform } from 'react-native';
 import NumericTextViewNativeComponent from './NumericTextViewNativeComponent';
-import { NumericTextFallback } from './NumericTextFallback';
 import { measureBox, widest, type Box } from './measureBox';
 import { resolveTextStyle } from './resolveTextStyle';
 import type { NumericTextDebugProps, NumericTextProps } from './types';
@@ -9,13 +7,18 @@ import type { NumericTextDebugProps, NumericTextProps } from './types';
 type Props = NumericTextProps & NumericTextDebugProps;
 
 /**
- * Only Android draws today — `ios/NumericTextView.mm` is still a placeholder that renders an empty
- * view, so routing iOS to the native component would show nothing at all. Until it calls the real
- * `.contentTransition(.numericText())`, iOS gets the static fallback: the right number, no
- * animation, rather than a blank space where a number should be.
+ * One component, one prop shape, two native renderers.
+ *
+ * Android draws the transition itself (`android/…/NumericTextView.kt`: a spring per digit column).
+ * iOS asks SwiftUI for its own `.contentTransition(.numericText())`
+ * (`ios/NumericTextSwiftUIHost.swift`) — the behaviour the Android renderer is measured against, so
+ * there is nothing to reimplement there. Web and anything else without a native view resolve
+ * `./NumericTextView` to the static fallback instead of this file.
+ *
+ * `animationDuration` reaches Android only; SwiftUI's numeric transition is a spring with no
+ * duration to set. Both sides otherwise read the same props, including the text properties pulled
+ * out of `style` — each renderer draws its own glyphs, so it needs them as props.
  */
-const HAS_NATIVE_RENDERER = Platform.OS === 'android';
-
 function NumericTextViewImpl({
   value,
   locale = 'en-US',
@@ -41,20 +44,6 @@ function NumericTextViewImpl({
     measureBox(formatted, text.fontSize),
     Math.max(animationDuration, 500) + 400
   );
-
-  if (!HAS_NATIVE_RENDERER) {
-    return (
-      <NumericTextFallback
-        value={value}
-        locale={locale}
-        minimumFractionDigits={minimumFractionDigits}
-        maximumFractionDigits={maximumFractionDigits}
-        useGrouping={useGrouping}
-        style={style}
-        testID={testID}
-      />
-    );
-  }
 
   return (
     <NumericTextViewNativeComponent
