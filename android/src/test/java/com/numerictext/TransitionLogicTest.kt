@@ -542,6 +542,106 @@ class TransitionLogicTest {
   }
 
   @Test
+  fun rollTape_twoAdjacentLanesHandOffContinuously() {
+    // Increment: the old lane goes 0 -> +1 while the target lane goes -1 -> 0. Their raw presence
+    // remains complementary at every presentation phase; a retarget changes neither lane's current
+    // position nor velocity.
+    for (phase in listOf(0f, 0.2f, 0.5f, 0.8f, 1f)) {
+      val oldPresence = TransitionLogic.rollTapePresence(
+        offset = phase,
+        isTarget = false,
+        direction = 1
+      )
+      val newPresence = TransitionLogic.rollTapePresence(
+        offset = phase - 1f,
+        isTarget = true,
+        direction = 1
+      )
+      assertEquals(1f, oldPresence + newPresence, 0.001f)
+    }
+  }
+
+  @Test
+  fun rollTape_targetStaysWholeAcrossSettleOvershoot() {
+    assertEquals(1f, TransitionLogic.rollTapePresence(0.08f, true, 1), 0.001f)
+    assertEquals(1f, TransitionLogic.rollTapePresence(-0.08f, true, -1), 0.001f)
+  }
+
+  @Test
+  fun structuralArrival_resolvesVisuallyBeforeThePhysicalSpringSettles() {
+    assertEquals(0f, TransitionLogic.structuralArrivalVisualPresence(0f), 0.001f)
+    assertTrue(
+      TransitionLogic.structuralArrivalVisualPresence(0.5f) > 0.5f
+    )
+    assertEquals(1f, TransitionLogic.structuralArrivalVisualPresence(0.82f), 0.001f)
+    assertEquals(1f, TransitionLogic.structuralArrivalVisualPresence(1f), 0.001f)
+  }
+
+  @Test
+  fun rollTape_reusesOnlyALaneOnTheRequestedArrivalSide() {
+    // With the phase between A and B, A is a valid target for a reversal but not for another
+    // same-direction digit cycle.
+    assertTrue(
+      TransitionLogic.rollTapeCanReuseLane(
+        lane = 0f,
+        phase = 0.4f,
+        direction = -1,
+        maxDistance = 1.35f
+      )
+    )
+    assertTrue(
+      !TransitionLogic.rollTapeCanReuseLane(
+        lane = 0f,
+        phase = 0.4f,
+        direction = 1,
+        maxDistance = 1.35f
+      )
+    )
+    assertTrue(
+      !TransitionLogic.rollTapeCanReuseLane(
+        lane = 2f,
+        phase = 0.4f,
+        direction = 1,
+        maxDistance = 1.35f
+      )
+    )
+  }
+
+  @Test
+  fun rollTape_retargetDoesNotResetPresentationVelocity() {
+    var phase = 0f
+    var velocity = 0f
+    repeat(8) {
+      val result = TransitionLogic.springIntegrate(
+        phase,
+        velocity,
+        1f,
+        157.914f,
+        1f,
+        1f / 60f
+      )
+      phase = result.first
+      velocity = result.second
+    }
+    val beforeRetarget = velocity
+    val nextTarget = 2f
+
+    // Moving the goal is the whole retarget operation. Feed the live presentation velocity into
+    // the successor spring; a restart from zero would fail both assertions.
+    assertTrue("the first segment must already be moving", beforeRetarget > 0f)
+    val result = TransitionLogic.springIntegrate(
+      phase,
+      velocity,
+      nextTarget,
+      157.914f,
+      1f,
+      1f / 60f
+    )
+    assertTrue("the tape must keep moving through a monotonic retarget", result.second > 0f)
+    assertTrue("the successor must inherit and accelerate the live motion", result.second > beforeRetarget)
+  }
+
+  @Test
   fun springStep_retargetPreservesVelocity() {
     // A glyph caught mid-exit and retargeted back to present must keep moving in the direction it
     // already had for at least one step — that continuity IS the "back" the reference shows.

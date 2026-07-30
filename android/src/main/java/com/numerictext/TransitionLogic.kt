@@ -333,6 +333,51 @@ object TransitionLogic {
   // past 1 and the glyph rides slightly past its resting baseline before settling back.
 
   /**
+   * Presence of a glyph placed on a continuous roll tape.
+   *
+   * Non-target lanes use a triangular window: a glyph is whole on the baseline and contributes no
+   * ink one lane away in either direction. The target lane is asymmetric in the direction of
+   * arrival, so a small spring overshoot beyond its baseline stays fully present instead of
+   * flickering. Position, velocity and presence therefore remain functions of one persistent phase;
+   * a retarget cannot restart or teleport any glyph already on screen.
+   */
+  fun rollTapePresence(offset: Float, isTarget: Boolean, direction: Int): Float {
+    val d = if (direction < 0) -1f else 1f
+    return if (isTarget) {
+      (1f + d * offset).coerceIn(0f, 1f)
+    } else {
+      (1f - abs(offset)).coerceIn(0f, 1f)
+    }
+  }
+
+  /**
+   * Whether a matching old lane is a valid immediate reversal target.
+   *
+   * Only a lane physically waiting on the requested arrival side may be reused. Without the signed
+   * side check, encountering the same digit later in a monotonic count would pull an old lane
+   * backwards through the strip.
+   */
+  fun rollTapeCanReuseLane(
+    lane: Float,
+    phase: Float,
+    direction: Int,
+    maxDistance: Float
+  ): Boolean {
+    val signedDistance = (lane - phase) * if (direction < 0) -1f else 1f
+    return signedDistance > 0f && signedDistance <= maxDistance
+  }
+
+  /**
+   * Visual phase used by a glyph born during a topology change.
+   *
+   * SwiftUI's numeric transition resolves the incoming ink before its underlying spring has
+   * mathematically settled. Keeping geometry on the real spring while finishing focus/density at
+   * 82% reproduces that controlled handoff without shortening or restarting the motion itself.
+   */
+  fun structuralArrivalVisualPresence(p: Float): Float =
+    smoothstep(0f, 0.82f, p.coerceIn(0f, 1f))
+
+  /**
    * Opacity — an S with a FLAT bottom and a LIVE top.
    *
    * It began as `p^e` (sub-linear, on a belief that a crossing pair must sum to more than one glyph

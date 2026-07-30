@@ -63,6 +63,12 @@ class NumericTextView(context: Context) : View(context) {
   private var lastTickNanos: Long = 0L
   private var lastValueChangeNanos: Long = 0L
 
+  // SwiftUI 26 resolves `.spring()` to duration 0.5, bounce 0. Its own SDK helper converts that
+  // response to (2π / 0.5)² ≈ 157.914 and bounce 0 to critical damping. Keep this pair explicit:
+  // it is the common motion clock for the tape, structural births and horizontal reflow.
+  private val swiftDefaultSpringStiffness: Float = 157.914f
+  private val swiftDefaultSpringDampingRatio: Float = 1f
+
   // Knobs — tune against iOS. dampingRatio < 1 gives the snappy overshoot; stiffness sets
   // how fast it settles (~4/(ratio·√stiffness) seconds).
   // Soft and flowing, NOT snappy. A stiff spring makes every digit a crisp discrete event, which
@@ -110,14 +116,6 @@ class NumericTextView(context: Context) : View(context) {
   // little above the old value, because the old travel was itself too short for the bounce to have
   // been judged at the right size.
   private val arriveDampingRatio: Float = 0.42f
-  // A structural BIRTH spawns enterTravelFactor further out, and a spring's overshoot is a fraction
-  // of the distance it covers — so the same damping rings 3x wider there. The reference does not:
-  // fitted per column on 1 -> 9,999, every arriving glyph overshoots by +0.05 line-heights whether
-  // it is a roll or a birth, where ours rang +0.09 to +0.11 on the births. Damped harder so the
-  // absolute settle matches instead of the ratio: 0.6 overcorrected to +0.02, and the drawn ring
-  // goes through rollOffsetShape's 1.43 power, so landing 0.05 out of a 0.48 travel needs a raw
-  // overshoot near 21%, not 10%.
-  private val birthDampingRatio: Float = 0.44f
   // Velocity that maps to full roll blur (position+velocity blend below). Scales with the spring:
   // peak presence velocity is ~5.0 at stiffness 150 but ~7.4 at 340, so keeping the old 9 here made
   // the velocity term 45% stronger than it was tuned to be. It then pulsed on every digit change —
@@ -183,6 +181,9 @@ class NumericTextView(context: Context) : View(context) {
   // 0.07 -> 0.076, absorbing arriveCrossSlow's speed-up so that only the first column moves: at
   // 0.58 every arrival comes ~12 ms sooner, and the spacing gives that back at ~6 ms per column.
   private val enterSpacingSeconds: Float = 0.076f
+  // A structural change is one transaction. SwiftUI may give different glyph roles different
+  // visuals, but it does not enqueue a new clock for every column.
+  private val birthSpacingSeconds: Float = 0f
   // 0.04 -> 0 on 2026-07-30. With the exit cascade widened to 0.07 this lag was pure delay: the
   // per-glyph fit had every incoming column landing ~40 ms behind the reference with the SAME slope
   // (units crossing 0.1 -> 0.9 in 150 ms on both), i.e. a translation, not a shape error. It cost
@@ -191,12 +192,10 @@ class NumericTextView(context: Context) : View(context) {
   // sequenced, by enterSpacingSeconds; this constant only pushed the whole run back.
   private val enterLag: Float = 0f
 
-  // The horizontal reflow is a per-glyph spring, not a shared clock. A shared clock had to be
-  // rewound on every retarget, which under a rapid spam restarted the reflow and made the
-  // composition jerk sideways. Critically damped (no horizontal bounce) and soft enough that its
-  // ~0.4s settle reproduces the late glide of the surviving "1" in 1→1.5 on its own.
-  private val xStiffness: Float = 110f
-  private val xDampingRatio: Float = 1f
+  // Horizontal reflow keeps per-glyph state so retargets remain continuous, but every state uses
+  // the same critical SwiftUI clock.
+  private val xStiffness: Float = swiftDefaultSpringStiffness
+  private val xDampingRatio: Float = swiftDefaultSpringDampingRatio
   // LEFT→RIGHT cascade (reverse-engineered from the iOS reference at 60fps: on a multi-digit
   // change the leftmost changed column leads). Kept SUBTLE — a large delay turns the cascade into
   // a visibly sequential, machine-like wave.
@@ -244,6 +243,10 @@ class NumericTextView(context: Context) : View(context) {
   // 550 ms on this same transition). Whatever lands here has to separate how fast a glyph crosses
   // from how long it takes to come to rest — today one spring does both.
   private val staggerSeconds: Float = 0.065f
+  // No queued structural wave: all affected columns are released by the same transaction.
+  private val structuralStaggerSeconds: Float = 0f
+  private val structuralExitLead: Float = 0f
+  private val substitutionExitLead: Float = 0f
   // Per-column SLOWNESS of a roll's departure — the other half of the reference's wave, and the
   // one the old comment below correctly identified as the open work.
   //
@@ -265,11 +268,42 @@ class NumericTextView(context: Context) : View(context) {
   // slowness: what the reference asks for is the RATIO between the leftmost column's fall and the
   // rightmost's (1.53), not the absolute slowdown, and 0.5 was solving for the ratio alone.
   private val exitSlowPerColumn: Float = 0.265f
-  // Below this gap between two changes the exit cascade is off, and it fades in linearly up to
-  // twice it. A hold on +/- repeats every 30 ms and the scripted burst every 45 ms — both must land
-  // at zero — while the example's presets, which set two values 400 ms apart, must get the full
-  // cascade the reference shows there.
+  // Structural roles may differ in blur/travel, not in their physical duration. The previous 0.65
+  // made the third arrival 2.3× slower than the first and created the reported visible wave.
+  private val birthSlowPerColumn: Float = 0f
+  private val structuralExitSlowPerColumn: Float = 0.04f
+  // Below this gap between two changes every rate is at its CROWDED value, and each blends linearly
+  // back to its isolated one up to twice it. A hold on +/- repeats every 30 ms and the scripted
+  // burst every 45 ms — both must land at zero — while a change from rest must get the full cascade
+  // the reference shows there.
+  //
+  // Widening this to 200 was tried on 2026-07-30 and fixed the wrong thing well: the ink stopped
+  // climbing out of the box, and went pale doing it (the crowded blend also speeds every departure
+  // and every arrival's PRESENCE, so at a tap cadence the column never darkens). Position and ink
+  // are separate axes here — see [offsetCrowdMs], which is where the widening belongs.
   private val cascadeSpamMs: Float = 90f
+  // The same gate, for the arrival's POSITION only, and much wider.
+  //
+  // Someone tapping the button as fast as a thumb comfortably goes lands changes 200-250 ms apart.
+  // At `cascadeSpamMs` that is fully isolated, and the isolated rates are deliberately slow — the
+  // arrival's offset spring sits at [arriveOffsetBaseline], 0.42 of the base stiffness, so that a
+  // crossing pair stays separated in SPACE. At 220 ms that glyph is still in the air when the next
+  // tap lands, and the next one starts a fresh roll from above it. Measured over a scripted 220 ms
+  // tap run (the Showcase's third cadence), how far the ink reaches past the settled digit box, in
+  // glyph heights, over 1.6 s:
+  //
+  //     iOS       up  median +0.00  worst +0.00      down  median +0.02  worst +0.04
+  //     before    up  median +0.07  worst +0.20      down  median +0.01  worst +0.03
+  //
+  // The reference never leaves its box at this cadence: the digits change inside the line and the
+  // only thing outside it is a soft ghost hanging just below. Ours climbed out of the top — the
+  // "the last digit keeps going higher and higher" of the report, and why a run of taps reads as
+  // popping rather than rolling.
+  //
+  // Only the offset is widened. Presence, blur and the exits keep `cascadeSpamMs`, so a tapped
+  // change still carries an isolated change's ink and softness; all that changes is that its digit
+  // is on the line by the time the next tap arrives.
+  private val offsetCrowdMs: Float = 260f
   // How much faster than the presence spring a ROLL's departure fades, when the change stands
   // alone. See pK below.
   //
@@ -380,6 +414,32 @@ class NumericTextView(context: Context) : View(context) {
   // quick. Keeping them apart is the same distinction the pair of constants was created for.
   private val arriveCrossSlow: Float = 0.66f
   private var changeSpacing: Float = 1f   // 1 = isolated change, 0 = spam; see cascadeSpamMs
+  /** The same, on the wider window the arrival's POSITION uses. See [offsetCrowdMs]. */
+  private var offsetSpacing: Float = 1f
+  // ── Continuous roll tape ──
+  //
+  // A plain roll is one persistent physical coordinate per column. Every changed character is
+  // placed on that column's tape and advances the target by one lane; the live phase and velocity
+  // are never reset. This is the same merge invariant as SwiftUI's persistent spring: a later value
+  // replaces the target of the motion already on screen instead of starting another 0 -> 1
+  // lifecycle beside it.
+  //
+  // The phase uses SwiftUI's actual default spring. Retargeting preserves phase and velocity, so a
+  // 220 ms tap joins the motion already on screen without needing an artificial slow column.
+  private val rollTapeStiffness: Float = swiftDefaultSpringStiffness
+  private val rollTapeDampingRatio: Float = swiftDefaultSpringDampingRatio
+  private val rollTapeSlowPerColumn: Float = 0f
+  // Presence, depth and softness are functions of tape distance, with one curve for both sides of
+  // a handover. Changing a glyph from "incoming" to "outgoing" therefore cannot change its shape on
+  // the retarget frame.
+  private val rollTapeScaleExponent: Float = 1f
+  // Velocity continuously moves the blur from isolated to crowded. Unlike the old elapsed-time
+  // gates, this cannot switch the stiffness or the look of every live glyph on a tap boundary.
+  private val rollTapeSoftVelocity: Float = 12f
+  // Once a lane has passed this far behind the live phase it cannot contribute visible ink or be a
+  // useful immediate reversal target.
+  private val ROLL_TAPE_CULL_DISTANCE: Float = 1.35f
+  private val ROLL_TAPE_REUSE_DISTANCE: Float = 1.35f
   // Where a roll's departure asymptotes, in travel units, drawn through rollOffsetShape's 1.43
   // power. Measured on a press-and-hold in the example app — the same 30 ms repeat on both sides —
   // as how far the rolling column's ink sits below where it settles: the reference holds a median
@@ -474,11 +534,32 @@ class NumericTextView(context: Context) : View(context) {
      */
     var structuralExit: Boolean = false
     /**
-     * Which column of the cascade this glyph belongs to, counted left→right over the columns that
-     * are changing (0 = leftmost). Kept on the glyph because the reference's wave is partly made of
-     * per-column SLOWNESS, which the integrator needs every tick, not just at schedule time.
+     * This glyph is leaving a column that is RECEIVING another one, in a structural change — a
+     * handover, not a death. It keeps a roll's softness (the reference's substitutions are soft
+     * where its deaths stay crisp) but a death's PACE, because in a structural change the reference
+     * holds the old composition still and then drops it quickly. The two properties are separate:
+     * one is the blur curve, the other is the spring, and this used to force them together.
      */
-    var colIndex: Int = 0
+    var substitutionExit: Boolean = false
+    /**
+     * This glyph was created as a structural BIRTH, so its presence and position use the common
+     * SwiftUI spring instead of the legacy independent roll springs.
+     */
+    var structuralBirth: Boolean = false
+    /**
+     * Ordinal of this glyph's COLUMN among the columns that receive a glyph, left→right (0 =
+     * leftmost, −1 = this column receives nothing and is simply going away).
+     *
+     * This is what both halves of the reference's wave are indexed by — the exit's slowness and the
+     * birth's — because what the wave sweeps across is the columns that are changing CONTENT. It is
+     * kept on the glyph, not derived at schedule time, because the integrator needs it every tick.
+     *
+     * It is deliberately not the cascade's own column ordinal, which also counts the columns being
+     * deleted: on 1,000 -> 877 that put the units at index 4 and slowed it by (1 + 0.265·4)², where
+     * the reference only ever spreads its wave over the three columns a viewer sees change. In a
+     * plain roll every changing column receives a glyph, so the two are the same and nothing moves.
+     */
+    var waveIndex: Int = 0
     var travelMul: Float = 1f      // roll = 1; a structural birth spawns much further out
     var minScale: Float = 0.9f
     // Exponent of presenceScale's convex curve. Birth/exit keep the reference-fitted 2.2; a plain
@@ -495,6 +576,10 @@ class NumericTextView(context: Context) : View(context) {
     var delay: Float = 0f          // cascade stagger before `pendingTarget` is applied
     var pendingTarget: Float = -1f
     var node: RenderNode? = null
+    // Lane on a continuous plain-roll tape. NaN means the glyph is on the structural lifecycle
+    // path and its independent p/off springs remain authoritative.
+    var tapeLane: Float = Float.NaN
+    var tapeSoftness: Float = 1f
 
     /**
      * Where this glyph is headed once its stagger elapses. Scheduling MUST read this rather than
@@ -524,12 +609,20 @@ class NumericTextView(context: Context) : View(context) {
 
   private class Column {
     val glyphs = ArrayList<GlyphState>(3)
+    // One persistent position/velocity pair for every glyph on a normal roll. A new value changes
+    // only [tapeTarget]; every lane derives its position from phase - lane.
+    var tapeActive: Boolean = false
+    var tapePhase: Float = 0f
+    var tapeVelocity: Float = 0f
+    var tapeTarget: Float = 0f
+    var tapeDirection: Int = 1
+    var tapeWaveIndex: Int = 0
     /** The glyph this column is resolving toward, counting one still waiting out its stagger. */
     fun incoming(): GlyphState? = glyphs.lastOrNull { it.effectiveTarget >= 0.5f }
   }
 
   /** Upper bound on glyphs alive in one column; a fast roll legitimately keeps several in flight. */
-  private val MAX_GLYPHS_PER_COLUMN = 6
+  private val MAX_GLYPHS_PER_COLUMN = 8
 
   private val columns = LinkedHashMap<String, Column>()
   private var slotTargetText: String = "0"   // last scheduled target
@@ -593,8 +686,9 @@ class NumericTextView(context: Context) : View(context) {
   // and is really just a button. The reference's roll is compact, as the original note here said.
   // Any band used for this has to stop above y = 0.55 of the screen, where the buttons start.
   private val travelFactor = 0.45f
-  // blurFactor: peak per-digit blur radius as a fraction of line-height. Lower = softer/greyer.
-  private val blurFactor = 0.16f
+  // Peak radius as a fraction of line-height. A small increase merges adjacent tape lanes into one
+  // mass without using blur to conceal a timing mismatch.
+  private val blurFactor = 0.18f
   // Headroom around a glyph's own RenderNode, in multiples of the peak blur radius. A DECAL blur
   // treats everything outside the node as transparent, so the falloff has to fit inside the node
   // or the halo is sliced off square at its edge; three radii is past where the Gaussian is visible.
@@ -619,7 +713,7 @@ class NumericTextView(context: Context) : View(context) {
   // Horizontal spawn displacement of a born glyph, as a fraction of its width: it appears
   // displaced toward the composition's growing edge (e.g. the trailing "5" from the right) and
   // slides to its slot. Direction derived from geometry — no hardcoding.
-  private val enterSpawnXFactor = 0.15f
+  private val enterSpawnXFactor = 0.05f
   // Small outward drift of a leaving glyph (fraction of its width, away from the new centre) —
   // the reference's dying digits spread slightly apart as they fade, they don't converge.
   private val exitDriftOut = 0.18f
@@ -779,6 +873,12 @@ class NumericTextView(context: Context) : View(context) {
       if (isStill(g, scrub)) continue
       val p = presenceOf(g)
       val pc = p.coerceIn(0f, 1f)
+      val renderPc =
+        if (g.structuralBirth && g.target >= 0.5f) {
+          TransitionLogic.structuralArrivalVisualPresence(pc)
+        } else {
+          pc
+        }
       // Softness leads presence, with a velocity term so a fast roll smears more than a slow one.
       //
       // A structural DEATH is the exception: it stays SHARP while it thins and only softens near
@@ -799,17 +899,26 @@ class NumericTextView(context: Context) : View(context) {
         // displacement, about 33 ms later. Blur therefore follows position, not the spring's state.
         val moved = TransitionLogic.smoothstep(0f, BLUR_VELOCITY_GATE, abs(g.off))
         max(
-          TransitionLogic.presenceBlur(pc, changeSpacing),
+          TransitionLogic.presenceBlur(
+            renderPc,
+            if (g.tapeLane.isNaN()) changeSpacing else g.tapeSoftness
+          ),
           (abs(g.v) / blurVelocityRef).coerceIn(0f, 1f) * 0.6f * moved
         )
       }
-      val alpha = (TransitionLogic.presenceAlpha(pc) * (1f - blurAlphaDrop * blurAmt) * 255f)
+      // Adjacent tape lanes have complementary raw presence. Preserve that invariant through the
+      // handoff; applying the structural Hermite curve to both sides made their summed opacity fall
+      // to ~0.8 at the midpoint and produced a visible pulse instead of one stable mass.
+      val visualPresence =
+        if (g.tapeLane.isNaN()) TransitionLogic.presenceAlpha(renderPc) else renderPc
+      val alpha = (visualPresence * (1f - blurAlphaDrop * blurAmt) * 255f)
         .toInt().coerceIn(0, 255)
       if (alpha <= 0) continue
       // Unclamped p: the spring's overshoot carries the glyph slightly past its baseline.
       val yOff = travelPx * g.travelMul * TransitionLogic.rollOffsetShape(g.off)
-      val xDrift = (if (g.xRelTarget >= 0f) 1f else -1f) * g.w * g.driftMul * (1f - pc)
-      val scale = TransitionLogic.presenceScale(pc, g.minScale, g.scaleExponent)
+      val xDrift =
+        (if (g.xRelTarget >= 0f) 1f else -1f) * g.w * g.driftMul * (1f - renderPc)
+      val scale = TransitionLogic.presenceScale(renderPc, g.minScale, g.scaleExponent)
       val radius = maxBlurPx * blurAmt
       if (nodeCapable) {
         drawSlotGlyphNode(canvas, g, centreX + g.xRel + xDrift, bl, yOff, scale, alpha, radius)
@@ -937,6 +1046,167 @@ class NumericTextView(context: Context) : View(context) {
     slotTargetText = committed
   }
 
+  /**
+   * Schedule a stable-topology number change on one continuous tape per changed column.
+   *
+   * Returns false when the live composition cannot be represented safely as a tape — for example a
+   * sign/grouping change or a structural lifecycle already in flight. The caller then uses the
+   * existing structural scheduler without attempting to translate one model into the other.
+   */
+  private fun scheduleRollTape(newLayout: List<KeyedSlot>, newFormatted: String, dir: Int): Boolean {
+    val newKeys = newLayout.mapTo(LinkedHashSet(newLayout.size)) { it.key }
+    val liveKeys = columns.entries
+      .filter { it.value.incoming() != null }
+      .mapTo(LinkedHashSet(columns.size)) { it.key }
+    if (newKeys != liveKeys) return false
+
+    // A tape can start from the one settled glyph seed, or continue an existing tape. Do not enter
+    // it from a structural transition whose independent springs are still resolving.
+    val compatible = columns.values.all { col ->
+      col.tapeActive || (
+        col.glyphs.size == 1 &&
+          col.glyphs[0].target >= 0.5f &&
+          col.glyphs[0].pendingTarget < 0f &&
+          abs(col.glyphs[0].p - 1f) < 0.004f &&
+          abs(col.glyphs[0].off) < 0.01f
+        )
+    }
+    if (!compatible) return false
+
+    val changed = newLayout.filter { ks ->
+      columns[ks.key]?.incoming()?.ch != ks.char
+    }.sortedBy { xRelOf(it) }
+    val waveByKey = changed.mapIndexed { index, ks -> ks.key to index }.toMap()
+
+    for (ks in newLayout) {
+      val col = columns.getValue(ks.key)
+      val current = col.incoming()
+
+      if (!col.tapeActive && current != null && current.ch != ks.char) {
+        col.tapeActive = true
+        col.tapePhase = 0f
+        col.tapeVelocity = 0f
+        col.tapeTarget = 0f
+        current.tapeLane = 0f
+        current.tapeSoftness = 1f
+      }
+
+      if (current != null && current.ch == ks.char) {
+        current.xRelTarget = xRelOf(ks)
+        current.w = ks.width
+        continue
+      }
+      if (!col.tapeActive) return false
+
+      col.tapeDirection = dir
+      col.tapeWaveIndex = waveByKey[ks.key] ?: 0
+
+      // A quick direction reversal may reuse the glyph that is physically waiting on the new
+      // arrival side. A same-direction digit cycle must not pull an old matching character
+      // backwards through the strip, hence the signed-side test.
+      val reusable = col.glyphs
+        .filter { !it.tapeLane.isNaN() && it.ch == ks.char }
+        .filter {
+          TransitionLogic.rollTapeCanReuseLane(
+            lane = it.tapeLane,
+            phase = col.tapePhase,
+            direction = dir,
+            maxDistance = ROLL_TAPE_REUSE_DISTANCE
+          )
+        }
+        .minByOrNull { abs(it.tapeLane - col.tapePhase) }
+
+      val nextLane = reusable?.tapeLane ?: (col.tapeTarget + dir)
+      col.tapeTarget = nextLane
+
+      // The tape has one role-independent visual curve. Target only identifies which glyph must be
+      // retained and eventually settle; it no longer selects a different spring or scale formula.
+      for (other in col.glyphs) {
+        other.target = 0f
+        other.pendingTarget = -1f
+        other.delay = 0f
+        other.structuralExit = false
+        other.substitutionExit = false
+        other.structuralBirth = false
+        other.minScale = rollDepthMin
+        other.scaleExponent = rollTapeScaleExponent
+        other.travelMul = 1f
+        other.driftMul = 0f
+      }
+
+      val g = reusable ?: GlyphState(ks.char).apply {
+        tapeLane = nextLane
+        xRel = xRelOf(ks)
+        xRelTarget = xRel
+        p = TransitionLogic.rollTapePresence(
+          offset = col.tapePhase - tapeLane,
+          isTarget = true,
+          direction = dir
+        )
+        off = col.tapePhase - tapeLane
+        offV = col.tapeVelocity
+      }.also { col.glyphs.add(it) }
+
+      g.target = 1f
+      g.pendingTarget = -1f
+      g.delay = 0f
+      g.tapeLane = nextLane
+      g.tapeSoftness = (1f - abs(col.tapeVelocity) / rollTapeSoftVelocity).coerceIn(0f, 1f)
+      g.xRelTarget = xRelOf(ks)
+      g.w = ks.width
+      g.minScale = rollDepthMin
+      g.scaleExponent = rollTapeScaleExponent
+      g.travelMul = 1f
+      g.driftMul = 0f
+      g.structuralExit = false
+      g.substitutionExit = false
+      g.structuralBirth = false
+
+      // The normal tap/hold regimes need at most the final target plus the lanes surrounding the
+      // presentation phase. Prefer dropping a spent lane behind the motion; never drop the target.
+      while (col.glyphs.size > MAX_GLYPHS_PER_COLUMN) {
+        val spent = col.glyphs
+          .filter { it !== g && !it.tapeLane.isNaN() }
+          .maxByOrNull {
+            (col.tapePhase - it.tapeLane) * col.tapeDirection
+          } ?: break
+        spent.node = null
+        col.glyphs.remove(spent)
+      }
+    }
+
+    slotTargetText = newFormatted
+    return true
+  }
+
+  /**
+   * Hand the current tape presentation back to the independent glyph springs.
+   *
+   * A topology change cannot stay on a per-column tape: columns may be born or disappear, so the
+   * structural scheduler below must become authoritative. Keep every glyph's sampled p/off and
+   * both velocities, but remove the tape marker before that scheduler retargets them. Without this
+   * bridge, an old tape glyph kept being integrated from its lane forever and could never satisfy
+   * the structural target (or the transition's settle condition).
+   */
+  private fun releaseRollTapes(dir: Int) {
+    for (col in columns.values) {
+      if (!col.tapeActive) continue
+      for (g in col.glyphs) {
+        if (g.tapeLane.isNaN()) continue
+        g.tapeLane = Float.NaN
+        g.tapeSoftness = 1f
+        g.delay = 0f
+        g.pendingTarget = -1f
+        g.offTarget = if (g.target >= 0.5f) 0f else dir * rollExitOff
+        if (g.target < 0.5f) g.exitOff = g.offTarget
+      }
+      col.tapeActive = false
+      col.tapePhase = 0f
+      col.tapeVelocity = 0f
+      col.tapeTarget = 0f
+    }
+  }
+
   // Diff the live columns against a new target and MOVE GOALS — never restart anything. A column
   // whose character changes retargets its current glyph to 0 and the incoming one to 1; if the
   // incoming character is still on screen as a fading glyph (the A→B→A of a preset spam), that very
@@ -956,6 +1226,12 @@ class NumericTextView(context: Context) : View(context) {
     val oldIntCount = columns.count { (k, c) -> k.startsWith("I") && c.incoming() != null }
     val newIntCount = newLayout.count { it.key.startsWith("I") }
     val structural = oldIntCount != newIntCount
+
+    // A stable topology is a persistent strip, not a set of fresh enter/exit lifecycles. The
+    // structural path below remains the authority for births, deaths, grouping and in-flight
+    // structural transitions.
+    if (!structural && scheduleRollTape(newLayout, newFormatted, dir)) return
+    releaseRollTapes(dir)
 
     // Phases of the left→right cascade: each departure and each arrival is its own entry, ordered
     // by the X it happens at (centre-relative, so departures in the old composition and arrivals in
@@ -991,6 +1267,7 @@ class NumericTextView(context: Context) : View(context) {
     lastChangeUptimeMs = now
     val restFraction = ((sinceLastChange - cascadeSpamMs) / cascadeSpamMs).coerceIn(0f, 1f)
     changeSpacing = restFraction
+    offsetSpacing = ((sinceLastChange - offsetCrowdMs) / offsetCrowdMs).coerceIn(0f, 1f)
 
     for (ks in newLayout) {
       newKeys.add(ks.key)
@@ -1039,6 +1316,10 @@ class NumericTextView(context: Context) : View(context) {
       g.xRelTarget = xRelOf(ks)
       g.exitOff = dir * rollExitOff          // where it will go if it later leaves
       g.structuralExit = false               // it is arriving; a later death re-arms this
+      g.substitutionExit = false
+      // Set on every arrival, not only on a fresh one: a revived glyph keeps the state of whatever
+      // it was last time, and a birth's slowness must not leak into the roll that revives it.
+      g.structuralBirth = structural && revived == null
       // A revived glyph keeps p/v (opacity continuity is the whole point of reviving one) and xRel
       // (the X spring retargets smoothly on its own). off/offV are reset to a clean arrival start,
       // but ONLY when the glyph has genuinely travelled — off already past REVIVE_OFF_RESET_THRESHOLD
@@ -1106,7 +1387,18 @@ class NumericTextView(context: Context) : View(context) {
           // 0.04 and was gone, which read as fading in place rather than rolling out.
           other.travelMul = enterTravelFactor
           other.exitOff = dir * exitTravelOfBirth
-          other.structuralExit = true
+          // …but this glyph is NOT dying: its column is right here, receiving a new character. It is
+          // a SUBSTITUTION, so it hands over at a roll's pace and keeps `structuralExit` false.
+          //
+          // The rate it used to get (deathRate², the fastest spring in this file, fitted on
+          // 1,000 -> 1 where four glyphs leave and nothing replaces them) evacuated a slot that
+          // still had to be occupied: measured on 1,000 -> 877, the column's summed ink fell to
+          // 0.40 of a glyph against the reference's 0.77, and the grid shows the middle slot empty
+          // at +167 ms where the reference still has a whole digit crossing in it. Only a column
+          // that is going away entirely is a death; those are re-armed in the vanishing-column loop
+          // below, which is where a real death belongs.
+          other.structuralExit = false
+          other.substitutionExit = true
         }
         other.delay = 0f
         if (newestRetired == null || other.p > newestRetired.p) newestRetired = other
@@ -1186,12 +1478,19 @@ class NumericTextView(context: Context) : View(context) {
     val colOrder = phases.groupBy { it.key }.entries
       .sortedBy { e -> e.value.minOf { it.x } }
       .map { it.key }
+    val exitStep = if (structural) structuralStaggerSeconds else staggerSeconds
+    val exitLead = if (structural) structuralExitLead else 0f
+    val enterStep = if (structural) birthSpacingSeconds else enterSpacingSeconds
+    // The columns that RECEIVE a glyph, left→right — what both halves of the wave are indexed by.
+    // A column's departure and its arrival share the ordinal, because they are one handover.
+    val waveOrder = phases.filter { !it.isExit }.map { it.key }
     for (ph in phases) {
       val columnIndex = colOrder.indexOf(ph.key)
-      ph.g.colIndex = columnIndex
+      ph.g.waveIndex = waveOrder.indexOf(ph.key)
       when {
         ph.isExit -> {
-          ph.g.armDelay(restFraction * columnIndex * staggerSeconds)
+          val lead = exitLead + if (ph.g.substitutionExit) substitutionExitLead else 0f
+          ph.g.armDelay(restFraction * (lead + columnIndex * exitStep))
           ph.g.aimAt(0f)
         }
         // Already on screen: no stagger, come back now.
@@ -1205,7 +1504,7 @@ class NumericTextView(context: Context) : View(context) {
         // column's start at ~0.5 s: longer than the 400 ms the example's presets leave between
         // their two values, so "1,000" never finished forming before it became 999.
         else -> {
-          ph.g.armDelay(enterLag + entersSeen * enterSpacingSeconds)
+          ph.g.armDelay(enterLag + entersSeen * enterStep)
           ph.g.aimAt(1f)
           entersSeen++
         }
@@ -1226,9 +1525,57 @@ class NumericTextView(context: Context) : View(context) {
     val colIt = columns.iterator()
     while (colIt.hasNext()) {
       val col = colIt.next().value
+      if (col.tapeActive) {
+        val slow = 1f + rollTapeSlowPerColumn * col.tapeWaveIndex
+        val tapeK = rollTapeStiffness / (slow * slow)
+        TransitionLogic.springIntegrateInto(
+          col.tapePhase,
+          col.tapeVelocity,
+          col.tapeTarget,
+          tapeK,
+          rollTapeDampingRatio,
+          dt,
+          springOut
+        )
+        col.tapePhase = springOut[0]
+        col.tapeVelocity = springOut[1]
+      }
       val gIt = col.glyphs.iterator()
       while (gIt.hasNext()) {
         val g = gIt.next()
+        if (col.tapeActive && !g.tapeLane.isNaN()) {
+          val oldPresence = g.p
+          g.off = col.tapePhase - g.tapeLane
+          g.offV = col.tapeVelocity
+          g.offTarget = col.tapeTarget - g.tapeLane
+          g.p = TransitionLogic.rollTapePresence(
+            offset = g.off,
+            isTarget = g.target >= 0.5f,
+            direction = col.tapeDirection
+          )
+          g.v = if (dt > 0f) (g.p - oldPresence) / dt else 0f
+          g.tapeSoftness =
+            (1f - abs(col.tapeVelocity) / rollTapeSoftVelocity).coerceIn(0f, 1f)
+
+          TransitionLogic.springIntegrateInto(
+            g.xRel,
+            g.xv,
+            g.xRelTarget,
+            xStiffness,
+            xDampingRatio,
+            dt,
+            springOut
+          )
+          g.xRel = springOut[0]
+          g.xv = springOut[1]
+
+          val passedDistance = (col.tapePhase - g.tapeLane) * col.tapeDirection
+          if (g.target < 0.5f && passedDistance > ROLL_TAPE_CULL_DISTANCE) {
+            g.node = null
+            gIt.remove()
+          }
+          continue
+        }
         if (g.delay > 0f) {
           g.delay -= dt
           if (g.delay <= 0f) {
@@ -1260,6 +1607,13 @@ class NumericTextView(context: Context) : View(context) {
         // scenes ran past the reference's own duration (-1 -> 0 at 450 ms against 300). 1.6 was too
         // far back — it measured 0.59 / 0.22 at +33 / +83 ms, near the 0.57 / 0.21 of before any of
         // this — so 1.3 splits it against the reference's 0.78 / 0.30.
+        // Structural births share one physical duration. `birthSlow` remains in the formula so the
+        // lifecycle math stays explicit, but its factor is zero: glyph roles vary visually, not in
+        // their clock.
+        val wave = max(0, g.waveIndex)
+        val birthSlow =
+          if (g.structuralBirth) 1f + birthSlowPerColumn * wave * changeSpacing else 1f
+        val birthSlow2 = birthSlow * birthSlow
         val pK = when {
           // An ARRIVING glyph gains presence faster when changes crowd. In a continuous roll the
           // incoming digit never gets time to darken, so the column reads as a pale smudge and the
@@ -1268,13 +1622,23 @@ class NumericTextView(context: Context) : View(context) {
           // reference's 0.08, while the edges do not move at all: nothing is sliding, the last
           // digit is simply too faint to carry its side. Presence only — the roll's PACE comes from
           // the offset spring and stays where it was tuned.
+          g.target >= 0.5f && g.structuralBirth ->
+            swiftDefaultSpringStiffness
           g.target >= 0.5f ->
             springStiffness * arriveCrossSlow *
-              (1f + (1f - changeSpacing) * (arrivePresenceFast - 1f))
+              (1f + (1f - changeSpacing) * (arrivePresenceFast - 1f)) / birthSlow2
           g.structuralExit -> springStiffness * deathRate * deathRate
+          // A handover inside a structural change: a death's pace, carrying the wave's slowness.
+          // At a roll's pace instead, the whole shrink ran ~70 ms late; at a death's pace with no
+          // lead-in it emptied the slot before its replacement had arrived. It needs both — held,
+          // then quick — which is what the lead plus this rate give it.
+          g.substitutionExit -> {
+            val slow = 1f + structuralExitSlowPerColumn * wave * changeSpacing
+            springStiffness * deathRate * deathRate / (slow * slow)
+          }
           // Isolated: linger and roll out. Spam: clear out before the next digit lands on top.
           else -> {
-            val slow = 1f + exitSlowPerColumn * g.colIndex * changeSpacing
+            val slow = 1f + exitSlowPerColumn * wave * changeSpacing
             springStiffness *
               (rollExitFadeRate + (1f - changeSpacing) * (rollExitFadeFast - rollExitFadeRate)) /
               (slow * slow)
@@ -1302,18 +1666,24 @@ class NumericTextView(context: Context) : View(context) {
           // the reference sits at -0.005. That is the "positioned toward the top" of the report,
           // and the earlier probe missed it by comparing the column to its own settled position
           // instead of to the digits beside it.
+          g.target >= 0.5f && g.structuralBirth ->
+            swiftDefaultSpringStiffness
           g.target >= 0.5f ->
             springStiffness * (arriveOffsetBaseline +
-              (1f - changeSpacing) * (arriveOffsetFast - arriveOffsetBaseline))
+              (1f - offsetSpacing) * (arriveOffsetFast - arriveOffsetBaseline)) / birthSlow2
           // Same multiplier as its presence, so a death covers the same distance before it is gone.
           g.structuralExit -> springStiffness * deathRate * deathRate
+          g.substitutionExit -> {
+            val slow = 1f + structuralExitSlowPerColumn * wave * changeSpacing
+            springStiffness * deathRate * deathRate / (slow * slow)
+          }
           else -> springStiffness * 0.25f
         }
         // The settle bounce is the arrival's alone: a departure that rang would swing back toward
         // the baseline it is trying to leave.
         val offZ = when {
           g.target < 0.5f -> springDampingRatio
-          g.travelMul > 1.5f -> birthDampingRatio      // structural birth: far spawn, same settle
+          g.structuralBirth -> swiftDefaultSpringDampingRatio
           else -> arriveDampingRatio
         }
         TransitionLogic.springIntegrateInto(g.off, g.offV, g.offTarget, offK, offZ, dt, springOut)
