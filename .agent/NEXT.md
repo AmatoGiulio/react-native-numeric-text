@@ -1,7 +1,310 @@
-# START HERE — 2026-07-30
+# START HERE — 2026-07-31
+
+## Frame-by-frame against the reference, five cadences — added 2026-07-31
+
+Everything below this section was measured before the roll-tape rewrite that is currently in the
+working tree. This section measures THAT, at 60 fps, one frame every 16.7 ms, against a same-session
+iOS capture. Five presets, all sync-marked; the two new ones and the humanised cadence were added
+today because no preset covered the cases the reports are actually about.
+
+Recordings, grids and per-frame tables are local only. Tools: `roll_shape.py` (new — below),
+`frame_grid.py --stride 1 --count 50`, `template_fit.py`.
+
+### 1. The cascade has collapsed. This is the big one.
+
+`1,242 → 1,160`, per-column ink as a fraction of the settled column, from the sync marker:
+
+| t (ms) | 0 | 50 | 100 | 150 | 200 | 250 | 300 | 350 |
+|---|---|---|---|---|---|---|---|---|
+| iOS hundreds | 1.10 | 0.72 | **0.50** | 0.61 | 0.77 | 0.89 | 0.94 | 0.98 |
+| iOS tens | 0.83 | 0.83 | 0.76 | **0.44** | 0.49 | 0.68 | 0.83 | 0.92 |
+| iOS units | 0.83 | 0.83 | 0.83 | 0.83 | 0.59 | **0.41** | 0.56 | 0.74 |
+| ours, every column | 0.93 | **0.31** | 0.42 | 0.88 | 0.98 | 0.99 | 0.99 | 0.99 |
+
+The reference's three columns bottom out 100 / 150 / 250 ms in — a 75 ms-per-column staircase over a
+quarter of a second. **Ours bottom out on the same frame as each other**, at +50 ms, and every column
+is back to full ink by +150. The staircase the last three sessions built (`staggerSeconds`,
+`exitSlowPerColumn`, `enterSpacingSeconds`) does not survive the tape: on the continuous-roll grid
+the reference has moved ONLY its hundreds column at +150 ms while ours has already delivered all
+three digits of the next value.
+
+Ours is also about twice as fast overall and its floor is deeper: 0.31 against 0.50.
+
+### 2. The structural path is a whole-composition crossfade
+
+Total ink of the whole number, as a fraction of the settled composition:
+
+| t (ms) | 0 | 66 | 99 | 132 | 165 | 198 | 231 | 264 | 297 | 330 | 396 | 462 |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| `1,000 → 999` iOS | 1.18 | 1.10 | 1.09 | 1.03 | 0.92 | 0.77 | 0.66 | **0.65** | 0.71 | 0.78 | 0.87 | 0.95 |
+| `1,000 → 999` ours | 1.02 | **0.24** | 0.50 | 0.89 | 0.89 | 1.09 | 1.07 | 1.05 | 1.05 | 1.02 | 1.01 | 1.00 |
+| `9,950 → 10,123` iOS | 1.06 | 0.97 | 0.89 | 0.82 | 0.77 | 0.70 | **0.66** | 0.69 | 0.79 | 0.89 | 1.01 | 1.02 |
+| `9,950 → 10,123` ours | 0.98 | **0.40** | 0.36 | 0.58 | 0.58 | 0.79 | 0.88 | 0.92 | 0.92 | 0.95 | 0.99 | 0.99 |
+
+The reference never removes more than a third of the ink and takes 230-260 ms to get there. **Ours
+removes three quarters of it inside 66-100 ms** — every glyph at once, including the ones whose own
+column has not started. In the grid that frame is a number that has almost vanished, and it is what
+reads as a blink rather than a transition.
+
+The frames say what the reference does instead. On `1,000 → 999` it runs
+`1,000 → ▮,000 → ▮9000 → 9▮00 → 99▮0 → 99▮ → 999` over ~320 ms: each new 9 arrives in its own
+column, left to right, and **the old zeros stay fully dark until their own column's turn**. On
+`9,950 → 10,123` it holds `9,950` whole and crisp for 67 ms before anything moves at all.
+
+The cause is in the file and is not subtle: `birthSpacingSeconds`, `structuralStaggerSeconds`,
+`structuralExitLead`, `substitutionExitLead` and `birthSlowPerColumn` are **all 0** in the working
+tree, zeroed on the reading that "a structural change is one transaction" and that the previous
+0.65 "created the reported visible wave". The reference's own frames show a 320 ms left-to-right
+wave on a structural shrink. That reading was wrong, and the section further down in this file
+("The structural path", 2026-07-30 evening) had already fitted the constants that produce it.
+
+### 3. The continuous roll: ours is too dense, too sharp, too short, and leans the wrong way
+
+`roll_shape.py`, 38 frames of a 30 ms press-and-hold, per column (hundreds / tens / units).
+`ink` is in settled glyphs, `edge` is edge energy per unit ink against the same column at rest
+(1.0 = as sharp as a settled digit), `ext` is the ink's 5-95% vertical span in glyph heights,
+`up`/`dn` are how far it reaches past the settled glyph's own box, `crisp` the fraction of frames
+holding something as sharp as a settled digit.
+
+**Increment** (+123 every 30 ms):
+
+| | ink | edge | ext | up | dn | crisp |
+|---|---|---|---|---|---|---|
+| iOS | 0.78 / 0.58 / 0.62 | 0.42 / 0.33 / 0.60 | 1.28 / 1.22 / 1.10 | +0.15 / +0.14 / +0.12 | **+0.36 / +0.28 / +0.10** | 0.11 / 0.00 / 0.05 |
+| ours | 0.95 / 0.82 / 0.73 | 0.44 / 0.43 / 0.43 | 1.01 / 1.13 / 1.08 | +0.08 / +0.12 / +0.07 | +0.12 / +0.21 / +0.12 | 0.08 / 0.05 / 0.00 |
+
+**Decrement** (−123 every 30 ms):
+
+| | ink | edge | ext | up | dn | crisp |
+|---|---|---|---|---|---|---|
+| iOS | 0.38 / 0.40 / 0.48 | 0.51 / 0.49 / 0.93 | 1.26 / 1.24 / 1.08 | **+0.35 / +0.27 / +0.08** | +0.12 / +0.15 / +0.12 | 0.18 / 0.21 / 0.55 |
+| ours | 0.60 / 0.69 / 0.65 | 0.72 / 0.70 / 0.75 | 1.10 / 1.08 / 1.09 | +0.04 / +0.06 / +0.04 | **+0.21 / +0.29 / +0.17** | 0.39 / 0.39 / 0.37 |
+
+Read together:
+
+- **The reference's roll is DIRECTIONAL and ours is not.** Its mass leans the way the value is
+  going — 0.36 below the box on an increment, 0.35 ABOVE it on a decrement, with the centroid
+  crossing from +0.19 to −0.09. Ours leans **down in both directions** (+0.14 and +0.03), so a
+  decrement and an increment draw the same shape. This is the whole of "the mass is pulled up when
+  we go down". The vertical stabilisation that fixed the tap-cadence excursion took the roll's
+  direction with it.
+- **Ours carries too much ink**: 0.60-0.69 against 0.38-0.48 on a decrement, 0.73-0.95 against
+  0.58-0.78 on an increment. Half again as much, and it is why a hold reads as legible digits
+  stepping rather than a mass running.
+- **Ours stays too sharp**: edge 0.70-0.75 against 0.49-0.51, and a settled-sharp digit is on
+  screen twice as often (0.39 against 0.20). The reference's rolling column has no glyph in it.
+- **Ours is too short**: 1.08-1.10 glyph heights against 1.24-1.28.
+
+And it pumps. Total ink through the hold, ours: 1.17 → 0.68 → 0.97 → 0.83 → 0.87 → 0.76. The
+reference: 1.20 → 0.89 → 0.66 → 0.62 → 0.64 → 0.77 — it decays into a plateau and stays there. Ours
+keeps re-forming a whole number between changes, which is the flip-book the reports describe.
+
+### 4. The humanised tap cadence is the closest thing we have
+
+A new `human ×12` preset: gaps 220 / 400 / 210 / 650 / 240 / 380 / 200 / 640 / 230 / 410 / 200 ms,
+a literal table so both platforms replay it identically. Over the whole run every metric matches to
+within noise — ink 0.74/1.17/0.71 against 0.71/1.07/0.66, edge 1.16/0.90/0.79 against
+1.08/0.82/0.75, centroid to 0.01 — **except the reach below the line: the reference's is +0.04 /
++0.04 / +0.03 and ours is +0.20 / +0.22 / +0.17.**
+
+That is the departing ghost the 2026-07-30 note left open, now with a number on it. In the grid it
+is visible as a grey pair hanging under the line for 300 ms after ours has already delivered the new
+digits, while the reference is still handing its columns over one at a time.
+
+### 5. Two tooling traps, both of which produced confident wrong numbers today
+
+- **`locate` took min..max of the inked rows** inside its search band, which assumes the band holds
+  nothing but the number. The Showcase's layout moved again and the +/− buttons landed inside it:
+  the box grew to 901 px against the 403 it should be, every column was normalised against a "digit
+  height" that included two buttons, and the roll measured as reaching 1.4 glyph heights below the
+  line — identically on both platforms, which is exactly what makes it look like a measurement.
+  It now groups the rows and takes the group carrying the most ink. **The Showcase's button area is
+  also pinned to a fixed height now**, so adding presets cannot move the number again.
+- **An odd crop width on yuv420p.** `crop` rounds it down to even while a `reshape` on the raw
+  output still assumes the odd one, so every row lands one pixel further left than the last. The
+  crop decodes, finds columns, and returns numbers — from a sheared image. Force even x/y/w/h.
+
+`template_fit`'s crop starts flush with the digits' top, so it has **no headroom above the glyph**
+and cannot see upward excursion at all. Every "reach up +0.00" in this file below was measured
+through that window. `roll_shape.decode_band` pads both sides (capped at 0.35 of the block, because
+the +/− buttons sit 0.44 below).
+
+### What to try next, in order
+
+1. **Put the structural wave back.** The constants and their fits are in the section below; they
+   were zeroed, not superseded. Measure with the total-ink table above — the target is a floor of
+   0.65 at +230 ms, not 0.24 at +66 ms.
+2. **Give the roll back its per-column stagger under the tape.** The tape merges retargets onto one
+   physical coordinate per column, which is right; what it lost is that column n's coordinate should
+   lag and unroll more slowly than column n−1's.
+3. **Make the roll's mass directional.** Its asymptote and its blur should sit on the side the value
+   is travelling FROM, and today both sit below regardless of direction.
+4. Only then the density and sharpness (items 3 above): less ink, softer, longer. Note these three
+   move together — the 2026-07-30 note "a departing ghost is small AND dense" was fitted on an
+   isolated change and does not describe the hold.
+
+---
+
+# Earlier — 2026-07-30
 
 Read this before touching the Android renderer. It is the state of play, the one experiment that is
 queued, and the traps that already cost a day.
+
+## The regime nobody had measured: TAPS — added 2026-07-30, late
+
+Every number in this file until now came from one of two cadences: a single change from rest, or a
+30 ms press-and-hold. The complaint that would not go away — *"if I press + fast the last digit
+keeps going higher and higher; the glyph should never leave a given area, the way iOS keeps it;
+SwiftUI rolls where ours pops"* — is about neither. It is about someone tapping the button as fast
+as a thumb comfortably goes, 200-250 ms apart. The Showcase now scripts that too (`taps ×8 · 220ms`).
+
+Measured over 1.6 s of it, how far the ink reaches past the settled digit box, in glyph heights:
+
+| | reach up (median / worst) | reach down | ink centre |
+|---|---|---|---|
+| iOS | **+0.00 / +0.00** | +0.02 / +0.04 | +0.004 |
+| ours, before | +0.07 / +0.20 | +0.01 / +0.03 | +0.012 |
+| ours, now | **−0.01 / +0.17** | +0.01 / +0.10 | +0.052 |
+
+The reference never leaves its box at this cadence: the digits change *inside* the line and the only
+thing outside it is a soft ghost hanging just below. Ours climbed out of the top of it — which is
+exactly the report, and why a run of taps read as popping rather than rolling.
+
+**The cause** was the crowding gate. Every rate blends from a crowded value to an isolated one over
+`cascadeSpamMs`, and at 90 ms that blend was finished by 180 — so a 220 ms tap got the isolated
+rates, which are deliberately slow (the arrival's offset spring sits at 0.42 of the base stiffness,
+to keep a crossing pair separated in space). At 220 ms that glyph is still in the air when the next
+tap lands, and the next one starts a fresh roll above it.
+
+**What did not work:** widening `cascadeSpamMs` itself to 200. It fixed the excursion and went pale
+doing it — the same blend also speeds every departure and every arrival's presence, so the column
+never darkens. Ink on screen during the run fell to 0.44 of a whole number against the reference's
+0.69, with only 0.24 of it at full darkness against 0.39.
+
+**What did:** a second, wider gate for the arrival's POSITION alone (`offsetCrowdMs = 260`).
+Presence, blur and the exits keep the old window, so a tapped change still carries an isolated
+change's ink and softness — measured 0.65 / 0.40 against the reference's 0.69 / 0.39 — and all that
+changes is that its digit is on the line by the time the next tap arrives.
+
+Still open here: the worst-case excursion is +0.17 where the reference's is 0.00, and the ink now
+sits 0.05 of a glyph low where the reference sits at 0.004. Both are the departing ghost, which
+hangs below on an increment.
+
+## A trap that invalidated an afternoon's numbers
+
+`template_fit.py` cropped a FIXED box out of the frame, measured against one screen layout. Adding a
+row of buttons to the Showcase moved the number up 67 px on Android and 72 px on iOS, which put half
+the digits outside the window and the +/− glyphs inside it. Every number taken after that looked
+like a large, clean regression on the isolated roll — arrivals landing 45 ms early, the crossing
+pair losing all its separation — and none of it was real.
+
+`decode` now calls `locate`, which finds the digits in the frame and builds the box around them. It
+reproduces the hand-fitted constants to within 4 px on the recordings they were fitted to, and it
+follows the layout. **The constants remain only as the fallback.** If a measurement ever looks
+suddenly, uniformly better or worse, dump the crop before believing it.
+
+## The structural path — added 2026-07-30, evening
+
+Everything below this section is about the ROLL. The report that opened this session was about the
+other path, and it was right:
+
+> the decrement does not look like the increment, it does not look like the digits are rolling …
+> ours is much snappier in everything, faster, shorter, less soft in some scenarios
+
+**Why it shows on the decrement and not the increment.** The Showcase starts at 1,000 and steps by
+±123. `+` gives 1,123 — four digits, a plain roll. `−` gives 877 — three digits, so the digit count
+changes and the whole transition goes down the STRUCTURAL path, which none of the roll tuning
+touches. The direction convention itself is fine: on both platforms a decrement rolls upward (the
+outgoing glyph leaves at the top, the incoming one arrives from below), confirmed frame by frame.
+
+**What was wrong with it.** Measured on a new sync-marked preset, `1,000 → 877` (the button is in
+the Showcase next to the other two), per column, arriving ink as a fraction of the settled glyph:
+
+| t (ms) | 33 | 83 | 133 | 183 | 233 | 283 | 333 | 383 |
+|---|---|---|---|---|---|---|---|---|
+| iOS tens | 0.05 | 0.31 | 0.19 | 0.43 | 0.63 | 0.83 | 0.93 | 0.99 |
+| ours tens, before | 0.00 | 0.08 | 0.11 | 0.14 | 0.64 | 0.89 | 0.98 | 1.01 |
+| iOS units | 0.06 | 0.37 | 0.23 | 0.35 | 0.18 | 0.51 | 0.72 | 0.89 |
+| ours units, before | 0.00 | 0.00 | 0.00 | 0.06 | 0.12 | 0.21 | 0.79 | 0.89 |
+
+Every reference column is already lighting up at +33 ms and then ramps for 150-345 ms; ours waited
+out a stagger and flipped in about 100. That is a *snap*, and it is what "the digits are not
+rolling" means. Fitted as durations (0.1 → 0.9 of the arriving ink): iOS 136 / 256 / 345 ms across
+the three columns, ours 148 / 174 / 173 — the reference's wave, ours flat.
+
+**What landed.** The same lesson the roll path already learned, applied here: *the wave is made of
+increasing slowness, not increasing delay.*
+
+1. `birthSlowPerColumn = 0.65` — a structural arrival's springs are divided by `(1 + 0.65·n)²`, so
+   column n takes `(1 + 0.65·n)` times as long. Both of its springs, so the trajectory keeps its
+   shape.
+2. `birthSpacingSeconds = 0.025` and `structuralStaggerSeconds = 0.037` — with the wave carried by
+   duration, the delays come down to what the reference's first-motion frames measure.
+3. A retired glyph in a column that is RECEIVING a new one is a substitution, not a death. It used
+   to run at `deathRate²` — the fastest spring in the file, fitted on `1,000 → 1` where nothing
+   replaces what leaves — which evacuated a slot that still had to be occupied.
+4. `waveIndex` replaces the cascade's column ordinal wherever the wave is indexed. In a shrink the
+   old ordinal also counted the columns being deleted, so the units came out at index 4.
+5. `structuralExitLead = 0.06` + `substitutionExitLead = 0.025` + `structuralStaggerSeconds = 0.018`
+   — the old composition stands whole, then goes quickly, and the glyph holding a slot waits longer
+   than the ones simply being deleted. Held with a roll's pace instead the whole shrink ran ~70 ms
+   late; released with no lead it emptied the slot before its replacement existed. Both were tried.
+
+Arrival ramps after, against the reference above: tens `0.03 / 0.09 / 0.17 / 0.53 / 0.68 / 0.85`,
+units `0.00 / 0.01 / 0.05 / 0.15 / 0.29 / 0.56`. The shape is the reference's; the start is ~80 ms
+behind it. The roll preset is unchanged within run-to-run noise (`waveIndex` equals the old ordinal
+there), re-measured over three runs.
+
+### Is the decrement different from the increment? Yes — but not in the roll
+
+Asked directly, and measured directly, because it is the report that keeps coming back.
+
+**On a plain roll the two directions are the same.** The Showcase has a mirror preset for exactly
+this: `1,242 → 1,160` and `1,160 → 1,242`, the same three columns and the same digits, run three
+times each. Total ink through the change, in whole numbers, and the ink still at full darkness:
+
+| t (ms) | 0 | 50 | 100 | 150 | 200 | 250 | 300 | 350 | 400 |
+|---|---|---|---|---|---|---|---|---|---|
+| total, down | 1.00 | 0.88 | 0.74 | 0.66 | 0.64 | 0.70 | 0.76 | 0.85 | 0.91 |
+| total, up | 0.98 | 0.95 | 0.84 | 0.78 | 0.72 | 0.73 | 0.77 | 0.84 | 0.90 |
+| crisp, down | 0.99 | 0.74 | 0.47 | 0.41 | 0.33 | 0.54 | 0.59 | 0.83 | 0.91 |
+| crisp, up | 0.99 | 0.83 | 0.63 | 0.46 | 0.36 | 0.58 | 0.62 | 0.83 | 0.90 |
+
+The down runs ~40 ms ahead and one twentieth of a glyph deeper. That is the whole difference, and it
+is inside the run-to-run spread. Ink leaving the digit box measures 0.01 of a number in BOTH
+directions — the roll is a crossfade inside the box either way, which is its own open question, but
+not a directional one.
+
+**On a structural change they are not, and cannot be.** A growth only ADDS: on 877 → 1,000 the "1"
+and its separator are born into space nothing had to leave, so the composition reads
+`877 → 1877 → 1,877 → 1,077 → 1,000` and is a legible number in every frame. A shrink has to DELETE
+and then close up: `1,000 → ,000 → 8 00`. The middle of that is not a number, and *that* is what a
+viewer means by "the decrement suffers something". The reference has the same asymmetry of task and
+does not pay it: its own shrink runs `1,000 → 1 8000 → 8 900 → 87 00 → 877 0`, always contiguous,
+because its outgoing digits stay put and stay inked while the new ones arrive beside them.
+
+So the work is not to mirror the increment. It is to stop the shrink from opening a hole.
+
+### Still open on this path
+
+- **The arrivals start ~80 ms late.** The reference has a *toe* — every column is at 0.05 by +33 ms
+  — and `presenceAlpha`'s flat bottom (`h'(0) = 0`) cannot produce one. Changing that curve moves
+  the roll path too, which is fitted, so it needs its own measurement.
+- **The hole, which is the report itself.** At +150-200 ms the shrink shows `8 · · 00` where the
+  reference shows `8 9 00` — one old zero has gone and its slot is empty. Four rounds of timing got
+  the per-column numbers onto the reference (outgoing ink crosses half at 132 / 182 / 228 ms against
+  its 128 / 163 / 189, floors 0.90 / 0.62 / 0.46 against 0.84 / 0.77 / 0.38) and the hole only moved
+  later. What is left is a RATE difference, and it is legible in the frames: our two deaths run at
+  `deathRate²`, the fastest spring in the file, and are finished long before the arrivals — which
+  now ramp for 150-345 ms — have any ink. The reference's deaths and arrivals overlap. The next
+  thing to try is a death that does not outrun the arrival beside it; `deathRate` itself cannot just
+  be lowered, because it is fitted on 1,000 → 1, where nothing arrives at all.
+- **The departures may be far too sharp here.** The fit puts the reference's outgoing σ at 0.16-0.20
+  line-heights where ours reads 0.02-0.05 — but 0.20 is the top of the search grid, and in a shrink
+  the glyphs reflow horizontally through the measurement window, so treat this as a lead, not a
+  number. Widen `SIGMA` in `template_fit.py` before acting on it.
+- Everything here is one transition, `1,000 → 877`, and a growth (`877 → 1,000`) has not been looked
+  at at all.
 
 ## Where things stand
 
