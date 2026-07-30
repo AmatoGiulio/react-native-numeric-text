@@ -131,7 +131,13 @@ class NumericTextView(context: Context) : View(context) {
   // reference's out-of-focus bolla is LIGHT grey, so opacity is coupled to the blur amount.
   // 0.35 washed the mid-transition out too much (user-confirmed: ghosts too pale + an "empty
   // breath" at the crossing that iOS never has — its grey mass stays present throughout).
-  private val blurAlphaDrop: Float = 0.22f
+  // 0.22 -> 0.13. Two changes landed together that each take ink out of a crossing: the blur curve
+  // gained a dead zone at the top and then rises HARDER over the middle (so this coupling now bites
+  // where it used to be mild), and rollDepthMin shrank the mid-crossing glyph. Measured, the
+  // column's ink floor fell from 0.44/0.47/0.54 to 0.36/0.43/0.46 against the reference's
+  // 0.52/0.48/0.52 — the reference's departing ghost is SMALL AND DENSE, and we had made ours small
+  // and pale. Same direction as the 0.35 -> 0.22 move before it, for the same reason.
+  private val blurAlphaDrop: Float = 0.13f
   // Depth floor of a rolling glyph. 0.9 kept an arriving digit at essentially full size the whole
   // way, so nothing read as approaching from depth; the reference's barely-present glyphs measure
   // ~0.72 of their settled height, and presenceScale's convex falloff keeps the visible middle of
@@ -140,7 +146,14 @@ class NumericTextView(context: Context) : View(context) {
   // reason the opacity gate was (see TransitionLogic.presenceAlpha): the reference's glyph a full
   // line-height up is a small but solid digit, not a speck, so shrinking it further only removed
   // ink the reference has.
-  private val rollDepthMin: Float = 0.75f
+  // Then 0.75 -> 0.66. Not a return to the 0.55 that failed: that one removed so much ink the
+  // glyph stopped being a digit, and the reading behind it — a departing glyph a line-height up is
+  // SMALL BUT SOLID — still holds. What changed is that the pair is now genuinely separated in
+  // depth-plus-position (arriveOffsetBaseline), so the size difference has something to read
+  // against; at 0.75 both glyphs of a crossing were near enough full size that they read as two
+  // same-sized digits fighting for one slot. 0.66 puts the mid-crossing glyph at ~0.77 of settled
+  // height against 0.83 before, keeping it a legible digit.
+  private val rollDepthMin: Float = 0.66f
   // presenceScale's curve exponent for a plain roll, against the reference-fitted 2.2 a structural
   // birth/death uses. Measured 2026-07-30 by comparing a frame grid of an isolated roll column by
   // column: at 2.2 the arriving/departing glyph is already within 80-90% of settled height a tenth
@@ -162,8 +175,21 @@ class NumericTextView(context: Context) : View(context) {
   // the column carried by its DEPARTING glyph for longer, and the departures are staggered by
   // staggerSeconds, not by this. So the staircase a viewer sees on a multi-column change is set by
   // the exit cascade; this constant only spaces the arrivals inside it.
-  private val enterSpacingSeconds: Float = 0.045f
-  private val enterLag: Float = 0.04f
+  // 0.045 -> 0.07 on 2026-07-30, moved in step with staggerSeconds. The note above stands on its
+  // own terms — raising this ALONE shortens the visible staircase, because it strands each arrival
+  // behind a departure cascade that has not widened with it. Once the exits are spaced ~70 ms the
+  // arrivals have to follow, or a column's incoming digit lands while the column to its left is
+  // still mid-swap. Per glyph, the reference's incoming ink crosses half at ~133 / 265 / 300 ms.
+  // 0.07 -> 0.076, absorbing arriveCrossSlow's speed-up so that only the first column moves: at
+  // 0.58 every arrival comes ~12 ms sooner, and the spacing gives that back at ~6 ms per column.
+  private val enterSpacingSeconds: Float = 0.076f
+  // 0.04 -> 0 on 2026-07-30. With the exit cascade widened to 0.07 this lag was pure delay: the
+  // per-glyph fit had every incoming column landing ~40 ms behind the reference with the SAME slope
+  // (units crossing 0.1 -> 0.9 in 150 ms on both), i.e. a translation, not a shape error. It cost
+  // the column's summed ink — a floor of 0.33 against the reference's 0.55 — because the outgoing
+  // glyph had already gone by the time the incoming one had any weight. The arrivals are still
+  // sequenced, by enterSpacingSeconds; this constant only pushed the whole run back.
+  private val enterLag: Float = 0f
 
   // The horizontal reflow is a per-glyph spring, not a shared clock. A shared clock had to be
   // rewound on every retarget, which under a rapid spam restarted the reflow and made the
@@ -175,9 +201,23 @@ class NumericTextView(context: Context) : View(context) {
   // change the leftmost changed column leads). Kept SUBTLE — a large delay turns the cascade into
   // a visibly sequential, machine-like wave.
   //
-  // Left at 0.04. Raising it to 0.05 was tried on 2026-07-30 to widen the visible staircase and is
-  // the WRONG LEVER, which the measurement below only made clear afterwards: this delays when a
-  // column STARTS, and the reference barely staggers its starts at all.
+  // 0.04 -> 0.07 on 2026-07-30, on the per-glyph fit. An earlier try at 0.05 was rejected on the
+  // reading below — "the reference barely staggers its starts" — and that reading came from a probe
+  // that could not separate the two glyphs of a column, so a column whose OLD digit was still
+  // sitting there read as "not started". Per-glyph, the reference's outgoing ink crosses its half
+  // point at 65 / 135 / 223 ms across three columns: ~80 ms apart, twice what 0.04 produces even
+  // before the spam gate scales it down. The visible staircase IS the exit cascade.
+  // Only valid alongside a quick per-column collapse (see rollExitFadeRate) — widening the cascade
+  // under a slow collapse just overlaps every column with the next one.
+  // Then 0.07 -> 0.09, on medians over repeated runs (.agent/tools/parity_report.py): at 0.07 the
+  // half-gone times stepped 67 ms per column against the reference's 86, leaving the units 38 ms
+  // early. This also lifts the column's ink floor, because what empties a column is the GAP between
+  // its outgoing glyph going and its incoming one arriving, and the arrivals already land on the
+  // reference — so the gap has to close from the exit side.
+  // Then BACK to 0.05 once exitSlowPerColumn landed. The two are alternative ways to make the same
+  // column look late, and with the reference's per-column slowness in place, 0.09 of delay on top
+  // overshot every half-gone time by 45-76 ms. The vindication of the old note below is exact: most
+  // of the reference's apparent lateness is duration, and only a little of it is delay.
   //
   // Measured on 2,000 → 1,999 (four changing columns), per column, over the middle 50% of the glyph
   // so a neighbour's blur halo cannot reach it, normalised at +283 ms (the next scripted step lands
@@ -203,7 +243,28 @@ class NumericTextView(context: Context) : View(context) {
   // stiffness by ~60, and our settle tail is already LONGER than the reference's (767 ms against
   // 550 ms on this same transition). Whatever lands here has to separate how fast a glyph crosses
   // from how long it takes to come to rest — today one spring does both.
-  private val staggerSeconds: Float = 0.04f
+  private val staggerSeconds: Float = 0.065f
+  // Per-column SLOWNESS of a roll's departure — the other half of the reference's wave, and the
+  // one the old comment below correctly identified as the open work.
+  //
+  // Measured as how long each outgoing glyph takes to go from 0.9 to 0.1 of its ink, on
+  // 1,242 -> 1,160, medians over three runs:
+  //
+  //     iOS    123 / 281 / 188 ms   (hundreds / tens / units)
+  //     before  84 / 249 /  96
+  //
+  // Our columns all collapsed at one rate and were merely released at different times, so the half
+  // -gone instants matched while the character did not: the reference UNROLLS the right-hand
+  // columns, we snapped them in sequence. This divides the exit presence stiffness by
+  // (1 + slow·colIndex)², so column n takes (1 + slow·n) times as long — duration goes as 1/sqrt(K).
+  // 0.5 makes the units (index 2) twice as slow as the leftmost, which is the ratio measured above.
+  // It is deliberately NOT applied to offK: that owns the settle tail, which is already longer than
+  // the reference's, and the two must stay separable — one spring doing both is what made the
+  // earlier sketch of this need a 60x stiffness collapse.
+  // 0.5 -> 0.265, refitted together with rollExitFadeRate once the base rate carried part of the
+  // slowness: what the reference asks for is the RATIO between the leftmost column's fall and the
+  // rightmost's (1.53), not the absolute slowdown, and 0.5 was solving for the ratio alone.
+  private val exitSlowPerColumn: Float = 0.265f
   // Below this gap between two changes the exit cascade is off, and it fades in linearly up to
   // twice it. A hold on +/- repeats every 30 ms and the scripted burst every 45 ms — both must land
   // at zero — while the example's presets, which set two values 400 ms apart, must get the full
@@ -211,7 +272,45 @@ class NumericTextView(context: Context) : View(context) {
   private val cascadeSpamMs: Float = 90f
   // How much faster than the presence spring a ROLL's departure fades, when the change stands
   // alone. See pK below.
-  private val rollExitFadeRate: Float = 1.3f
+  //
+  // Was 1.3 — departures shedding FASTER than arrivals gain — until the per-glyph fit put a number
+  // on what that costs. Summed ink in the units column of 1,242 -> 1,160 (outgoing + incoming, as a
+  // fraction of one settled glyph): the reference never drops below 0.55 and is back over 0.8 within
+  // 100 ms, while at 1.3 we fell to 0.18 and stayed under 0.7 for 200 ms. That hollow is visible in
+  // the grid as a stretch where NO digit in the changing columns is fully inked — two grey ghosts
+  // instead of a handover, which is what "it dissolves" meant.
+  // 0.49 was that first correction — the departure's rate set equal to the arrival's. It fixed the
+  // hollow but bought it with a limp start, because it treated as ONE defect what the per-column fit
+  // then showed to be two. Measured per column on 1,242 -> 1,160, the time each outgoing glyph
+  // crosses half its ink:
+  //
+  //     iOS    65 / 135 / 223 ms   (hundreds / tens / units) — steps of ~80 ms
+  //     at 0.49  117 / 132 / 170                             — steps of ~25 ms
+  //
+  // The reference does NOT hold a glyph with a slow spring. Every column of it collapses fast —
+  // ~130 ms from full to a tenth, its leftmost already down to 0.76 by +33 ms — and what makes the
+  // units look "held" is that their column is released much later. Slowness and lateness produce
+  // the same still frame and are not the same thing: slowing the spring flattened OUR leftmost
+  // column too, which is why it now starts 50 ms late and reads limp.
+  // So the collapse goes back to being quick and the waiting is moved where the reference puts it,
+  // into staggerSeconds. The two must move together — a wide cascade with a slow collapse smears
+  // every column into its neighbour, and a quick collapse on a narrow cascade is the hollow again.
+  // The spam path is deliberately NOT moved with it: rollExitFadeFast (2.9) still owns the
+  // press-and-hold, so the pile-up this constant used to guard against is still guarded.
+  // Then 1.15 -> 0.71 with exitSlowPerColumn dropped alongside it. With the wave's slowness in
+  // place, the leftmost column — which gets none of it — was the one left too quick: 90 ms to fall
+  // against the reference's 123. Solving both ends at once, the fall spans want 123 (index 0) and
+  // 188 (index 2), a ratio of 1.53 rather than the 2.36 we had; duration goes as 1/sqrt(K), so the
+  // base rate drops to (96.5·sqrt(1.15)/123)² ≈ 0.71 and the per-column term to (1.53-1)/2 ≈ 0.265.
+  // Then 0.71 -> 0.95 with staggerSeconds 0.05 -> 0.065. Two residuals were left, and they are one
+  // adjustment: our columns stepped 60 ms apart against the reference's 86 (too narrow), and every
+  // column began ~40 ms after the reference's did. Widening the step alone would have pushed the
+  // units — the one column already on the reference — 40 ms late, so the collapse gets quicker by
+  // the same amount the cascade widens, and the whole run slides back onto it.
+  // Part of that 40 ms is structural and cannot be tuned away: the value reaches the native view in
+  // the React commit that paints the sync marker, but the view acts on it on the NEXT frame, so ~17
+  // ms of it is the pipeline, not the animation.
+  private val rollExitFadeRate: Float = 0.95f
   // …and when changes are arriving faster than a transition can play. Both readings are right and
   // they conflict: an isolated roll should show its old digit roll out (fitted: the reference is at
   // 0.71 / 0.33 of its opacity at +33 / +83 ms), while a continuous roll should not stack four
@@ -241,7 +340,45 @@ class NumericTextView(context: Context) : View(context) {
   // path (arriveOffsetFast is unchanged, so a crowded roll's arrival still snaps in as before). Set
   // by eye against the frame grid, not measured — an isolated roll's two glyphs overlap too much at
   // this travel to isolate one glyph's position in the recording directly.
-  private val arriveOffsetBaseline: Float = 0.75f
+  // 0.75 -> 0.42 on 2026-07-30. The per-glyph fit measures how far APART the two glyphs of a
+  // crossing are while both are on screen, and ours were half the reference's: 0.23 line-heights on
+  // the units against 0.32, and 0.20 against 0.38 on the hundreds. Both platforms' OUTGOING glyph
+  // travels the same distance (-0.14 to -0.18) — the whole difference is the incoming one, which at
+  // +233 ms sits at +0.07 for us and +0.23 for the reference. Ours is essentially in place by the
+  // time it lights up, so the pair reads as one smudge in a single slot instead of one digit above
+  // another. A slower arrival spring keeps it up in the air while it gains its ink.
+  private val arriveOffsetBaseline: Float = 0.42f
+  // How much SLOWER an arriving glyph gains presence, on top of everything above. Applied to the
+  // presence spring only — not to offK, which owns the settle tail that is already longer than the
+  // reference's (767 ms against 550 ms on 2,000 -> 1,999), so slowing it would make a worse problem
+  // worse. Fitted on the column durations of 1,242 -> 1,160 (10%->90% of each column's own change):
+  // the reference runs 50 / 83 / 133 ms on hundreds / tens / units against our 33 / 67 / 83 — the
+  // same shape, uniformly at ~0.70 of the reference's duration. A spring's duration goes as
+  // 1/sqrt(K), so one uniform 1/1.43² ≈ 0.49 on the stiffness stretches all three onto it.
+  // Only lands together with presenceAlpha's smoothstep: each was tried alone and each alone
+  // measured worse, because the curve's shape and the spring's speed are independent defects and
+  // fixing one unmasks the other.
+  // 0.49 -> 0.58. The arrivals of the tens and units land on the reference to within 5 ms, but the
+  // FIRST column's — the only one with no spacing in front of it — was 33 ms late, and that is what
+  // held its ink floor at 0.41 against the reference's 0.52. With no delay to remove, the only thing
+  // making it late is the spring itself, so the spring gets slightly quicker and enterSpacingSeconds
+  // absorbs the difference for every column after the first.
+  // Then 0.58 -> 0.68, absorbing TOP_SLOPE. Giving the alpha curve a live top lowers it everywhere
+  // below p = 1, so an arrival needs ~15 ms more to reach any given ink — the exits wanted that,
+  // the arrivals did not, and they were already on the reference.
+  // Then 0.68 -> 0.55. The two glyphs of a crossing share the ink differently than the reference
+  // does: at +233 ms iOS carries 0.41 of the OUTGOING glyph and 0.14 of the incoming, we carried
+  // 0.22 and 0.34 — the same total (the floors match) split the wrong way round, which is why the
+  // outgoing digit reads as vanishing rather than as riding out of the slot. The arrival crosses
+  // half its ink 28 ms before the reference's, so it is slowed by that much; the exits are already
+  // on the reference and are left alone.
+  // …and then back to 0.66. Slowing the arrival's OPACITY as well as its position overshot: the
+  // first column — the only one with no spacing in front of it, so the spring alone sets it — lit up
+  // 39 ms after the reference's and left its ink floor at 0.37 against 0.52. The two axes are
+  // separable and want opposite things here: the POSITION stays slow (arriveOffsetBaseline, which is
+  // what holds the arriving glyph up in the air and separates the pair), the OPACITY goes back to
+  // quick. Keeping them apart is the same distinction the pair of constants was created for.
+  private val arriveCrossSlow: Float = 0.66f
   private var changeSpacing: Float = 1f   // 1 = isolated change, 0 = spam; see cascadeSpamMs
   // Where a roll's departure asymptotes, in travel units, drawn through rollOffsetShape's 1.43
   // power. Measured on a press-and-hold in the example app — the same 30 ms repeat on both sides —
@@ -336,6 +473,12 @@ class NumericTextView(context: Context) : View(context) {
      * bias that stops a continuous roll piling up crisp ink above the baseline.
      */
     var structuralExit: Boolean = false
+    /**
+     * Which column of the cascade this glyph belongs to, counted left→right over the columns that
+     * are changing (0 = leftmost). Kept on the glyph because the reference's wave is partly made of
+     * per-column SLOWNESS, which the integrator needs every tick, not just at schedule time.
+     */
+    var colIndex: Int = 0
     var travelMul: Float = 1f      // roll = 1; a structural birth spawns much further out
     var minScale: Float = 0.9f
     // Exponent of presenceScale's convex curve. Birth/exit keep the reference-fitted 2.2; a plain
@@ -1045,6 +1188,7 @@ class NumericTextView(context: Context) : View(context) {
       .map { it.key }
     for (ph in phases) {
       val columnIndex = colOrder.indexOf(ph.key)
+      ph.g.colIndex = columnIndex
       when {
         ph.isExit -> {
           ph.g.armDelay(restFraction * columnIndex * staggerSeconds)
@@ -1125,11 +1269,16 @@ class NumericTextView(context: Context) : View(context) {
           // digit is simply too faint to carry its side. Presence only — the roll's PACE comes from
           // the offset spring and stays where it was tuned.
           g.target >= 0.5f ->
-            springStiffness * (1f + (1f - changeSpacing) * (arrivePresenceFast - 1f))
+            springStiffness * arriveCrossSlow *
+              (1f + (1f - changeSpacing) * (arrivePresenceFast - 1f))
           g.structuralExit -> springStiffness * deathRate * deathRate
           // Isolated: linger and roll out. Spam: clear out before the next digit lands on top.
-          else -> springStiffness *
-            (rollExitFadeRate + (1f - changeSpacing) * (rollExitFadeFast - rollExitFadeRate))
+          else -> {
+            val slow = 1f + exitSlowPerColumn * g.colIndex * changeSpacing
+            springStiffness *
+              (rollExitFadeRate + (1f - changeSpacing) * (rollExitFadeFast - rollExitFadeRate)) /
+              (slow * slow)
+          }
         }
         TransitionLogic.springIntegrateInto(g.p, g.v, g.target, pK, springDampingRatio, dt, springOut)
         g.p = springOut[0]; g.v = springOut[1]

@@ -5,7 +5,6 @@ import java.text.NumberFormat
 import java.util.Locale
 import kotlin.math.PI
 import kotlin.math.abs
-import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.sin
 import kotlin.math.sqrt
@@ -334,22 +333,32 @@ object TransitionLogic {
   // past 1 and the glyph rides slightly past its resting baseline before settling back.
 
   /**
-   * Opacity. Deliberately MORE than complementary in the middle: at p = 0.5 this gives 0.66, so
-   * two glyphs crossing sum to about 1.3 glyphs of ink rather than exactly 1.
+   * Opacity — an S with a FLAT bottom and a LIVE top.
    *
-   * That matches the reference, where the dominant glyph of a crossing measures 0.66–0.76 of a
-   * settled digit's darkness — the pair reads as two distinct digits contending for the slot. An
-   * exactly complementary fade put each at 0.5, and after the blur's opacity coupling ~0.44, which
-   * made a fast run look like the digit had faded out rather than changed. The extra ink is not
-   * double-counted visually because the two glyphs sit at different points along the roll.
+   * It began as `p^e` (sub-linear, on a belief that a crossing pair must sum to more than one glyph
+   * of ink) and then became plain smoothstep, when the per-glyph fit showed the opposite: the
+   * reference's summed ink dips at the swap, and what it really does is hold the outgoing glyph
+   * whole and then drop it. Smoothstep gave that, but with one artefact — its tangent at p = 1 is
+   * zero, so a departing glyph LOITERS at full opacity for ~30 ms before it starts to go anywhere.
+   * Measured, every column's half-gone instant sat ~30 ms behind the reference's however the
+   * springs were tuned, and the column's ink floor ran high (0.66 against 0.52) because both glyphs
+   * were being held near their extremes for too long.
+   *
+   * So: a cubic Hermite with h(0)=0, h(1)=1, h'(0)=0 and h'(1)=[TOP_SLOPE].
+   *
+   *     h(p) = (3p² − 2p³) + m·(p³ − p²)
+   *
+   * The flat bottom is kept — that is what stops an arriving glyph lighting up before it has
+   * travelled, and it is measured: the reference's incoming ink is still at 0.01 of its settled
+   * value 183 ms in. The top is given a real slope, so a departure begins to shed the moment it is
+   * released, which is what the reference does (its leftmost column is already down to 0.76 by
+   * +33 ms, with no plateau at all).
    */
   fun presenceAlpha(p: Float): Float {
     val c = p.coerceIn(0f, 1f)
-    // 0.6 up to the crossing, steepening to 1.5 at full presence. A single flatter exponent (0.85)
-    // delayed the tail correctly but dragged the crossing down with it, to 0.55 — below the 0.66
-    // the reference measures, which is the whole point of the sub-linear curve.
-    val e = 0.6f + TAIL_FLATTEN * 2f * max(0f, c - 0.5f)
-    return Math.pow(c.toDouble(), e.toDouble()).toFloat()
+    val c2 = c * c
+    val c3 = c2 * c
+    return (3f * c2 - 2f * c3) + TOP_SLOPE * (c3 - c2)
   }
 
   // A gate that faded the barely-present glyph toward nothing was tried here on 2026-07-30 and
@@ -363,15 +372,16 @@ object TransitionLogic {
   // our 0.043, so the swing is something we are missing, not something to suppress.
 
   /**
-   * How much later the LAST of the opacity arrives, without moving the crossing.
+   * Slope of [presenceAlpha] at full presence. 0 is plain smoothstep; 1 makes the curve
+   * `2p² − p³`, whose slope at the top equals its average.
    *
-   * Measured on the arriving ink's mass in the landing column: the reference reaches half its
-   * settled ink at 100-117 ms — which we already match — but 90% at 217-233 ms and 98% at
-   * 300-333 ms, where the plain 0.6 curve put us at 183-200 and 233-250. The onset is right and the
-   * TAIL is short, so the curve is bent at the top rather than the spring slowed (slowing the
-   * spring would push the matching 50% point out too).
+   * This trades two measured quantities against each other. Raising it moves every departure
+   * earlier — worth ~18 ms of the ~30 ms lag at m = 1 — and lowers the ink both glyphs carry mid
+   * -crossing, which is wanted while the column's floor reads above the reference. Raising it too
+   * far empties the crossing, which is the failure the original sub-linear curve was invented to
+   * avoid. Set from the floor: the reference sits at ~0.52 and we were at 0.66.
    */
-  private const val TAIL_FLATTEN = 0.45f
+  private const val TOP_SLOPE = 0.8f
 
   /**
    * Softness — linear in the presence deficit.
@@ -388,16 +398,25 @@ object TransitionLogic {
   fun presenceBlur(p: Float, softness: Float = 1f): Float {
     val c = p.coerceIn(0f, 1f)
     val a = 1f - c
-    // Linear, with a bump over the middle: 4·p·a is 1 at half presence and 0 at both ends, so the
-    // tail stays exactly as short as the linear curve's while the flight is softer.
+    // Was LINEAR in the presence deficit, so a glyph began to soften the instant it began to fade.
+    // Measured against the reference, that is backwards in time: sampling each outgoing glyph's σ
+    // at the moment it still holds 0.8 of its ink and again at 0.5,
+    //
+    //     iOS    0.03  ->  0.07      (crisp while it is whole, soft once it is going)
+    //     linear 0.05  ->  0.05      (already smeared while whole, never softer than that)
+    //
+    // …which is why our departing ghost reads as a smudge and the reference's reads as a digit
+    // leaving. The peak was never the problem — ours measured at or below the reference's — the
+    // ORDER was. A smoothstep with a dead zone at the top holds the glyph sharp until it has
+    // actually started to go, then softens harder over the middle, ending at the same short tail.
     //
     // `softness` is 1 for a change that stands alone and falls toward 0 as they crowd. A glyph in a
     // continuous roll never gets near full presence, so it never leaves the soft part of the curve
     // and the whole roll reads as a smear; the same curve is exactly right for a single arrival.
-    // Both the bump and the exponent scale with it, and neither touches WHERE any glyph is — which
-    // is why this sharpens a fast roll without moving the centre the fade rate governs.
-    val lift = BLUR_MID_LIFT * softness
-    val bumped = (a * (1f + lift * 4f * c * a)).coerceIn(0f, 1f)
+    // The exponent scales with it, and it does not touch WHERE any glyph is — which is why this
+    // sharpens a fast roll without moving the centre the fade rate governs.
+    val onset = BLUR_ONSET * softness
+    val bumped = smoothstep(onset, BLUR_FULL, a)
     val exp = 1f + (1f - softness) * BLUR_SPAM_FALLOFF
     return if (exp <= 1.001f) bumped else Math.pow(bumped.toDouble(), exp.toDouble()).toFloat()
   }
@@ -406,15 +425,14 @@ object TransitionLogic {
   private const val BLUR_SPAM_FALLOFF = 0.4f
 
   /**
-   * Extra softness at half presence, as a fraction of the linear curve. See [presenceBlur].
+   * How much of a glyph's ink must be gone before it starts to soften, and where it is fully soft.
    *
-   * 0.5 matched the reference's arrival blur on a growth but softened everything mid-flight,
-   * including a continuous roll, where a glyph never gets near full presence and so never leaves
-   * the lifted part of the curve: measured on a press-and-hold, frames at 90% of a settled glyph's
-   * darkness fell to 2.2% against the reference's 6.8%. 0.32 keeps most of the growth's softness
-   * without blurring a fast roll into a smear.
+   * The dead zone at the top is the whole point: it is what keeps a departing digit crisp while it
+   * is still a digit. `BLUR_ONSET` is scaled by `softness` so a crowded roll — where no glyph ever
+   * gets near full presence — loses the dead zone and blurs as it always did.
    */
-  private const val BLUR_MID_LIFT = 0.32f
+  private const val BLUR_ONSET = 0.10f
+  private const val BLUR_FULL = 0.62f
 
   /**
    * Softness of a DYING glyph — deliberately lagged, and with no velocity term.

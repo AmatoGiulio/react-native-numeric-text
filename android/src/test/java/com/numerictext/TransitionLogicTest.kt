@@ -491,23 +491,36 @@ class TransitionLogicTest {
   }
 
   @Test
-  fun presence_crossingKeepsBothGlyphsSubstantial() {
-    // The crossing must not read as the digit fading out. Measured on the reference, the dominant
-    // glyph of a crossing sits at 0.66-0.76 of a settled digit's darkness, so an exactly
-    // complementary fade (0.5 each, less the blur's opacity coupling) is too pale.
-    assertEquals(0.66f, TransitionLogic.presenceAlpha(0.5f), 0.02f)
-    for (p in listOf(0.25f, 0.4f, 0.5f, 0.6f, 0.75f)) {
-      val sum = TransitionLogic.presenceAlpha(p) + TransitionLogic.presenceAlpha(1f - p)
-      assertTrue("pair should exceed one glyph of ink at $p, was $sum", sum > 1.05f)
-      assertTrue("but not pile up into a dark blob at $p, was $sum", sum < 1.45f)
-    }
+  fun presence_crossingIsACleanHandover() {
+    // This asserted the opposite until 2026-07-30: that a crossing pair sums to MORE than one
+    // glyph of ink (> 1.05), which is why the curve was sub-linear. The per-glyph template fit
+    // says the reference's summed ink DIPS at the swap, to ~0.52 of one settled glyph.
+    // The bottom stays flat — an arriving glyph must not light up before it has travelled, and the
+    // reference's incoming ink is still 0.01 at +183 ms.
+    assertTrue(TransitionLogic.presenceAlpha(0.2f) < 0.12f)
+    // …but the TOP is not flat. A zero tangent at full presence made every departure loiter ~30 ms
+    // before it began to go, which measured as every column's half-gone instant sitting that far
+    // behind the reference. Smoothstep would give 0.993 here.
+    assertTrue(
+      "a departure must begin to shed as soon as it is released",
+      TransitionLogic.presenceAlpha(0.95f) < 0.975f
+    )
+    // Mid-crossing each glyph carries well under half: two of them summing near the reference's
+    // measured floor, not the 1.3 glyphs of ink the original curve was built to produce.
+    assertEquals(0.40f, TransitionLogic.presenceAlpha(0.5f), 0.04f)
   }
+
 
   @Test
   fun presence_blurIsSoftMidFlightAndResolvesCleanly() {
     // Mid-flight a glyph must be clearly out of focus…
     assertTrue(TransitionLogic.presenceBlur(0.5f) >= 0.5f)
-    assertTrue(TransitionLogic.presenceBlur(0.8f) >= 0.15f)
+    // …and this used to demand >= 0.15 at p = 0.8 as well, on the belief that a glyph should
+    // already be soft there. Measured, the reference is CRISP while it still holds most of its ink
+    // (σ 0.03 at 0.8 of its ink, 0.07 at 0.5) and ours was the other way round (0.05, 0.05), which
+    // is what made a departing ghost read as a smudge rather than a digit on its way out. The
+    // curve now has a dead zone at the top, so this asserts the opposite: barely soft at 0.8.
+    assertTrue(TransitionLogic.presenceBlur(0.8f) < 0.15f)
     // …but the tail must be short enough that the transition actually looks finished. A sub-linear
     // curve left a residual blur that, at a large font size, still measured several pixels.
     assertTrue(TransitionLogic.presenceBlur(0.98f) < 0.03f)
