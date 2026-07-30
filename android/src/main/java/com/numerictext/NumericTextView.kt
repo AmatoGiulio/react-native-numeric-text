@@ -218,6 +218,11 @@ class NumericTextView(context: Context) : View(context) {
   // all: on an ISOLATED roll its outgoing glyph is still visible 0.14 away, yet during a hold the
   // column's median sits at +0.06 — it passes through and is gone. See rollExitFadeFast.
   private val rollExitOff: Float = 1.0f
+  // How far a revived glyph's off must already be from the baseline before scheduleSlots resets it
+  // to a clean arrival start. Below this it is presumed to have only just been marked to retire —
+  // still effectively at rest — and resetting it would be the jump that caused a regression, not a
+  // fix. See the guard where this is used.
+  private val REVIVE_OFF_RESET_THRESHOLD: Float = 0.15f
   // How much faster a structural DEATH runs than the presence spring — BOTH its springs, so the
   // trajectory keeps its shape and is simply played faster. Fitted per glyph on 1,000 -> 1, where
   // the composition loses four glyphs in sequence (.agent/tools/template_fit.py, single-template
@@ -856,6 +861,29 @@ class NumericTextView(context: Context) : View(context) {
       g.xRelTarget = xRelOf(ks)
       g.exitOff = dir * rollExitOff          // where it will go if it later leaves
       g.structuralExit = false               // it is arriving; a later death re-arms this
+      // A revived glyph keeps p/v (opacity continuity is the whole point of reviving one) and xRel
+      // (the X spring retargets smoothly on its own). off/offV are reset to a clean arrival start,
+      // but ONLY when the glyph has genuinely travelled — off already past REVIVE_OFF_RESET_THRESHOLD
+      // from the baseline.
+      //
+      // Without this, a glyph that fully departed and is now parked at its exit asymptote
+      // (off ≈ dir_old * rollExitOff, p ≈ 0, invisible) gets reused for a new arrival without ever
+      // moving off: if the new direction happens to want the SAME side the glyph is already parked
+      // on, there is nothing left to travel and the roll is invisible. Measured on two consecutive
+      // taps from the same digit history: a fresh "+123" arrival's column swings 0.148 of a glyph
+      // height, a second "+123" swings 0.095 — both a clearly visible roll — but the very next
+      // "-123", reviving glyphs the increments had already parked, swings 0.011. Not a directional
+      // bug: "10 -> 9" away from any revival matches the reference. It is this.
+      //
+      // The threshold exists because an EARLIER, unconditional version of this reset broke a
+      // different case: a glyph only JUST marked to retire — still at p ≈ 1, off ≈ 0, fully sharp,
+      // simply not the target character anymore — got yanked to the arrival's ±1 position while
+      // still drawn at full opacity, which read as the settled number flashing to blank before the
+      // roll cut to the new value. That glyph's off was near 0 precisely because it hadn't gone
+      // anywhere yet, and near 0 is already exactly where a clean arrival start needs it.
+      if (revived != null && abs(g.off) > REVIVE_OFF_RESET_THRESHOLD) {
+        g.off = -dir.toFloat(); g.offV = 0f
+      }
       if (revived == null) col.glyphs.add(g)
 
       // Retire EVERY glyph that is not the one arriving, and let each carry on down the strip on
