@@ -43,6 +43,26 @@ const PRESET_TO = 1160;
 const PRESET_SETTLE_MS = 1200;
 const SYNC_FLASH_MS = 400;
 
+/**
+ * The second preset: a CONTINUOUS roll, scripted.
+ *
+ * The single change above measures the isolated case. It says nothing about the one a viewer sees
+ * most — holding +/− while the number runs — and that case has its own code path in the renderer
+ * (every rate is blended toward a "spam" value as changes crowd), so it can regress while the
+ * isolated case measures perfectly. It did.
+ *
+ * Tapping the button by hand cannot measure it: the taps land 100-200 ms apart, the spacing varies
+ * per run, and it differs between a simulator and an emulator — so iOS and Android would be
+ * answering different questions. Here the ticks are on a fixed clock, the same on both platforms,
+ * and the sync marker dates the first one exactly like the preset above.
+ *
+ * 30 ms is what a real press-and-hold repeats at, and 14 ticks of +123 keeps the whole run at four
+ * digits, so it stays on the roll path rather than the structural one.
+ */
+const HOLD_FROM = 1000;
+const HOLD_STEP_MS = 30;
+const HOLD_TICKS = 14;
+
 const PLAY_LABEL = `Play · ${Math.round(SEQUENCE_DURATION / 1000)}s`;
 
 type Props = { onOpenLab: () => void };
@@ -71,6 +91,30 @@ export function Showcase({ onOpenLab }: Props) {
         setValue(PRESET_TO);
         setSyncing(true);
         timers.current.push(setTimeout(() => setSyncing(false), SYNC_FLASH_MS));
+      }, PRESET_SETTLE_MS)
+    );
+  }, []);
+
+  const runHold = useCallback(() => {
+    timers.current.forEach(clearTimeout);
+    timers.current = [];
+    setSyncing(false);
+    setValue(HOLD_FROM);
+    timers.current.push(
+      setTimeout(() => {
+        // Same one-commit trick as runPreset: the first tick of the roll and the marker that dates
+        // it land together, so the first dark frame IS the frame the roll started on.
+        setValue(HOLD_FROM + STEP);
+        setSyncing(true);
+        timers.current.push(setTimeout(() => setSyncing(false), SYNC_FLASH_MS));
+        for (let i = 2; i <= HOLD_TICKS; i += 1) {
+          timers.current.push(
+            setTimeout(
+              () => setValue(HOLD_FROM + i * STEP),
+              (i - 1) * HOLD_STEP_MS
+            )
+          );
+        }
       }, PRESET_SETTLE_MS)
     );
   }, []);
@@ -131,17 +175,31 @@ export function Showcase({ onOpenLab }: Props) {
       </View>
 
       <View style={styles.actions}>
-        <Pressable
-          style={({ pressed }) => [styles.preset, pressed && styles.pressed]}
-          onPress={runPreset}
-          disabled={playing}
-          accessibilityRole="button"
-        >
-          <Text style={styles.presetText}>
-            {PRESET_FROM.toLocaleString('en-US')} →{' '}
-            {PRESET_TO.toLocaleString('en-US')}
-          </Text>
-        </Pressable>
+        <View style={styles.presetRow}>
+          <Pressable
+            style={({ pressed }) => [styles.preset, pressed && styles.pressed]}
+            onPress={runPreset}
+            disabled={playing}
+            accessibilityRole="button"
+          >
+            <Text style={styles.presetText}>
+              {PRESET_FROM.toLocaleString('en-US')} →{' '}
+              {PRESET_TO.toLocaleString('en-US')}
+            </Text>
+          </Pressable>
+
+          <Pressable
+            style={({ pressed }) => [styles.preset, pressed && styles.pressed]}
+            onPress={runHold}
+            disabled={playing}
+            accessibilityRole="button"
+            accessibilityLabel="Continuous roll"
+          >
+            <Text style={styles.presetText}>
+              roll ×{HOLD_TICKS} · {HOLD_STEP_MS}ms
+            </Text>
+          </Pressable>
+        </View>
 
         <Pressable
           style={({ pressed }) => [styles.play, pressed && styles.pressed]}
@@ -251,6 +309,10 @@ const styles = StyleSheet.create({
   actions: {
     alignItems: 'center',
     gap: 12,
+  },
+  presetRow: {
+    flexDirection: 'row',
+    gap: 8,
   },
   preset: {
     paddingHorizontal: 22,
