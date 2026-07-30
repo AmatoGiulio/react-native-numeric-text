@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { NumericText } from 'react-native-numeric-text';
 import { SEQUENCE, SEQUENCE_DURATION, useSequencePlayer } from './sequence';
@@ -21,6 +21,28 @@ import { SEQUENCE, SEQUENCE_DURATION, useSequencePlayer } from './sequence';
 const START = 1000;
 const STEP = 123;
 
+/**
+ * The measurement preset, and the sync marker that makes it measurable.
+ *
+ * Every parity comparison so far had to GUESS which video frame a transition started on, by looking
+ * for motion — and inside a run of changes that reliably finds the tail of the previous one instead
+ * of the start of this one, which silently invalidated several measurements.
+ *
+ * So the preset ships its own marker. Pressing the button parks the value at PRESET_FROM, waits for
+ * it to settle, then sets PRESET_TO and turns the sync bar black **in the same React commit** — the
+ * native view receives the new value on the very frame the bar goes dark. An analysis script finds
+ * the first dark frame of the bar and has the onset exactly, on either platform, with nothing
+ * inferred.
+ *
+ * 1,242 -> 1,160 changes three columns without changing the digit count (so it stays on the plain
+ * roll path, not the structural one), and its tens digit goes UP (4 -> 6) while the value goes down
+ * — a mixed case a pure decrement would not cover.
+ */
+const PRESET_FROM = 1242;
+const PRESET_TO = 1160;
+const PRESET_SETTLE_MS = 1200;
+const SYNC_FLASH_MS = 400;
+
 const PLAY_LABEL = `Play · ${Math.round(SEQUENCE_DURATION / 1000)}s`;
 
 type Props = { onOpenLab: () => void };
@@ -28,6 +50,30 @@ type Props = { onOpenLab: () => void };
 export function Showcase({ onOpenLab }: Props) {
   const [value, setValue] = useState(START);
   const [playing, setPlaying] = useState(false);
+  const [syncing, setSyncing] = useState(false);
+  const timers = useRef<ReturnType<typeof setTimeout>[]>([]);
+
+  useEffect(
+    () => () => {
+      timers.current.forEach(clearTimeout);
+    },
+    []
+  );
+
+  const runPreset = useCallback(() => {
+    timers.current.forEach(clearTimeout);
+    timers.current = [];
+    setSyncing(false);
+    setValue(PRESET_FROM);
+    timers.current.push(
+      setTimeout(() => {
+        // One commit: the value the renderer must animate, and the marker that dates it.
+        setValue(PRESET_TO);
+        setSyncing(true);
+        timers.current.push(setTimeout(() => setSyncing(false), SYNC_FLASH_MS));
+      }, PRESET_SETTLE_MS)
+    );
+  }, []);
 
   const onDone = useCallback(() => setPlaying(false), []);
   const { play, stop } = useSequencePlayer(
@@ -53,6 +99,10 @@ export function Showcase({ onOpenLab }: Props) {
 
   return (
     <View style={styles.screen}>
+      {/* Sync marker. Fixed position, clear of the status bar above and the number below, so a
+          measuring band for either never overlaps it. */}
+      <View style={[styles.sync, syncing && styles.syncOn]} />
+
       <Pressable
         style={styles.lab}
         onPress={onOpenLab}
@@ -80,13 +130,27 @@ export function Showcase({ onOpenLab }: Props) {
         </View>
       </View>
 
-      <Pressable
-        style={({ pressed }) => [styles.play, pressed && styles.pressed]}
-        onPress={togglePlay}
-        accessibilityRole="button"
-      >
-        <Text style={styles.playText}>{playing ? 'Stop' : PLAY_LABEL}</Text>
-      </Pressable>
+      <View style={styles.actions}>
+        <Pressable
+          style={({ pressed }) => [styles.preset, pressed && styles.pressed]}
+          onPress={runPreset}
+          disabled={playing}
+          accessibilityRole="button"
+        >
+          <Text style={styles.presetText}>
+            {PRESET_FROM.toLocaleString('en-US')} →{' '}
+            {PRESET_TO.toLocaleString('en-US')}
+          </Text>
+        </Pressable>
+
+        <Pressable
+          style={({ pressed }) => [styles.play, pressed && styles.pressed]}
+          onPress={togglePlay}
+          accessibilityRole="button"
+        >
+          <Text style={styles.playText}>{playing ? 'Stop' : PLAY_LABEL}</Text>
+        </Pressable>
+      </View>
     </View>
   );
 }
@@ -168,6 +232,36 @@ const styles = StyleSheet.create({
     fontWeight: '500',
     color: INK,
     lineHeight: 32,
+  },
+
+  // Absolute so it cannot shift the layout when it toggles — a moved number would be a second,
+  // invisible variable in every frame comparison.
+  sync: {
+    position: 'absolute',
+    top: 96,
+    left: 0,
+    right: 0,
+    height: 30,
+    backgroundColor: 'transparent',
+  },
+  syncOn: {
+    backgroundColor: '#000',
+  },
+
+  actions: {
+    alignItems: 'center',
+    gap: 12,
+  },
+  preset: {
+    paddingHorizontal: 22,
+    paddingVertical: 11,
+    borderRadius: 999,
+    backgroundColor: QUIET,
+  },
+  presetText: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: '#4a4a55',
   },
 
   play: {
