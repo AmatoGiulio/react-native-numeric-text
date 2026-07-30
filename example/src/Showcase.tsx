@@ -1,248 +1,188 @@
 import { useCallback, useState } from 'react';
-import {
-  Animated,
-  Easing,
-  Pressable,
-  StyleSheet,
-  Text,
-  View,
-  useAnimatedValue,
-} from 'react-native';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { NumericText } from 'react-native-numeric-text';
-import { Caption } from './Caption';
-import { ActionButton } from './controls/ActionButton';
-import { useHoldRepeat } from './controls/useHoldRepeat';
-import { useSequencePlayer } from './sequence';
-import {
-  SHOWCASE,
-  SHOWCASE_DURATION,
-  SHOWCASE_START,
-} from './showcaseSequence';
+import { SEQUENCE, SEQUENCE_DURATION, useSequencePlayer } from './sequence';
 
-const DURATION_LABEL = `${(SHOWCASE_DURATION / 1000).toFixed(0)}s`;
+/**
+ * The demo screen, kept to what a camera should see: the number, the two buttons that change it,
+ * and one button that plays the scripted run.
+ *
+ * The number and the +/− pair follow the SwiftUI example this library is measured against
+ * (SchroederNathan/expo-ui-examples, `numeric-transitions`): a single count, one step of ±123 per
+ * press — big enough that several columns change at once — and a centred stack with the buttons
+ * under the number. Everything here is plain React Native; the only native thing on screen is the
+ * number itself, which is the point of the recording.
+ *
+ * The measurement harness — the SwiftUI reference toggle, the presets, the diagnostics — lives on
+ * the Lab screen. This one just plays the same [SEQUENCE] the Lab does, so a Showcase recording on
+ * iOS and one on Android line up frame for frame.
+ */
+
+const START = 1000;
+const STEP = 123;
+
+const PLAY_LABEL = `Play · ${Math.round(SEQUENCE_DURATION / 1000)}s`;
 
 type Props = { onOpenLab: () => void };
 
-/**
- * The demo screen: the number, the two controls people actually reach for, and one button that
- * plays the whole story.
- *
- * Everything the comparison lab needs — the SwiftUI toggle, the presets, the diagnostics — lives
- * on the other screen. This one is meant to be pointed at a camera, so nothing appears on it that
- * would not survive being recorded.
- *
- * Play and reset are real native buttons, SwiftUI on iOS and Jetpack Compose on Android. The
- * increment and decrement pair are not, and cannot be: neither native button reports press-down
- * and press-up, only a completed press, and a control that accelerates while held needs to know
- * it is still being held. See `controls/ActionButton.types.ts`.
- */
 export function Showcase({ onOpenLab }: Props) {
-  const [value, setValue] = useState(SHOWCASE_START);
-  const [caption, setCaption] = useState('');
+  const [value, setValue] = useState(START);
   const [playing, setPlaying] = useState(false);
-  const progress = useAnimatedValue(0);
 
-  // An empty phase keeps the previous caption up: a scene's silent setup step should not blank
-  // the line before the scene it sets up.
-  const onPhase = useCallback((phase: string) => {
-    if (phase) setCaption(phase);
-  }, []);
+  const onDone = useCallback(() => setPlaying(false), []);
+  const { play, stop } = useSequencePlayer(
+    setValue,
+    undefined,
+    onDone,
+    SEQUENCE
+  );
 
-  const onDone = useCallback(() => {
-    setPlaying(false);
-    setCaption('');
-  }, []);
-
-  const { play, stop } = useSequencePlayer(setValue, onPhase, onDone, SHOWCASE);
-
-  const startSequence = useCallback(() => {
+  const togglePlay = useCallback(() => {
+    if (playing) {
+      stop();
+      setPlaying(false);
+      return;
+    }
     setPlaying(true);
-    setCaption('');
-    progress.setValue(0);
-    Animated.timing(progress, {
-      toValue: 1,
-      duration: SHOWCASE_DURATION,
-      easing: Easing.linear,
-      useNativeDriver: true,
-    }).start();
     play();
-  }, [play, progress]);
+  }, [playing, play, stop]);
 
-  const stopSequence = useCallback(() => {
-    stop();
-    progress.stopAnimation();
-    progress.setValue(0);
-    setPlaying(false);
-    setCaption('');
-  }, [stop, progress]);
-
-  const bump = useCallback((direction: number) => {
-    setValue((v) => v + direction);
+  const change = useCallback((delta: number) => {
+    setValue((n) => n + delta);
   }, []);
-  const hold = useHoldRepeat(bump);
-
-  const reset = useCallback(() => {
-    if (playing) return;
-    hold.stop();
-    setValue(SHOWCASE_START);
-  }, [playing, hold]);
 
   return (
     <View style={styles.screen}>
       <Pressable
-        style={styles.labLink}
+        style={styles.lab}
         onPress={onOpenLab}
         accessibilityRole="button"
       >
-        <Text style={styles.labLinkText}>Lab</Text>
+        <Text style={styles.labText}>Lab</Text>
       </Pressable>
 
-      <View style={styles.stage}>
-        <NumericText
-          value={value}
-          locale="en-US"
-          direction="automatic"
-          animationDuration={220}
-          useGrouping
-          maximumFractionDigits={3}
-          style={styles.number}
-        />
-        <Caption text={caption} />
-      </View>
-
-      <View style={styles.controls}>
-        <View style={styles.progressTrack}>
-          {/* No visibility toggle needed: at rest the scale is 0, so the fill has no width. */}
-          <Animated.View
-            style={[styles.progressFill, { transform: [{ scaleX: progress }] }]}
-          />
-        </View>
-
-        <View style={styles.actions}>
-          <ActionButton
-            label={playing ? 'Stop' : `Play · ${DURATION_LABEL}`}
-            icon={playing ? 'stop' : 'play'}
-            onPress={playing ? stopSequence : startSequence}
-          />
-          <ActionButton
-            label="Reset"
-            icon="reset"
-            variant="secondary"
-            onPress={reset}
-          />
-        </View>
+      <View style={styles.stack}>
+        <NumericText value={value} style={styles.number} />
 
         <View style={styles.row}>
-          <Pressable
-            style={({ pressed }) => [styles.circle, pressed && styles.pressed]}
-            onPressIn={() => !playing && hold.start(-1)}
-            onPressOut={hold.stop}
-            accessibilityLabel="Decrement, hold to repeat"
-          >
-            <Text style={styles.circleText}>−</Text>
-          </Pressable>
-          <Pressable
-            style={({ pressed }) => [styles.circle, pressed && styles.pressed]}
-            onPressIn={() => !playing && hold.start(1)}
-            onPressOut={hold.stop}
-            accessibilityLabel="Increment, hold to repeat"
-          >
-            <Text style={styles.circleText}>+</Text>
-          </Pressable>
+          <Round
+            label="−"
+            hint="Decrement"
+            onPress={() => change(-STEP)}
+            disabled={playing}
+          />
+          <Round
+            label="+"
+            hint="Increment"
+            onPress={() => change(STEP)}
+            disabled={playing}
+          />
         </View>
-
-        <Text style={styles.hint}>Hold + or − — it speeds up as you hold</Text>
       </View>
+
+      <Pressable
+        style={({ pressed }) => [styles.play, pressed && styles.pressed]}
+        onPress={togglePlay}
+        accessibilityRole="button"
+      >
+        <Text style={styles.playText}>{playing ? 'Stop' : PLAY_LABEL}</Text>
+      </Pressable>
     </View>
   );
 }
 
+type RoundProps = {
+  label: string;
+  hint: string;
+  onPress: () => void;
+  disabled: boolean;
+};
+
+function Round({ label, hint, onPress, disabled }: RoundProps) {
+  return (
+    <Pressable
+      style={({ pressed }) => [styles.round, pressed && styles.pressed]}
+      onPress={onPress}
+      disabled={disabled}
+      accessibilityRole="button"
+      accessibilityLabel={hint}
+    >
+      <Text style={styles.roundText}>{label}</Text>
+    </Pressable>
+  );
+}
+
 const INK = '#0b0b0d';
+const QUIET = '#e7e7ec';
 
 const styles = StyleSheet.create({
   screen: {
     flex: 1,
     backgroundColor: '#f4f4f6',
+    alignItems: 'center',
     justifyContent: 'space-between',
     paddingTop: 72,
     paddingBottom: 56,
     paddingHorizontal: 24,
   },
-  labLink: {
+  lab: {
     alignSelf: 'flex-end',
     paddingHorizontal: 14,
     paddingVertical: 7,
     borderRadius: 999,
-    backgroundColor: '#e7e7ec',
+    backgroundColor: QUIET,
   },
-  labLinkText: {
+  labText: {
     fontSize: 13,
     fontWeight: '600',
     color: '#6a6a75',
     letterSpacing: 0.3,
   },
 
-  stage: {
+  // The reference stack: number, then the buttons, 32 apart.
+  stack: {
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 28,
+    gap: 32,
   },
   number: {
-    fontSize: 88,
+    fontSize: 84,
     fontWeight: '700',
     color: INK,
   },
-
-  controls: {
-    alignItems: 'center',
-    gap: 22,
-  },
-  progressTrack: {
-    width: '60%',
-    height: 2,
-    borderRadius: 1,
-    backgroundColor: '#e2e2e8',
-    overflow: 'hidden',
-  },
-  progressFill: {
-    width: '100%',
-    height: '100%',
-    backgroundColor: INK,
-    // scaleX grows from the centre by default; anchor it left so it reads as a progress bar.
-    transformOrigin: 'left',
-  },
-
-  actions: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-  },
-
   row: {
     flexDirection: 'row',
-    gap: 18,
+    gap: 16,
   },
-  circle: {
+  round: {
     width: 62,
     height: 62,
     borderRadius: 31,
-    backgroundColor: '#e7e7ec',
+    backgroundColor: QUIET,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  circleText: {
+  roundText: {
     fontSize: 28,
     fontWeight: '500',
     color: INK,
     lineHeight: 32,
   },
-  pressed: {
-    opacity: 0.6,
+
+  play: {
+    paddingHorizontal: 28,
+    paddingVertical: 14,
+    borderRadius: 999,
+    backgroundColor: INK,
+  },
+  playText: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#fff',
   },
 
-  hint: {
-    fontSize: 13,
-    color: '#9a9aa6',
+  pressed: {
+    opacity: 0.6,
   },
 });
