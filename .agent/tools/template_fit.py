@@ -33,9 +33,85 @@ FPS = 60
 CROP = {                 # w, h, x, y in source pixels — a box 4.5 x 1.6 line-heights on the number
     # Re-derived 2026-07-30 for the sync-marker recordings: iOS 1206x2622 (simctl), Android
     # 1080x2400. The old values were for earlier captures and silently cropped the wrong region.
+    # Kept only as the fallback and the sanity check for [locate], which finds the number itself.
     'ios':     (1134, 403, 36, 958),
     'android': (1017, 362, 31, 881),
 }
+
+# Where in the frame to look for the number, as a fraction of screen height. Wide enough to cover
+# either platform's layout — the number does move when the Showcase changes — and to hold the whole
+# glyph on both. It no longer has to EXCLUDE the +/− buttons: the band having to be tight enough to
+# do that is what broke when the layout moved again, so the row grouping below separates them
+# instead. The band's only remaining job is to keep the status bar and the preset pills out.
+SEARCH_BAND = (0.18, 0.50)
+
+
+def locate(path, platform):
+    """
+    Find the crop box by finding the DIGITS, instead of trusting a constant.
+
+    A constant crop is measured against one screen layout, and the Showcase's layout is not frozen:
+    adding one row of buttons on 2026-07-30 moved the number up 67 px on Android and 72 px on iOS,
+    which put half the digits outside the window and the +/− buttons inside it. Every number taken
+    that afternoon looked like a large, clean regression — the arrivals appeared to land 45 ms early
+    and the crossing pair to lose all of its separation — and none of it was real.
+
+    So: decode one settled frame, take the rows that carry real text ink inside [SEARCH_BAND], and
+    build the same box the constants describe relative to them (it starts 0.12 of a digit height
+    below the digits' top and is 1.82 of one tall — that is what the hand-fitted constants measure).
+
+    The rows are GROUPED before the box is built, and the group carrying the most ink wins. Taking
+    plain min..max instead assumes the band holds nothing but the number, which stopped being true
+    the moment the layout moved again: the +/− buttons landed inside it and the box grew to 901 px
+    against the 403 it should be, so every column was normalised against a digit height that
+    included two buttons. It read as a 30 px tall digit and produced confident nonsense. A number is
+    one contiguous block of rows; a button is another, with a gap between them.
+    """
+    probe = subprocess.run(
+        ['ffprobe', '-v', 'error', '-select_streams', 'v:0', '-show_entries',
+         'stream=width,height,nb_frames', '-of', 'csv=p=0:s=,', path],
+        capture_output=True, text=True).stdout.strip().split(',')
+    sw, sh = int(probe[0]), int(probe[1])
+    # A frame late enough that the number is settled, whatever the preset was.
+    raw = subprocess.run(
+        ['ffmpeg', '-v', 'error', '-sseof', '-1', '-i', path, '-vf', 'format=gray',
+         '-frames:v', '1', '-f', 'rawvideo', '-pix_fmt', 'gray', '-'],
+        capture_output=True).stdout
+    if len(raw) < sw * sh:
+        return CROP[platform]
+    frame = np.frombuffer(raw[:sw * sh], dtype=np.uint8).reshape(sh, sw).astype(np.float32)
+    lo, hi = int(sh * SEARCH_BAND[0]), int(sh * SEARCH_BAND[1])
+    bg = float(np.median(frame[lo:hi, :20]))
+    ink_ = np.clip(bg - frame[lo:hi], 0, None)
+    ink_[ink_ < 80] = 0                       # real text ink, not the pale button fills
+    rows = ink_.sum(axis=1)
+    if rows.max() <= 0:
+        return CROP[platform]
+    on = rows > rows.max() * 0.03
+    # Group the inked rows, tolerating gaps up to 1% of the screen (the dot of a comma, antialias
+    # noise) but not the ~5% of blank page that separates the number from the buttons below it.
+    gap = max(2, int(sh * 0.01))
+    runs, s, blank = [], None, 0
+    for i, v in enumerate(on):
+        if v:
+            if s is None:
+                s = i
+            blank = 0
+        elif s is not None:
+            blank += 1
+            if blank > gap:
+                runs.append((s, i - blank))
+                s = None
+    if s is not None:
+        runs.append((s, len(on) - 1))
+    if not runs:
+        return CROP[platform]
+    s, e = max(runs, key=lambda r: rows[r[0]:r[1] + 1].sum())
+    top, bot = lo + int(s), lo + int(e)
+    dh = bot - top
+    if dh < sh * 0.04:                        # implausible: fall back rather than measure noise
+        return CROP[platform]
+    return (int(sw * 0.94), int(round(dh * 1.82)), int(sw * 0.03), int(round(top + dh * 0.12)))
 
 # Search grid. 3 px is 0.023 of a line height; the reference's residual tail is ~0.05, so the grid
 # resolves it four times over. ±72 px covers ±0.54 line-heights, past the 0.48 a birth spawns from.
@@ -44,7 +120,7 @@ SIGMA = np.array([0.01, 2, 4, 6, 9, 12, 16, 21, 27])
 
 
 def decode(path, platform):
-    w, h, x, y = CROP[platform]
+    w, h, x, y = locate(path, platform)
     vf = f"fps={FPS},crop={w}:{h}:{x}:{y},scale={W}:{H},format=gray"
     cmd = ['ffmpeg', '-v', 'error', '-i', path, '-vf', vf, '-f', 'rawvideo', '-pix_fmt', 'gray', '-']
     raw = subprocess.run(cmd, capture_output=True).stdout
