@@ -114,6 +114,10 @@ class NumericTextView(context: Context) : View(context) {
   // the velocity term 45% stronger than it was tuned to be. It then pulsed on every digit change —
   // read as a shimmer on a continuous roll — and could even re-blur a glyph that had arrived.
   private val blurVelocityRef: Float = 13f
+  // Displacement, in roll-span units, at which the velocity term above reaches full strength.
+  // 0.06 of the span is about 3 ms of a released spring — enough to keep the first frame sharp
+  // without visibly delaying the smear on a fast roll.
+  private val BLUR_VELOCITY_GATE: Float = 0.06f
   // Opacity drop at full blur. A Gaussian blur alone doesn't lighten a large glyph enough — the
   // reference's out-of-focus bolla is LIGHT grey, so opacity is coupled to the blur amount.
   // 0.35 washed the mid-transition out too much (user-confirmed: ghosts too pale + an "empty
@@ -123,6 +127,10 @@ class NumericTextView(context: Context) : View(context) {
   // way, so nothing read as approaching from depth; the reference's barely-present glyphs measure
   // ~0.72 of their settled height, and presenceScale's convex falloff keeps the visible middle of
   // the roll near full size anyway.
+  // Left at 0.75 alongside the lengthened travel. 0.55 was tried and measured wrong for the same
+  // reason the opacity gate was (see TransitionLogic.presenceAlpha): the reference's glyph a full
+  // line-height up is a small but solid digit, not a speck, so shrinking it further only removed
+  // ink the reference has.
   private val rollDepthMin: Float = 0.75f
 
   // Spacing between successive arrivals. Measured on the reference's 1 → 9,999 growth: consecutive
@@ -352,20 +360,30 @@ class NumericTextView(context: Context) : View(context) {
   //   travel separates the outgoing/incoming glyphs into two distinct dark ghosts (a tall black
   //   column); a short travel makes them overlap near the baseline so they blend into ONE soft
   //   grey mass — the compact, readable roll SwiftUI produces (verified via iOS/Android frame diff).
-  // Halved when the roll offset gained its own coordinate: a glyph now travels the FULL span
-  // (arrival side -> baseline -> out the far side) instead of only half of it, so the same factor
-  // doubled the distance covered. Measured on a continuous roll, the ink's vertical excursion had
-  // gone to 56% of the glyph height against the reference's 18.8%. 0.12 undershot at 10.5%; 0.15
-  // lands on the reference.
-  private val travelFactor = 0.15f
+  // 0.15 was fitted to the wrong quantity, and that is why the roll plateaued. It matched the ink's
+  // vertical EXCURSION — where the column's centre of mass goes, 18.8% of a glyph height on the
+  // reference — by making the travel short. But the reference keeps that centroid low while its ink
+  // REACHES far: measured on 2026-07-30, iOS's rolling column puts ink 0.83 glyph-heights above the
+  // resting digit on an increment and 0.52 on a decrement (and, in a burst, 1.14, spanning over four
+  // glyph heights). Ours reached 0.01. Two ways to hold a centroid still, and we picked the one that
+  // deletes the movement: the reference's far glyph is up there but tiny and nearly transparent, so
+  // it weighs almost nothing.
+  //
+  // So the travel is now long enough to reach the reference's ink, and the centroid is held down
+  // where the reference holds it — by [presenceAlpha]'s low-presence gate and [rollDepthMin] instead
+  // of by refusing to move. 0.95 puts a glyph at p≈0 about 0.95 line-heights up, less the depth
+  // shrink, which lands its top edge near the measured 0.83.
+  private val travelFactor = 0.95f
   // blurFactor: peak per-digit blur radius as a fraction of line-height. Lower = softer/greyer.
   private val blurFactor = 0.16f
   // Headroom around a glyph's own RenderNode, in multiples of the peak blur radius. A DECAL blur
   // treats everything outside the node as transparent, so the falloff has to fit inside the node
   // or the halo is sliced off square at its edge; three radii is past where the Gaussian is visible.
   private val BLUR_MARGIN_FACTOR = 3f
-  // Extra height (per side, × line-height) reserved so the blur/roll can breathe.
-  private val verticalHeadroomFactor = 0.16f
+  // Extra height (per side, × line-height) reserved so the blur/roll can breathe. It has to cover
+  // the full travel plus the blur's halo, or the glyph waiting above the line is sliced off square
+  // at the view's edge — which would hide exactly the ink this travel exists to show.
+  private val verticalHeadroomFactor = 1.10f
   // Depth scale: a rolling glyph shrinks toward this as it leaves and grows back on arrival,
   // so the motion reads as a digit rotating on a cylinder rather than a flat 2D guillotine.
   // Depth: the leaving glyph shrinks more (it recedes), the arriving one barely scales — it
@@ -376,9 +394,11 @@ class NumericTextView(context: Context) : View(context) {
   // fade-in-place read as "the final number at low opacity" — too recognisable.
   // Fitted to the reference growth: a structural birth bottoms out around 0.6 of full size.
   private val enterMinScale = 0.6f
-  // Doubled alongside the halved travelFactor so a structural birth keeps the measured 0.48 of the
-  // line height it spawns from in the reference.
-  private val enterTravelFactor = 3.2f
+  // A multiplier on travelFactor, so it has to move whenever that does: a structural birth still
+  // spawns from the 0.48 of a line height measured on the reference, which is now BELOW the roll's
+  // own travel rather than above it — a born digit appears closer to its slot than a rolling one,
+  // which is what the reference does.
+  private val enterTravelFactor = 0.5f
   // Horizontal spawn displacement of a born glyph, as a fraction of its width: it appears
   // displaced toward the composition's growing edge (e.g. the trailing "5" from the right) and
   // slides to its slot. Direction derived from geometry — no hardcoding.
@@ -554,9 +574,16 @@ class NumericTextView(context: Context) : View(context) {
       val blurAmt = if (g.structuralExit && g.target < 0.5f) {
         TransitionLogic.deathBlur(pc)
       } else {
+        // The velocity term is gated by how far the glyph has actually MOVED. Ungated it made the
+        // roll's first frame its blurriest: a glyph's presence velocity peaks the instant it is
+        // released, so a still, settled digit went soft before it had travelled a pixel. Read
+        // frame-by-frame against the reference, iOS's first frame after a value change is still
+        // sharp and the first thing that changes is the glyph's HEIGHT; the blur arrives with the
+        // displacement, about 33 ms later. Blur therefore follows position, not the spring's state.
+        val moved = TransitionLogic.smoothstep(0f, BLUR_VELOCITY_GATE, abs(g.off))
         max(
           TransitionLogic.presenceBlur(pc, changeSpacing),
-          (abs(g.v) / blurVelocityRef).coerceIn(0f, 1f) * 0.6f
+          (abs(g.v) / blurVelocityRef).coerceIn(0f, 1f) * 0.6f * moved
         )
       }
       val alpha = (TransitionLogic.presenceAlpha(pc) * (1f - blurAlphaDrop * blurAmt) * 255f)

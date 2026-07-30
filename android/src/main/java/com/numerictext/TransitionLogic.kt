@@ -352,6 +352,16 @@ object TransitionLogic {
     return Math.pow(c.toDouble(), e.toDouble()).toFloat()
   }
 
+  // A gate that faded the barely-present glyph toward nothing was tried here on 2026-07-30 and
+  // measured wrong. The idea was that a long travel needs a near-invisible far glyph to keep the
+  // column's centre of mass from swinging — but the reference does not do that. Its arriving glyph,
+  // a full glyph-height above the baseline, is SOLID: the height its ink reaches is 1.02 glyph
+  // heights whether ink is counted at 30%, 20%, 12% or 6% darkness, so there is no faint gradient up
+  // there, there is a digit. (Ours, with the gate, read 0.11 / 0.37 / 0.70 / 0.23 at those same
+  // thresholds — a fade, which is exactly what the gate produced.) The centroid needs no protecting
+  // either: the reference's own excursion on an isolated roll measures 0.554 glyph heights against
+  // our 0.043, so the swing is something we are missing, not something to suppress.
+
   /**
    * How much later the LAST of the opacity arrives, without moving the crossing.
    *
