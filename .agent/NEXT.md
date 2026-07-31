@@ -173,13 +173,47 @@ can express and which would explain why 0.045 fits the growth and leaves the shr
 data points is not enough to write code around: measure `1,000 → 877` (3 columns) and
 `1,000 → 10,000` (5) first.
 
+### The roll's wave, put back — DONE 2026-07-31, measured
+
+`rollTapeStaggerSeconds = 0.075`, as a HOLD on the tape's target — not on its phase, so a glyph on
+screen is never restarted and the tape's merge invariant is untouched. Per column on
+`1,242 → 1,160`, floor and how long the column takes to recover from it (medians of three runs):
+
+| | iOS | before | with the wave |
+|---|---|---|---|
+| hundreds | 0.50 @ **100** ms, 167 ms | 0.56 @ 150, 233 | 0.56 @ **150**, 233 |
+| tens | 0.42 @ **167** ms, 183 ms | 0.52 @ 117, 266 | 0.52 @ **217**, 250 |
+| units | 0.41 @ **250** ms, 167 ms | 0.50 @ 100, 283 | 0.51 @ **317**, 200 |
+
+Before, the three floors were at 150 / 117 / 100 — the units bottomed out FIRST, the staircase
+running backwards. Now they step 150 / 217 / 317: 67 and 100 ms apart against the reference's 67 and
+83. The step is right; the whole staircase is uniformly ~50-67 ms late, and that is the tape spring
+itself, not the wave — column 0 has no hold at all and is still 50 ms behind.
+
+**It is a delay, not a slowness, and the measurement is what says so.** The reference's three
+recoveries take 167 / 183 / 167 ms — equal within a frame. Dividing the phase spring's stiffness
+(`rollTapeSlowPerColumn`, which already existed for this) would have moved the floors apart AND
+stretched the units' recovery to 2.2× the reference's. That constant stays 0.
+
+**Two regimes checked for regression, neither regressed.** At the humanised tap cadence every metric
+is within noise of before and two moved slightly toward the reference. In the 30 ms hold the
+HUNDREDS column moved onto the reference on four metrics at once — ink 0.95 → 0.77 against its 0.78,
+extent 1.01 → 1.23 against 1.28, centroid +0.14 → +0.19 against +0.19, upward reach +0.08 → +0.15
+against +0.15 — because one stagger at the start of a run leaves the columns' phases permanently
+offset, which is what the reference's hold looks like. The tens lost a little (extent 1.13 → 1.00
+against 1.22) and the units are unchanged.
+
+**A latent bug came out with it.** The crowding clock was read AFTER the tape's early return, so a
+tape roll never updated `lastChangeUptimeMs`: through a whole press-and-hold `changeSpacing` and
+`offsetSpacing` stayed at their isolated values, and the first structural change after a burst saw a
+long quiet gap and treated itself as isolated. The clock is now read at the top of `scheduleSlots`,
+before the tape gets its chance.
+
 ### What to try next, in order
 
-1. **Give the roll back its per-column stagger under the tape.** The tape merges retargets onto one
-   physical coordinate per column, which is right; what it lost is that column n's coordinate should
-   lag and unroll more slowly than column n−1's. `scheduleSlots`'s cascade is unreachable on the
-   roll path, so this has to live in `scheduleRollTape` / `rollTapeSlowPerColumn`. Target: column
-   floors 50-100 ms apart, from section 1.
+1. **The roll's staircase is ~50 ms late as a whole.** Column 0 carries no hold, so this is the tape
+   phase spring — `rollTapeStiffness`, currently SwiftUI's own default. It is also what won the tap
+   cadence, so measure all three regimes for anything tried here.
 3. **Make the roll's mass directional.** Its asymptote and its blur should sit on the side the value
    is travelling FROM, and today both sit below regardless of direction.
 4. Only then the density and sharpness (items 3 above): less ink, softer, longer. Note these three

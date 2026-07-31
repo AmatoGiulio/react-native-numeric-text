@@ -480,6 +480,24 @@ class NumericTextView(context: Context) : View(context) {
   private val rollTapeStiffness: Float = swiftDefaultSpringStiffness
   private val rollTapeDampingRatio: Float = swiftDefaultSpringDampingRatio
   private val rollTapeSlowPerColumn: Float = 0f
+  // The roll's left→right wave, as a per-column HOLD on the tape's target.
+  //
+  // Measured on the reference's `1,242 -> 1,160`, per column: it bottoms out at 100 / 167 / 250 ms
+  // and its recoveries take 167 / 183 / 167 ms — identical within a frame. Equal durations at
+  // shifted starts is a DELAY, and it is why [rollTapeSlowPerColumn] stays 0: dividing the phase
+  // spring's stiffness would move the floors apart correctly and stretch the right-hand columns'
+  // recovery to 2.2× the reference's while doing it.
+  //
+  // (The older note under `staggerSeconds` reads the opposite — "the wave is made of increasing
+  // slowness". That was measured through the two-template per-glyph fit, whose own documentation
+  // says the tens column wanders and whose residual is ~0.18. Column ink, which needs no model,
+  // gives three recovery ramps within 16 ms of each other. On the duration question, trust the
+  // direct one; the two are not strictly in conflict, since the outgoing glyph's fall can lengthen
+  // while the column's whole handover keeps its length.)
+  //
+  // 0.075 is the mean of the reference's two steps, 67 and 83 ms. It is scaled by the crowding gate
+  // like every other stagger, so a press-and-hold does not accumulate holds.
+  private val rollTapeStaggerSeconds: Float = 0.075f
   // Presence, depth and softness are functions of tape distance, with one curve for both sides of
   // a handover. Changing a glyph from "incoming" to "outgoing" therefore cannot change its shape on
   // the retarget frame.
@@ -666,6 +684,19 @@ class NumericTextView(context: Context) : View(context) {
     var tapePhase: Float = 0f
     var tapeVelocity: Float = 0f
     var tapeTarget: Float = 0f
+    /**
+     * The lane the tape is OWED but has not been released to yet, and the time left on that hold.
+     *
+     * This is the roll's left→right wave, and it is the only thing in the tape that is not
+     * immediate. It holds the TARGET, never the phase: the spring keeps integrating toward whatever
+     * target it already has, so a glyph on screen is neither restarted nor teleported and the merge
+     * invariant the tape exists for is untouched. A change arriving while a hold is running flushes
+     * it first (see the flush in `scheduleRollTape`), so a stream of changes can never park a column
+     * — each one releases the last one's owed lane before arming its own, and the crowding gate
+     * takes the hold to zero long before a press-and-hold gets near that.
+     */
+    var tapePendingTarget: Float = 0f
+    var tapeDelay: Float = 0f
     var tapeDirection: Int = 1
     var tapeWaveIndex: Int = 0
     /** The glyph this column is resolving toward, counting one still waiting out its stagger. */
@@ -1138,6 +1169,8 @@ class NumericTextView(context: Context) : View(context) {
         col.tapePhase = 0f
         col.tapeVelocity = 0f
         col.tapeTarget = 0f
+        col.tapePendingTarget = 0f
+        col.tapeDelay = 0f
         current.tapeLane = 0f
         current.tapeSoftness = 1f
       }
@@ -1148,6 +1181,16 @@ class NumericTextView(context: Context) : View(context) {
         continue
       }
       if (!col.tapeActive) return false
+
+      // A change arriving while this column is still holding FLUSHES the hold first, so everything
+      // below — the reuse search, the lane arithmetic — sees a tape whose released target is current,
+      // exactly as it did before holds existed. Without the flush a reversal inside the hold window
+      // would look for a reusable lane against a phase that has not moved yet and create a second
+      // glyph on the lane the first one already occupies.
+      if (col.tapeDelay > 0f) {
+        col.tapeDelay = 0f
+        col.tapeTarget = col.tapePendingTarget
+      }
 
       col.tapeDirection = dir
       col.tapeWaveIndex = waveByKey[ks.key] ?: 0
@@ -1167,8 +1210,12 @@ class NumericTextView(context: Context) : View(context) {
         }
         .minByOrNull { abs(it.tapeLane - col.tapePhase) }
 
-      val nextLane = reusable?.tapeLane ?: (col.tapeTarget + dir)
-      col.tapeTarget = nextLane
+      // Lanes stack on the OWED target, not the released one, so a change landing inside another
+      // column's hold still advances by exactly one lane.
+      val nextLane = reusable?.tapeLane ?: (col.tapePendingTarget + dir)
+      col.tapePendingTarget = nextLane
+      val hold = changeSpacing * col.tapeWaveIndex * rollTapeStaggerSeconds
+      if (hold > 0f) col.tapeDelay = hold else col.tapeTarget = nextLane
 
       // The tape has one role-independent visual curve. Target only identifies which glyph must be
       // retained and eventually settle; it no longer selects a different spring or scale formula.
@@ -1255,6 +1302,8 @@ class NumericTextView(context: Context) : View(context) {
       col.tapePhase = 0f
       col.tapeVelocity = 0f
       col.tapeTarget = 0f
+      col.tapePendingTarget = 0f
+      col.tapeDelay = 0f
     }
   }
 
@@ -1266,6 +1315,17 @@ class NumericTextView(context: Context) : View(context) {
   private fun scheduleSlots(newFormatted: String, dir: Int) {
     val newLayout = TransitionLogic.layoutKeyedSlots(newFormatted, currentGroupSep, currentDecimalSep, currentMinusSign, slotMeasure)
     val newKeys = HashSet<String>(newLayout.size)
+
+    // The crowding clock is read HERE, before the tape gets its chance, because a tape roll is a
+    // change like any other. It used to be read after the tape's early return, so a burst of rolls
+    // left `lastChangeUptimeMs` stale and the first structural change after one would see a long
+    // quiet gap and treat itself as isolated.
+    val now = android.os.SystemClock.uptimeMillis()
+    val sinceLastChange = (now - lastChangeUptimeMs).toFloat()
+    lastChangeUptimeMs = now
+    val restFraction = ((sinceLastChange - cascadeSpamMs) / cascadeSpamMs).coerceIn(0f, 1f)
+    changeSpacing = restFraction
+    offsetSpacing = ((sinceLastChange - offsetCrowdMs) / offsetCrowdMs).coerceIn(0f, 1f)
 
     // STRUCTURAL classifier (numeric structure, not pixel width): when the integer digit count
     // changes (10→9, 999→1,000), a changed digit column is NOT a same-slot substitution — the
@@ -1313,13 +1373,6 @@ class NumericTextView(context: Context) : View(context) {
     // exit is reset before its turn and so sits sharp — measured 46-64% of moving frames sharp on
     // the right-hand columns against 1-3% on the left, a split the reference does not have.
     // Elapsed time says that directly.
-    val now = android.os.SystemClock.uptimeMillis()
-    val sinceLastChange = (now - lastChangeUptimeMs).toFloat()
-    lastChangeUptimeMs = now
-    val restFraction = ((sinceLastChange - cascadeSpamMs) / cascadeSpamMs).coerceIn(0f, 1f)
-    changeSpacing = restFraction
-    offsetSpacing = ((sinceLastChange - offsetCrowdMs) / offsetCrowdMs).coerceIn(0f, 1f)
-
     for (ks in newLayout) {
       newKeys.add(ks.key)
       val col = columns.getOrPut(ks.key) { Column() }
@@ -1587,6 +1640,15 @@ class NumericTextView(context: Context) : View(context) {
     while (colIt.hasNext()) {
       val col = colIt.next().value
       if (col.tapeActive) {
+        // Release an owed lane when its hold expires. Only the TARGET waits; the spring below runs
+        // every frame regardless, so a column mid-flight keeps flying while a later column waits.
+        if (col.tapeDelay > 0f) {
+          col.tapeDelay -= dt
+          if (col.tapeDelay <= 0f) {
+            col.tapeDelay = 0f
+            col.tapeTarget = col.tapePendingTarget
+          }
+        }
         val slow = 1f + rollTapeSlowPerColumn * col.tapeWaveIndex
         val tapeK = rollTapeStiffness / (slow * slow)
         TransitionLogic.springIntegrateInto(
