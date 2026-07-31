@@ -1,6 +1,52 @@
-# START HERE — 2026-07-31
+# START HERE — 2026-07-31 (branch `feat/timeline-based-rewrite`)
 
-## Frame-by-frame against the reference, five cadences — added 2026-07-31
+## The persistent-column engine, first measurement — added 2026-07-31, evening
+
+Everything below this section was measured on the OLD spring engine (branch
+`feat/per-slot-springs-ios-parity`). This branch replaced it wholesale with
+`NumericRollEngine` (`NumericTextTimeline.kt`): one persistent column per key, a continuous
+`position` on a strip of glyph stops, ONE spring per column, alpha/scale from distance-to-stop,
+blur from velocity. ~850 lines total against ~3,035.
+
+**New tooling:** `.agent/tools/analyze_pair.py` — one command from raw captures to
+`artifacts/<name>/{REPORT.md, grid.png, shape.txt, pre/end frames, onsets}`. Used for everything
+below. Captures: `captures/ios_human.mov` + `captures/android_human_1.mp4` (humanised ×12,
+`1,000 → 2,476`, onsets 255/106) and the iOS-only `1,242 → 1,160` (onset 191).
+
+Measured on the humanised cadence, whole run, hundreds/tens/units medians (ours / **iOS**):
+
+| | ink | edge | crisp | up | dn |
+|---|---|---|---|---|---|
+| hundreds | 0.94 / **0.75** | 1.38 / **1.15** | 0.93 / **0.75** | +0.10 / **−0.04** | +0.07 / **+0.04** |
+| tens | 1.37 / **1.17** | 0.96 / **0.88** | 0.72 / **0.51** | +0.10 / **−0.02** | +0.07 / **+0.04** |
+| units | 0.86 / **0.71** | 0.99 / **0.79** | 0.64 / **0.45** | +0.08 / **−0.04** | +0.06 / **+0.03** |
+
+Ranked defects, all confirmed in the zoomed frames (`artifacts/human_x12/`):
+
+1. **Direction is INVERTED.** On an increment iOS's new digit arrives from ABOVE and the old one
+   leaves below (re-confirmed this session on both `1,000→1,123` and the decrement mirror
+   `1,242→1,160`; also §6 of METHODOLOGY). Ours arrives from below. In `setTarget`,
+   `next = column.target + directionSign` puts the new stop under the old for direction=+1;
+   the sign must flip (or `offsetY`'s).
+2. **No per-column stagger.** All changed columns move in phase — the mid-transition frame shows
+   the WHOLE old number above and the WHOLE new number below, two legible compositions swapping.
+   iOS moves one column at a time, left→right, ~75 ms apart. The engine has no per-column
+   delay/slowness knob at all yet.
+3. **Both stops far too legible through the crossing.** At mid-crossing each stop has
+   alpha ≈ 0.5 and mild blur, so the frame reads as two numbers. iOS's moving column is an
+   unreadable smudge: alpha should dip harder (summed-ink floor ~0.5, ours ~0.7-0.9) and blur
+   must be driven by crossing progress, not velocity alone — at the reference's crossing the
+   glyph is heavily blurred even when the spring is at peak velocity or near rest.
+4. **The ink leaves the box upward** (+0.10 vs iOS −0.04): STEP_FRACTION 0.40 with fully
+   visible stops pushes legible glyphs a whole step outside the line. iOS confines the visible
+   mass inside ±0.05 of the box at this cadence.
+
+What the model already gets RIGHT (do not regress): retarget continuity — repeated taps move
+the target without restarting anything, no pile-up, no flip-book pumping between changes;
+completion detection is clean; the code is small enough to reason about.
+
+Not yet measured on this branch: structural changes (birth/death/x-glide — the human cadence
+never changes digit count), press-and-hold 30 ms, isolated single roll on Android.
 
 Everything below this section was measured before the roll-tape rewrite that is currently in the
 working tree. This section measures THAT, at 60 fps, one frame every 16.7 ms, against a same-session

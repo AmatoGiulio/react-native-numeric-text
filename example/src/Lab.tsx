@@ -106,7 +106,7 @@ export function Lab({ onOpenShowcase }: LabProps) {
             value={value}
             locale="en-US"
             direction="automatic"
-            animationDuration={220}
+            animationDuration={350}
             reduceMotion={reduceMotion}
             useGrouping
             minimumFractionDigits={0}

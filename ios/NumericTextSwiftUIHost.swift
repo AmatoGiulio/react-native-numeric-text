@@ -177,9 +177,35 @@ private struct NumericTextRoot: View {
       .monospacedDigit()
       .foregroundStyle(model.color)
       .numericTextTransition(countsDown: model.countsDown)
-      // Scoped to `value`: a locale or colour change should repaint, not roll.
       .animation(model.animates ? .spring() : nil, value: model.value)
       .frame(maxWidth: .infinity, maxHeight: .infinity)
+      .mask(edgeFadeMask)
+      .overlay(
+        Rectangle()
+          .stroke(Color.red, lineWidth: 1)
+      )
+  }
+
+  private var edgeFadeMask: some View {
+    VStack(spacing: 0) {
+      LinearGradient(
+        gradient: Gradient(stops: [
+          .init(color: .clear, location: 0),
+          .init(color: .white, location: 0.15),
+        ]),
+        startPoint: .top,
+        endPoint: .bottom
+      )
+      Color.white
+      LinearGradient(
+        gradient: Gradient(stops: [
+          .init(color: .white, location: 0.85),
+          .init(color: .clear, location: 1),
+        ]),
+        startPoint: .top,
+        endPoint: .bottom
+      )
+    }
   }
 
   /// The bundled-font equivalent of Android's default: a rounded system face unless the caller

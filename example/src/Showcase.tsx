@@ -300,7 +300,11 @@ export function Showcase({ onOpenLab }: Props) {
       </Pressable>
 
       <View style={styles.stack}>
-        <NumericText value={value} style={styles.number} />
+        <NumericText
+          animationDuration={320}
+          value={value}
+          style={styles.number}
+        />
 
         <View style={styles.row}>
           <Round
