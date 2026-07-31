@@ -45,28 +45,54 @@ internal class NumericRollEngine {
   )
 
   companion object {
-    /** Separazione tra cifre consecutive nel rullo (1.0x = altezza riga intera). */
     const val STEP_FRACTION = 0.5f
-
-    /** Fisica molla reattiva e smorzata. */
     private const val BASE_RESPONSE_SECONDS = 0.40f
     private const val DAMPING_RATIO = 0.80f
-
-    /** Soglie di arresto. */
     private const val POSITION_EPSILON = 0.001f
     private const val VELOCITY_EPSILON = 0.005f
 
-    /** Modello ottico. */
-    private const val VISIBLE_RANGE = 1.0f
-    private const val SHUTTER_SECONDS = 0.080f
-    private const val MAX_TRAIL_FRACTION = 0.60f
+    const val VISIBLE_RANGE = 1.0f
     internal const val BLUR_X_FACTOR = 0.05f
 
-    /** Asimmetria ENTER / EXIT */
-    private const val ENTER_ALPHA_START = 0.15f
-    private const val ENTER_START_SCALE = 0.65f
-    private const val EXIT_ALPHA_HOLD = 0.35f
-    private const val EXIT_END_SCALE = 0.75f
+    /* ---- ported from per-slot-springs TransitionLogic ---- */
+
+    private const val TOP_SLOPE = 0.8f
+    fun presenceAlpha(presence: Float): Float {
+      val c = presence.coerceIn(0f, 1f); val c2 = c * c; val c3 = c2 * c
+      return (3f * c2 - 2f * c3) + TOP_SLOPE * (c3 - c2)
+    }
+
+    fun presenceScale(presence: Float, minScale: Float, exponent: Float = 2.2f): Float {
+      val a = 1f - presence.coerceIn(0f, 1f)
+      return 1f - (1f - minScale) * Math.pow(a.toDouble(), exponent.toDouble()).toFloat()
+    }
+
+    private const val BLUR_ONSET = 0.10f
+    private const val BLUR_FULL = 0.62f
+    fun presenceBlur(presence: Float, softness: Float = 1f): Float {
+      val a = 1f - presence.coerceIn(0f, 1f)
+      val onset = BLUR_ONSET * softness
+      return smoothstep(onset, BLUR_FULL, a)
+    }
+
+    fun presenceOffsetFraction(presence: Float): Float {
+      val a = 1f - presence
+      val m = Math.pow(abs(a).toDouble(), 1.43).toFloat()
+      return if (a < 0f) -m else m
+    }
+
+    fun rollOffsetShape(off: Float): Float {
+      val m = Math.pow(abs(off).toDouble(), 1.43).toFloat()
+      return if (off < 0f) -m else m
+    }
+
+    fun deathBlur(presence: Float): Float =
+      Math.pow((1f - presence.coerceIn(0f, 1f)).toDouble(), 1.6).toFloat()
+
+    fun smoothstep(edge0: Float, edge1: Float, x: Float): Float {
+      val t = ((x - edge0) / (edge1 - edge0)).coerceIn(0f, 1f)
+      return t * t * (3f - 2f * t)
+    }
 
     fun smootherstep(x: Float): Float {
       val t = x.coerceIn(0f, 1f)
@@ -257,7 +283,6 @@ internal class NumericRollEngine {
 
     for (c in columns.values) {
       val velocityPx = c.velocity * stepPx
-      val trail = (abs(velocityPx) * SHUTTER_SECONDS).coerceAtMost(lineHeightPx * MAX_TRAIL_FRACTION)
       val dir = if (velocityPx < 0f) -1f else 1f
 
       val sortedIndices = c.glyphs.keys.sorted()
@@ -268,7 +293,7 @@ internal class NumericRollEngine {
 
         if (distance >= VISIBLE_RANGE) continue
 
-        val p = (distance / VISIBLE_RANGE).coerceIn(0f, 1f)
+        val presence = (1f - distance / VISIBLE_RANGE).coerceIn(0f, 1f)
         val isEntering = index == c.target
         val isSettled = !isRunning && distance < POSITION_EPSILON
 
@@ -278,42 +303,29 @@ internal class NumericRollEngine {
           else -> GlyphRole.EXIT
         }
 
-        val (alpha, scale, extraBlur) = when (role) {
-          GlyphRole.ANCHOR -> Triple(1f, 1f, 0f)
-          GlyphRole.EXIT -> {
-            val a = 1f - p * p * p
-            val s = 1f - p * (1f - EXIT_END_SCALE)
-            val b = lineHeightPx * MAX_TRAIL_FRACTION * p * p
-            Triple(a, s, b)
-          }
-          GlyphRole.ENTER -> {
-            val a = ENTER_ALPHA_START + (1f - ENTER_ALPHA_START) * (1f - p)
-            val s = ENTER_START_SCALE + (1f - ENTER_START_SCALE) * (1f - p)
-            val b = lineHeightPx * MAX_TRAIL_FRACTION * (1f - p)
-            Triple(a, s, b)
-          }
+        val alpha = presenceAlpha(presence)
+        val (minS, exp) = when (role) {
+          GlyphRole.EXIT -> 0.74f to 2.2f
+          GlyphRole.ENTER -> 0.66f to 0.55f
+          else -> 1f to 2.2f
         }
+        val scale = presenceScale(presence, minS, exp)
+
+        val blurPx = lineHeightPx * 0.18f * presenceBlur(presence)
 
         val finalAlpha = (alpha * c.retireAlpha).coerceIn(0f, 1f)
-
         if (finalAlpha <= 0.01f) continue
 
-        val finalBlur = if (role == GlyphRole.ANCHOR) 0f else trail + extraBlur
+        val shapedOff = rollOffsetShape(relative)
+        val offsetY = shapedOff * stepPx
 
         out.add(
           GlyphSample(
-            key = c.key,
-            ch = ch,
-            kind = c.kind,
-            role = role,
-            x = c.x,
-            offsetY = relative * stepPx,
-            alpha = finalAlpha,
-            scale = scale,
-            velocityY = velocityPx,
-            blurLengthPx = finalBlur,
-            direction = dir,
-            stable = isSettled,
+            key = c.key, ch = ch, kind = c.kind, role = role,
+            x = c.x, offsetY = offsetY,
+            alpha = finalAlpha, scale = scale,
+            velocityY = velocityPx, blurLengthPx = blurPx,
+            direction = dir, stable = isSettled,
           )
         )
       }
