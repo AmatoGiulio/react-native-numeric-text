@@ -526,7 +526,7 @@ object TransitionLogic {
    */
   fun presenceOffsetFraction(p: Float): Float {
     val a = 1f - p
-    val m = Math.pow(abs(a).toDouble(), 1.43).toFloat()
+    val m = Math.pow(abs(a).toDouble(), 1.15).toFloat()
     return if (a < 0f) -m else m
   }
 
@@ -540,7 +540,7 @@ object TransitionLogic {
    * which is what makes a continuous roll read as rotation rather than as a bounce.
    */
   fun rollOffsetShape(off: Float): Float {
-    val m = Math.pow(abs(off).toDouble(), 1.43).toFloat()
+    val m = Math.pow(abs(off).toDouble(), 1.15).toFloat()
     return if (off < 0f) -m else m
   }
 

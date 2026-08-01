@@ -83,7 +83,7 @@ class NumericTextView(context: Context) : View(context) {
   //
   // A fast transition does NOT make a spam re-sharpen: presses land well inside 267 ms, so the
   // reversal catches the glyph mid-flight — which is exactly how the reference behaves.
-  private val springStiffness: Float = 340f
+  private val springStiffness: Float = 250f
   // Just under-damped: keeps a slight settle in the roll's direction without a long ringing tail.
   private val springDampingRatio: Float = 0.9f
   // Damping of the ROLL AXIS spring for an ARRIVING glyph only — this is the settle bounce. The
@@ -151,7 +151,7 @@ class NumericTextView(context: Context) : View(context) {
   // against; at 0.75 both glyphs of a crossing were near enough full size that they read as two
   // same-sized digits fighting for one slot. 0.66 puts the mid-crossing glyph at ~0.77 of settled
   // height against 0.83 before, keeping it a legible digit.
-  private val rollDepthMin: Float = 0.66f
+  private val rollDepthMin: Float = 0.50f
   // presenceScale's curve exponent for a plain roll, against the reference-fitted 2.2 a structural
   // birth/death uses. Measured 2026-07-30 by comparing a frame grid of an isolated roll column by
   // column: at 2.2 the arriving/departing glyph is already within 80-90% of settled height a tenth
@@ -180,7 +180,7 @@ class NumericTextView(context: Context) : View(context) {
   // still mid-swap. Per glyph, the reference's incoming ink crosses half at ~133 / 265 / 300 ms.
   // 0.07 -> 0.076, absorbing arriveCrossSlow's speed-up so that only the first column moves: at
   // 0.58 every arrival comes ~12 ms sooner, and the spacing gives that back at ~6 ms per column.
-  private val enterSpacingSeconds: Float = 0.076f
+  private val enterSpacingSeconds: Float = 0.105f
   // Spacing between the ARRIVALS of a structural change, left→right.
   //
   // This was 0 on the reading that "a structural change is one transaction — SwiftUI does not
@@ -263,7 +263,7 @@ class NumericTextView(context: Context) : View(context) {
   // stiffness by ~60, and our settle tail is already LONGER than the reference's (767 ms against
   // 550 ms on this same transition). Whatever lands here has to separate how fast a glyph crosses
   // from how long it takes to come to rest — today one spring does both.
-  private val staggerSeconds: Float = 0.065f
+  private val staggerSeconds: Float = 0.090f
   // The DEPARTURE half of the same wave, and the delay in front of all of it. See
   // [birthSpacingSeconds] for the measurement that put these back; these three are the other side
   // of it and were zeroed by the same reading.
@@ -477,8 +477,8 @@ class NumericTextView(context: Context) : View(context) {
   //
   // The phase uses SwiftUI's actual default spring. Retargeting preserves phase and velocity, so a
   // 220 ms tap joins the motion already on screen without needing an artificial slow column.
-  private val rollTapeStiffness: Float = swiftDefaultSpringStiffness
-  private val rollTapeDampingRatio: Float = swiftDefaultSpringDampingRatio
+  private val rollTapeStiffness: Float = 120f
+  private val rollTapeDampingRatio: Float = 0.95f
   private val rollTapeSlowPerColumn: Float = 0f
   // The roll's left→right wave, as a per-column HOLD on the tape's target.
   //
@@ -497,14 +497,14 @@ class NumericTextView(context: Context) : View(context) {
   //
   // 0.075 is the mean of the reference's two steps, 67 and 83 ms. It is scaled by the crowding gate
   // like every other stagger, so a press-and-hold does not accumulate holds.
-  private val rollTapeStaggerSeconds: Float = 0.075f
+  private val rollTapeStaggerSeconds: Float = 0.110f
   // Presence, depth and softness are functions of tape distance, with one curve for both sides of
   // a handover. Changing a glyph from "incoming" to "outgoing" therefore cannot change its shape on
   // the retarget frame.
   private val rollTapeScaleExponent: Float = 1f
   // Velocity continuously moves the blur from isolated to crowded. Unlike the old elapsed-time
   // gates, this cannot switch the stiffness or the look of every live glyph on a tap boundary.
-  private val rollTapeSoftVelocity: Float = 12f
+  private val rollTapeSoftVelocity: Float = 5f
   // Once a lane has passed this far behind the live phase it cannot contribute visible ink or be a
   // useful immediate reversal target.
   private val ROLL_TAPE_CULL_DISTANCE: Float = 1.35f
@@ -767,7 +767,7 @@ class NumericTextView(context: Context) : View(context) {
   // was read at the time as "the reference's arriving glyph is a solid digit a full glyph-height up"
   // and is really just a button. The reference's roll is compact, as the original note here said.
   // Any band used for this has to stop above y = 0.55 of the screen, where the buttons start.
-  private val travelFactor = 0.45f
+  private val travelFactor = 0.65f
   // Peak radius as a fraction of line-height. A small increase merges adjacent tape lanes into one
   // mass without using blur to conceal a timing mismatch.
   private val blurFactor = 0.18f
@@ -894,25 +894,81 @@ class NumericTextView(context: Context) : View(context) {
     if (resolveStrategy() == TransitionStrategy.PER_GLYPH) {
       if (scrubbing) {
         if (columns.isNotEmpty()) drawSlots(canvas, progress.coerceIn(0f, 0.999f)) else drawSettled(canvas)
-        return
+      } else if (!settledLike && columns.isNotEmpty()) {
+        drawSlots(canvas, null)
+      } else {
+        drawSettled(canvas)
       }
-      if (!settledLike && columns.isNotEmpty()) { drawSlots(canvas, null); return }
-      drawSettled(canvas)
-      return
+    } else {
+      // Debug strategies: whole-run / changed-run block renderer.
+      val plan = resolvePlan()
+      if (settledLike || plan == null) {
+        if (scrubbing && plan != null) {
+          drawTransition(canvas, plan, progress.coerceIn(0f, 0.999f))
+        } else {
+          drawSettled(canvas)
+        }
+      } else {
+        drawTransition(canvas, plan, progress)
+      }
     }
 
-    // Debug strategies: whole-run / changed-run block renderer.
-    val plan = resolvePlan()
-    if (settledLike || plan == null) {
-      if (scrubbing && plan != null) {
-        drawTransition(canvas, plan, progress.coerceIn(0f, 0.999f))
-        return
-      }
-      drawSettled(canvas)
-      return
-    }
+    // drawDebugBounds(canvas)
+  }
 
-    drawTransition(canvas, plan, progress)
+  private val debugBorderPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE }
+  private val debugLimitPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE }
+
+  private fun drawDebugBounds(canvas: Canvas) {
+    val cy = height / 2f
+    val bl = baselineY(cy)
+    val h = getTextHeight()
+    val margin = width * 0.05f
+
+    // 1. Text container (green) — dove sta il testo a riposo
+    debugBorderPaint.strokeWidth = 1f
+    debugBorderPaint.color = 0xFF00FF00.toInt()
+    val textTop = bl + fmAscent
+    val textBottom = bl + fmDescent
+    canvas.drawRect(margin, textTop, width - margin, textBottom, debugBorderPaint)
+
+    // 2. Upper travel bound (red) — sopra il container del testo
+    debugLimitPaint.strokeWidth = 2f
+    debugLimitPaint.color = 0xFFFF0000.toInt()
+    val travelPx = h * travelFactor
+    val upperBound = textTop - travelPx
+    canvas.drawLine(margin, upperBound, width - margin, upperBound, debugLimitPaint)
+
+    // 3. Lower travel bound (blue) — sotto il container del testo
+    debugLimitPaint.color = 0xFF0000FF.toInt()
+    val lowerBound = textBottom + travelPx
+    canvas.drawLine(margin, lowerBound, width - margin, lowerBound, debugLimitPaint)
+
+    // 4. Baseline (purple) — dove poggiano le cifre
+    debugBorderPaint.strokeWidth = 1f
+    debugBorderPaint.color = 0xFF9B59B6.toInt()
+    canvas.drawLine(margin, bl, width - margin, bl, debugBorderPaint)
+
+    // 5. Text mid-line (yellow) — centro del testo
+    debugBorderPaint.color = 0x88FFFF00.toInt()
+    val midY = (textTop + textBottom) / 2f
+    canvas.drawLine(margin, midY, width - margin, midY, debugBorderPaint)
+
+    // 6. Debug values
+    textPaint.textSize = 10f * resources.displayMetrics.scaledDensity
+    textPaint.color = 0xFFFFFFFF.toInt()
+    textPaint.alpha = 255
+    var dy = 12f
+    for ((key, col) in columns) {
+      val g = col.incoming() ?: continue
+      val label = "$key p=${"%.2f".format(g.p)} off=${"%.2f".format(g.off)} dir=${
+        if (col.tapeActive) col.tapeDirection else "-"
+      } phase=${"%.2f".format(col.tapePhase)}"
+      canvas.drawText(label, margin, dy, textPaint)
+      dy += 14f
+    }
+    textPaint.textSize = numericFontSize * resources.displayMetrics.scaledDensity
+    textPaint.color = numericTextColor
   }
 
   private fun drawSettled(canvas: Canvas) {
