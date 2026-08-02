@@ -92,7 +92,7 @@ internal class NumericRollEngine {
      * measurable at zero effect, and invisible. The side-by-side grid against iOS is unambiguous —
      * the reference's crossing is mostly blur, Android's had none.
      */
-    const val BLUR_FRACTION = 0.22f
+    const val BLUR_FRACTION = 0.42f
 
     /** APPLE — `NumericTextConfiguration.maxDurationMultiple`. Caps how far the spring may stretch. */
     const val MAX_DURATION_MULTIPLE = 1.25f
@@ -130,7 +130,7 @@ internal class NumericRollEngine {
      * like. This term is the distance actually covered while the shutter is open, so it grows with
      * speed and vanishes at rest.
      */
-    private const val SHUTTER_SECONDS = 0.016f
+    private const val SHUTTER_SECONDS = 0.026f
 
     /** Rest thresholds. Not tuning — they decide when to stop asking for frames. */
     private const val POSITION_EPSILON = 0.001f
@@ -255,7 +255,12 @@ internal class NumericRollEngine {
         existing.literal = literalOf(slot)
         existing.charAt[next] = slot.char
         existing.pendingTarget = next
-        existing.hold = gap * waveIndex
+        // Half a gap on the leader: it does not leave the instant the value changes, but it does
+        // not wait a whole step either. The reference's columns start at 70 / 137 / 220 ms; at
+        // zero this engine read 35 / 102 / 186 and at a full gap 101 / 176 / 243, which brackets
+        // it — there is ~35 ms of latency before the first frame either way, so the leader's own
+        // share is about half.
+        existing.hold = gap * (waveIndex + 0.5f)
         waveIndex += 1
       }
     }
