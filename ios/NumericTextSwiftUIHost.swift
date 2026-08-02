@@ -87,8 +87,24 @@ public final class NumericTextSwiftUIHost: UIView {
     )
     // The first render places the number; only later ones are transitions.
     model.animates = lastValue != nil && Self.animates(reduceMotion: reduceMotion)
+    let changed = lastValue != value
     model.value = value
     lastValue = value
+
+    #if DEBUG
+    if model.animates, changed, let host = hosting?.view {
+      NumericTextLayerProbe.shared.arm(
+        root: host,
+        label: model.text,
+        countsDown: model.countsDown
+      )
+      NumericTextFrameRecorder.shared.arm(
+        root: host,
+        label: model.text,
+        countsDown: model.countsDown
+      )
+    }
+    #endif
   }
 
   // MARK: - Prop resolution
@@ -177,13 +193,10 @@ private struct NumericTextRoot: View {
       .monospacedDigit()
       .foregroundStyle(model.color)
       .numericTextTransition(countsDown: model.countsDown)
+      .debugSliceProbe()
       .animation(model.animates ? .spring() : nil, value: model.value)
       .frame(maxWidth: .infinity, maxHeight: .infinity)
       .mask(edgeFadeMask)
-      .overlay(
-        Rectangle()
-          .stroke(Color.red, lineWidth: 1)
-      )
   }
 
   private var edgeFadeMask: some View {
@@ -226,7 +239,506 @@ private struct NumericTextRoot: View {
   }
 }
 
+#if DEBUG
+/**
+ * GROUND-TRUTH PROBE — temporary scaffolding, not part of the shipped renderer.
+ *
+ * The Android renderer is tuned by comparing screen recordings, which measures how much ink is on
+ * screen and leaves us to infer what SwiftUI actually did. This asks the animation directly: for
+ * every display frame of a transition it walks the CALayer subtree under the hosting controller and
+ * records each layer's live (`presentation()`) geometry, opacity and filters, plus any CAAnimation
+ * attached to it.
+ *
+ * It answers one question, and the answer decides the whole approach: does `.numericText()` expose
+ * its per-digit motion as layers we can read, or is it one opaque layer that redraws itself?
+ */
+final class NumericTextLayerProbe {
+  static let shared = NumericTextLayerProbe()
+
+  private var link: CADisplayLink?
+  private weak var root: UIView?
+  private var startedAt: CFTimeInterval = 0
+  private var deadline: CFTimeInterval = 0
+  private var frames: [[String: Any]] = []
+  private var label: String = ""
+  private var countsDown: Bool = false
+  private var marks: [[String: Any]] = []
+  /// What the text renderer saw, if the slice probe is switched on. Time-aligned with `frames`.
+  private var draws: [[String: Any]] = []
+
+  /// Off unless asked for. A display link that walks the layer tree every frame is not free, and a
+  /// Debug build is exactly what the video captures are recorded from — the probe must not be in
+  /// the picture unless someone wants it there.
+  static let enabled = ProcessInfo.processInfo.environment["NUMERICTEXT_PROBE"] == "1"
+
+  /// Whether to interpose a custom `TextRenderer`. Separate switch, because interposing one is
+  /// measurably heavier: with it in place SwiftUI rasterises through an image queue and drops
+  /// frames, so it must never be on during a measurement run.
+  static let sliceProbeEnabled =
+    ProcessInfo.processInfo.environment["NUMERICTEXT_SLICE_PROBE"] == "1"
+
+  func recordDraw(_ entry: [String: Any]) {
+    guard link != nil else { return }
+    var timed = entry
+    timed["t"] = (CACurrentMediaTime() - startedAt) * 1000
+    draws.append(timed)
+  }
+
+  /// How long to keep recording after the last value change.
+  private let tail: CFTimeInterval = 1.4
+
+  func arm(root: UIView, label: String, countsDown: Bool) {
+    guard Self.enabled else { return }
+    let now = CACurrentMediaTime()
+    deadline = now + tail
+    if link != nil {
+      // A burst: keep one continuous recording and just note when each change landed.
+      marks.append(["t": (now - startedAt) * 1000, "label": label])
+      return
+    }
+    self.root = root
+    self.label = label
+    self.countsDown = countsDown
+    frames.removeAll()
+    draws.removeAll()
+    marks = [["t": 0.0, "label": label]]
+    startedAt = now
+
+    let displayLink = CADisplayLink(target: self, selector: #selector(tick))
+    displayLink.add(to: .main, forMode: .common)
+    link = displayLink
+    NSLog("[numerictext-probe] armed label=%@ countsDown=%d", label, countsDown ? 1 : 0)
+  }
+
+  @objc private func tick(_ sender: CADisplayLink) {
+    guard let layer = root?.layer else { return stop() }
+    let now = CACurrentMediaTime()
+    var nodes: [[String: Any]] = []
+    walk(layer, path: "0", into: &nodes)
+    frames.append([
+      "t": (now - startedAt) * 1000,
+      "target": (sender.targetTimestamp - sender.timestamp) * 1000,
+      "layers": nodes,
+    ])
+    if now >= deadline { stop() }
+  }
+
+  private func stop() {
+    link?.invalidate()
+    link = nil
+    guard !frames.isEmpty else { return }
+
+    let layerCounts = frames.map { ($0["layers"] as? [[String: Any]])?.count ?? 0 }
+    let peak = frames
+      .max { (($0["layers"] as? [[String: Any]])?.count ?? 0) < (($1["layers"] as? [[String: Any]])?.count ?? 0) }
+    let classes = (peak?["layers"] as? [[String: Any]])?.map { ($0["class"] as? String) ?? "?" } ?? []
+    let animated = (peak?["layers"] as? [[String: Any]])?.filter { $0["animations"] != nil }.count ?? 0
+    NSLog(
+      "[numerictext-probe] frames=%d layers min=%d peak=%d animatedLayers=%d classes=%@",
+      frames.count,
+      layerCounts.min() ?? 0,
+      layerCounts.max() ?? 0,
+      animated,
+      classes.joined(separator: ",")
+    )
+    if Self.sliceProbeEnabled {
+      let sliceCounts = draws.map { ($0["slices"] as? [[String: Any]])?.count ?? 0 }
+      NSLog(
+        "[numerictext-probe] draws=%d slicesPerDraw min=%d max=%d",
+        draws.count,
+        sliceCounts.min() ?? 0,
+        sliceCounts.max() ?? 0
+      )
+    }
+
+    let payload: [String: Any] = [
+      "label": label,
+      "countsDown": countsDown,
+      "scale": UIScreen.main.scale,
+      "sliceProbe": Self.sliceProbeEnabled,
+      "marks": marks,
+      "frames": frames,
+      "draws": draws,
+    ]
+    frames.removeAll()
+    draws.removeAll()
+    write(payload)
+  }
+
+  private func write(_ payload: [String: Any]) {
+    guard
+      let dir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first?
+        .appendingPathComponent("numerictext-probe", isDirectory: true),
+      let data = try? JSONSerialization.data(withJSONObject: payload, options: [])
+    else { return }
+    try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    let name = "probe-\(Int(Date().timeIntervalSince1970 * 1000)).json"
+    let url = dir.appendingPathComponent(name)
+    try? data.write(to: url)
+    NSLog("[numerictext-probe] wrote %@", url.path)
+  }
+
+  // MARK: - Layer capture
+
+  private func walk(_ layer: CALayer, path: String, into out: inout [[String: Any]]) {
+    guard out.count < 400 else { return }
+    out.append(describe(layer, path: path))
+    for (index, sub) in (layer.sublayers ?? []).enumerated() {
+      walk(sub, path: "\(path).\(index)", into: &out)
+    }
+  }
+
+  private func describe(_ layer: CALayer, path: String) -> [String: Any] {
+    // `presentation()` is what is actually on screen this frame; the model layer holds the
+    // destination. Recording the model layer instead is the classic way to measure an animation and
+    // see a perfectly flat line.
+    let live = layer.presentation() ?? layer
+    let t = live.transform
+    var entry: [String: Any] = [
+      "path": path,
+      "class": String(describing: type(of: layer)),
+      "bounds": [live.bounds.origin.x, live.bounds.origin.y, live.bounds.width, live.bounds.height],
+      "position": [live.position.x, live.position.y],
+      "anchor": [live.anchorPoint.x, live.anchorPoint.y],
+      "opacity": live.opacity,
+      "hidden": live.isHidden,
+      // Row-major flattening of CATransform3D; for our purposes m11/m22 are scale, m41/m42 offset.
+      "transform": [t.m11, t.m12, t.m21, t.m22, t.m41, t.m42],
+      "sublayers": layer.sublayers?.count ?? 0,
+    ]
+    if let contents = live.contents {
+      entry["contents"] = String(describing: type(of: contents as AnyObject))
+      if CFGetTypeID(contents as CFTypeRef) == CGImage.typeID {
+        let image = contents as! CGImage
+        entry["contentsSize"] = [image.width, image.height]
+      }
+    }
+    if let mask = layer.mask { entry["mask"] = String(describing: type(of: mask)) }
+    if let filters = layer.filters, !filters.isEmpty {
+      entry["filters"] = filters.map { filterDescription($0) }
+    }
+    if let compositing = layer.compositingFilter {
+      entry["compositingFilter"] = filterDescription(compositing)
+    }
+    if let keys = layer.animationKeys(), !keys.isEmpty {
+      entry["animations"] = keys.compactMap { key -> [String: Any]? in
+        guard let animation = layer.animation(forKey: key) else { return nil }
+        return animationDescription(key: key, animation)
+      }
+    }
+    return entry
+  }
+
+  private func filterDescription(_ filter: Any) -> [String: Any] {
+    var described: [String: Any] = ["class": String(describing: type(of: filter as AnyObject))]
+    guard let object = filter as? NSObject else { return described }
+    // CAFilter is private, so everything here is read by key and may simply not be there.
+    for key in ["name", "type", "inputRadius", "inputAmount", "inputIntensity"] {
+      guard object.responds(to: NSSelectorFromString(key)) else { continue }
+      if let value = object.value(forKey: key) {
+        described[key] = (value as? NSNumber)?.doubleValue ?? String(describing: value)
+      }
+    }
+    return described
+  }
+
+  private func animationDescription(key: String, _ animation: CAAnimation) -> [String: Any] {
+    var described: [String: Any] = [
+      "key": key,
+      "class": String(describing: type(of: animation)),
+      "duration": animation.duration,
+      "beginTime": animation.beginTime,
+    ]
+    if let basic = animation as? CABasicAnimation {
+      described["keyPath"] = basic.keyPath ?? ""
+      described["from"] = String(describing: basic.fromValue)
+      described["to"] = String(describing: basic.toValue)
+    }
+    // The jackpot case: SwiftUI handing CoreAnimation its own spring, parameters and all.
+    if let spring = animation as? CASpringAnimation {
+      described["spring"] = [
+        "mass": spring.mass,
+        "stiffness": spring.stiffness,
+        "damping": spring.damping,
+        "initialVelocity": spring.initialVelocity,
+        "settling": spring.settlingDuration,
+      ]
+    }
+    if let group = animation as? CAAnimationGroup {
+      described["children"] = (group.animations ?? []).map {
+        animationDescription(key: "group", $0)
+      }
+    }
+    if let timing = animation.timingFunction {
+      var points = [Float](repeating: 0, count: 8)
+      for index in 0..<4 { timing.getControlPoint(at: index, values: &points[index * 2]) }
+      described["timing"] = points
+    }
+    return described
+  }
+}
+/**
+ * GROUND TRUTH — the exact-frame recorder.
+ *
+ * Two probes established that `.numericText()` is closed: SwiftUI rasterises the text once per
+ * value and animates the raster itself, with no CALayer per digit, no CAAnimation, and no second
+ * call into a custom `TextRenderer`. So the reference can only be read from its pixels.
+ *
+ * What this removes is every source of error between those pixels and a number. A screen recording
+ * is variable-rate, lossy, resampled onto a 60 Hz grid it never had, and its t=0 has to be found by
+ * looking for a flash. Here each frame is the layer rendered straight into an 8-bit alpha buffer at
+ * device scale, stamped with the display link's own timestamp, and every value change is recorded
+ * as a mark on that same clock. Nothing is compressed, nothing is resampled, and the moment each
+ * change landed is known rather than inferred.
+ *
+ * Alpha rather than colour on purpose: the text is one solid colour, so the alpha plane *is* the
+ * ink coverage the analysis measures — opacity, blur and the edge-fade mask all multiply into it.
+ * One byte per pixel keeps a whole run in memory, so nothing is encoded on the render thread.
+ *
+ * Output is a raw `.bin` of concatenated frames plus a `.json` describing them. Off unless
+ * `NUMERICTEXT_RECORD=1`.
+ */
+final class NumericTextFrameRecorder {
+  static let shared = NumericTextFrameRecorder()
+  static let enabled = ProcessInfo.processInfo.environment["NUMERICTEXT_RECORD"] == "1"
+
+  /// Captured area, as a fraction of the view's own bounds. The number moves outside its box during
+  /// a transition and a structural change makes it wider; the margin keeps all of that in frame.
+  private let margin: CGFloat = 0.35
+  /// How long to keep recording after the last value change.
+  private let tail: CFTimeInterval = 1.6
+
+  private var link: CADisplayLink?
+  private weak var root: UIView?
+  private var context: CGContext?
+  private var pixelWidth = 0
+  private var pixelHeight = 0
+  private var scale: CGFloat = 1
+  private var captureRect: CGRect = .zero
+
+  private var startedAt: CFTimeInterval = 0
+  private var deadline: CFTimeInterval = 0
+  private var label = ""
+  private var countsDown = false
+  private var times: [Double] = []
+  private var drawBounds: [[Double]] = []
+  private var marks: [[String: Any]] = []
+  private var planes = Data()
+
+  func arm(root: UIView, label: String, countsDown: Bool) {
+    guard Self.enabled else { return }
+    let now = CACurrentMediaTime()
+    deadline = now + tail
+    if link != nil {
+      // A burst stays one recording; the marks are what make the cadence readable afterwards.
+      marks.append(["t": (now - startedAt) * 1000, "label": label])
+      return
+    }
+    guard let context = makeContext(for: root) else { return }
+    self.root = root
+    self.context = context
+    self.label = label
+    self.countsDown = countsDown
+    startedAt = now
+    times.removeAll()
+    drawBounds.removeAll()
+    planes.removeAll(keepingCapacity: true)
+    marks = [["t": 0.0, "label": label]]
+
+    let displayLink = CADisplayLink(target: self, selector: #selector(tick))
+    displayLink.add(to: .main, forMode: .common)
+    link = displayLink
+  }
+
+  private func makeContext(for view: UIView) -> CGContext? {
+    let bounds = view.bounds
+    guard bounds.width > 1, bounds.height > 1 else { return nil }
+    scale = view.window?.screen.scale ?? UIScreen.main.scale
+    captureRect = bounds.insetBy(dx: -bounds.width * margin, dy: -bounds.height * margin)
+    pixelWidth = Int((captureRect.width * scale).rounded())
+    pixelHeight = Int((captureRect.height * scale).rounded())
+    // alphaOnly: one byte of coverage per pixel, which is exactly what the analysis reads.
+    return CGContext(
+      data: nil,
+      width: pixelWidth,
+      height: pixelHeight,
+      bitsPerComponent: 8,
+      bytesPerRow: pixelWidth,
+      space: CGColorSpaceCreateDeviceGray(),
+      bitmapInfo: CGImageAlphaInfo.alphaOnly.rawValue
+    )
+  }
+
+  @objc private func tick(_ sender: CADisplayLink) {
+    guard let view = root, let context, let data = context.data else { return stop() }
+    let now = CACurrentMediaTime()
+
+    context.clear(CGRect(x: 0, y: 0, width: pixelWidth, height: pixelHeight))
+    context.saveGState()
+    // A bitmap context is bottom-left origin; the layer tree is top-left. Flip once here so the
+    // frames come out the same way up as a screenshot.
+    context.translateBy(x: 0, y: CGFloat(pixelHeight))
+    context.scaleBy(x: scale, y: -scale)
+    context.translateBy(x: -captureRect.minX, y: -captureRect.minY)
+    // The presentation layer is what is on screen this frame; the model layer is the destination.
+    (view.layer.presentation() ?? view.layer).render(in: context)
+    context.restoreGState()
+
+    planes.append(Data(bytes: data, count: pixelWidth * pixelHeight))
+    times.append((now - startedAt) * 1000)
+    drawBounds.append(drawingBounds(of: view.layer))
+
+    if now >= deadline { stop() }
+  }
+
+  /// SwiftUI sizes its drawing layer to exactly the ink it is about to lay down, every frame. That
+  /// is the reference stating its own vertical extent, so it is worth keeping alongside the pixels.
+  private func drawingBounds(of layer: CALayer) -> [Double] {
+    var found: CALayer?
+    var queue = layer.sublayers ?? []
+    while !queue.isEmpty {
+      let next = queue.removeFirst()
+      if String(describing: type(of: next)).contains("DrawingLayer") { found = next; break }
+      queue.append(contentsOf: next.sublayers ?? [])
+    }
+    guard let drawing = found else { return [] }
+    let live = drawing.presentation() ?? drawing
+    let frame = live.frame
+    return [frame.minX, frame.minY, frame.width, frame.height]
+  }
+
+  private func stop() {
+    link?.invalidate()
+    link = nil
+    context = nil
+    guard !times.isEmpty else { return }
+
+    let meta: [String: Any] = [
+      "label": label,
+      "countsDown": countsDown,
+      "width": pixelWidth,
+      "height": pixelHeight,
+      "scale": scale,
+      "captureRect": [
+        captureRect.minX, captureRect.minY, captureRect.width, captureRect.height,
+      ],
+      "viewBounds": [root?.bounds.width ?? 0, root?.bounds.height ?? 0],
+      "format": "gray8-alpha",
+      "frames": times.count,
+      "times": times,
+      "drawBounds": drawBounds,
+      "marks": marks,
+    ]
+    write(meta: meta, planes: planes)
+    NSLog(
+      "[numerictext-record] %@ frames=%d %dx%d marks=%d",
+      label,
+      times.count,
+      pixelWidth,
+      pixelHeight,
+      marks.count
+    )
+    planes.removeAll(keepingCapacity: false)
+  }
+
+  private func write(meta: [String: Any], planes: Data) {
+    guard
+      let dir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first?
+        .appendingPathComponent("numerictext-record", isDirectory: true)
+    else { return }
+    try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    let stamp = Int(Date().timeIntervalSince1970 * 1000)
+    try? planes.write(to: dir.appendingPathComponent("run-\(stamp).bin"))
+    if let json = try? JSONSerialization.data(withJSONObject: meta, options: []) {
+      try? json.write(to: dir.appendingPathComponent("run-\(stamp).json"))
+    }
+    NSLog("[numerictext-record] wrote run-%d.{bin,json}", stamp)
+  }
+}
+
+/**
+ * GROUND-TRUTH PROBE, second attempt — is the transition visible at the level of individual glyphs?
+ *
+ * The layer probe established that `.numericText()` is drawn by SwiftUI itself into one opaque
+ * layer, so there is no per-digit CALayer to read. A custom `TextRenderer` is the other place the
+ * text passes through on its way to the screen: it hands us the laid-out text broken into lines,
+ * runs and per-glyph slices, and we do the drawing.
+ *
+ * The question is whether the layout we are handed is the ANIMATED one. `Text.LayoutOptions` has a
+ * `disablesAnimations` flag, which implies the default layout carries animation state — if it does,
+ * each frame's slices give us every digit's live position, which is the ground truth the whole
+ * measurement effort is about.
+ *
+ * It may equally turn out that interposing a renderer suppresses the transition altogether. That is
+ * also an answer, and the reason this is off unless `NUMERICTEXT_SLICE_PROBE=1`.
+ */
+@available(iOS 18.0, *)
+struct NumericTextSliceProbe: TextRenderer {
+  func draw(layout: Text.Layout, in context: inout GraphicsContext) {
+    var slices: [[String: Any]] = []
+    for (lineIndex, line) in layout.enumerated() {
+      for (runIndex, run) in line.enumerated() {
+        let bounds = run.typographicBounds
+        slices.append([
+          "kind": "run",
+          "line": lineIndex,
+          "run": runIndex,
+          "count": run.count,
+          "rect": [
+            bounds.rect.minX, bounds.rect.minY, bounds.rect.width, bounds.rect.height,
+          ],
+          "ascent": bounds.ascent,
+          "descent": bounds.descent,
+        ])
+        for (sliceIndex, slice) in run.enumerated() {
+          let sliceBounds = slice.typographicBounds
+          slices.append([
+            "kind": "slice",
+            "line": lineIndex,
+            "run": runIndex,
+            "slice": sliceIndex,
+            "rect": [
+              sliceBounds.rect.minX, sliceBounds.rect.minY,
+              sliceBounds.rect.width, sliceBounds.rect.height,
+            ],
+          ])
+        }
+      }
+    }
+    let transform = context.transform
+    NumericTextLayerProbe.shared.recordDraw([
+      "slices": slices,
+      "opacity": context.opacity,
+      "transform": [transform.a, transform.b, transform.c, transform.d, transform.tx, transform.ty],
+      "clip": [
+        context.clipBoundingRect.minX, context.clipBoundingRect.minY,
+        context.clipBoundingRect.width, context.clipBoundingRect.height,
+      ],
+    ])
+
+    // Draw exactly what we were given, so the probe changes what is measured as little as possible.
+    for line in layout {
+      context.draw(line)
+    }
+  }
+}
+#endif
+
 extension View {
+  /// Interposes the slice probe when it is switched on, and is the identity otherwise.
+  @ViewBuilder
+  fileprivate func debugSliceProbe() -> some View {
+    #if DEBUG
+    if #available(iOS 18.0, *), NumericTextLayerProbe.sliceProbeEnabled {
+      self.textRenderer(NumericTextSliceProbe())
+    } else {
+      self
+    }
+    #else
+    self
+    #endif
+  }
+
   /**
    * `.numericText()`, where the OS has it.
    *

@@ -6,6 +6,7 @@ import java.util.Locale
 import kotlin.math.PI
 import kotlin.math.abs
 import kotlin.math.min
+import kotlin.math.roundToInt
 import kotlin.math.sin
 import kotlin.math.sqrt
 
@@ -15,6 +16,7 @@ enum class TokenKind {
 
 data class NumericToken(val text: String, val kind: TokenKind, val logicalIndex: Int)
 data class GlyphSlot(val oldToken: NumericToken?, val newToken: NumericToken?, val oldX: Float, val newX: Float, val oldWidth: Float, val newWidth: Float, val changed: Boolean)
+
 data class TransitionPlan(val oldFormatted: String, val newFormatted: String, val slots: List<GlyphSlot>, val oldWidth: Float, val newWidth: Float)
 
 /**
@@ -251,6 +253,248 @@ object TransitionLogic {
     out[0] = x
     out[1] = v
   }
+
+  // ── Measured continuous-roll choreography ──
+  //
+  // A crowded numeric roll is not visually identical to its physical spring. The spring remains
+  // the persistent, interruption-safe phase clock, but the reference deliberately resolves the
+  // penultimate lane before crossing the final lane. The constants below come from the 60 fps
+  // 1,000 -> 1,010 reference, measured from the last 30 ms input tick:
+  //
+  //   45-146 ms   the fast smear gradually resolves into the penultimate digit
+  //   100-146 ms  the penultimate digit is dominant but keeps a 14% trailing ghost
+  //   146-263 ms  one complete lane: 8+9 becomes 9+0 without a ghostless endpoint
+  //   263-300 ms  the final glyph finishes landing from above
+  //   300-500 ms  it overshoots below rest, then returns with a long soft settle
+  //
+  // Keeping this as pure math makes the drawing deterministic and testable. It also keeps the
+  // spring free to merge a new target: when another update arrives the view simply rebases the
+  // spring on the currently drawn phase and continues from there.
+  private const val SIMPLE_ROLL_BRAKE_START = 0.045f
+  private const val SIMPLE_ROLL_PHASE_CAPTURE_START = 0.065f
+  private const val SIMPLE_ROLL_HOLD_START = 0.100f
+  private const val SIMPLE_ROLL_FINAL_START = 0.146f
+  private const val SIMPLE_ROLL_FINAL_END = 0.263f
+  private const val SIMPLE_ROLL_LANDING_START = 0.280f
+  private const val SIMPLE_ROLL_OVERSHOOT_START = 0.300f
+  private const val SIMPLE_ROLL_OVERSHOOT_PEAK = 0.370f
+  private const val SIMPLE_ROLL_SETTLE_END = 0.500f
+  private const val SIMPLE_ROLL_PAIR_RELEASE_END = 0.313f
+  private const val SIMPLE_ROLL_FINAL_TRAIL = 0.14f
+  private const val SIMPLE_ROLL_FINAL_OVERSHOOT = 0.05f
+  private const val SIMPLE_ROLL_SETTLING_PAIR_BLEND = 0.65f
+  private const val SIMPLE_ROLL_SETTLING_PAIR_PEAK = 0.85f
+  private const val SIMPLE_ROLL_LAUNCH_LAG = 0.50f
+  private const val SIMPLE_ROLL_LAUNCH_LAG_RELEASE_START = 0.117f
+  private const val SIMPLE_ROLL_LAUNCH_LAG_RELEASE_END = 0.217f
+
+  /** Two or more updates in one cadence window form a crowded roll. */
+  fun simpleRollIsBurst(stepCount: Int): Boolean = stepCount >= 2
+
+  /** Number of smallest displayed units crossed by a numeric update, or zero if not integral. */
+  fun displayedStepCount(oldValue: Double, newValue: Double, fractionalDigits: Int): Int {
+    var scaledDelta = abs(newValue - oldValue)
+    repeat(fractionalDigits.coerceAtLeast(0)) { scaledDelta *= 10.0 }
+    if (!scaledDelta.isFinite() || scaledDelta > Int.MAX_VALUE.toDouble()) return 0
+    val nearest = scaledDelta.roundToInt()
+    return if (nearest >= 1 && abs(scaledDelta - nearest) <= 0.0001) nearest else 0
+  }
+
+  /** Forward/backward distance between two decimal digits on the continuous tape. */
+  fun directedDigitSteps(fromDigit: Int, toDigit: Int, direction: Int): Int =
+    if (direction < 0) {
+      (fromDigit - toDigit + 10) % 10
+    } else {
+      (toDigit - fromDigit + 10) % 10
+    }
+
+  /**
+   * Phase actually drawn for a crowded roll.
+   *
+   * The physical spring supplies the accelerating middle. Once input goes quiet, the drawing
+   * captures the phase just behind the penultimate lane, lets that digit become readable, then
+   * performs one explicit final crossing. Increment and decrement are exact mirrors.
+   */
+  fun simpleRollVisualPhase(
+    physicalPhase: Float,
+    target: Float,
+    direction: Int,
+    secondsSinceTarget: Float,
+    stepCount: Int
+  ): Float {
+    if (!simpleRollIsBurst(stepCount)) return physicalPhase
+    val d = if (direction < 0) -1f else 1f
+    val idle = secondsSinceTarget.coerceAtLeast(0f)
+    val penultimate = target - d
+    // The same residual exists at both ends of the final lane. At the start, 9 is dominant while
+    // 8 remains visible; at the end, 0 is dominant while 9 remains visible. Equal residuals make
+    // the explicit transition exactly one lane and avoid either endpoint becoming ghostless.
+    val hold = penultimate - d * SIMPLE_ROLL_FINAL_TRAIL
+    return when {
+      idle <= SIMPLE_ROLL_PHASE_CAPTURE_START -> physicalPhase
+      idle < SIMPLE_ROLL_HOLD_START -> {
+        val p = smoothstep(SIMPLE_ROLL_PHASE_CAPTURE_START, SIMPLE_ROLL_HOLD_START, idle)
+        physicalPhase + (hold - physicalPhase) * p
+      }
+      idle < SIMPLE_ROLL_FINAL_START -> hold
+      idle < SIMPLE_ROLL_FINAL_END -> {
+        val p = smootherstep(
+          (idle - SIMPLE_ROLL_FINAL_START) /
+            (SIMPLE_ROLL_FINAL_END - SIMPLE_ROLL_FINAL_START)
+        )
+        hold + d * p
+      }
+      idle < SIMPLE_ROLL_LANDING_START -> target - d * SIMPLE_ROLL_FINAL_TRAIL
+      idle < SIMPLE_ROLL_OVERSHOOT_START -> {
+        val landing = smootherstep(
+          (idle - SIMPLE_ROLL_LANDING_START) /
+            (SIMPLE_ROLL_OVERSHOOT_START - SIMPLE_ROLL_LANDING_START)
+        )
+        target - d * SIMPLE_ROLL_FINAL_TRAIL * (1f - landing)
+      }
+      idle < SIMPLE_ROLL_OVERSHOOT_PEAK -> {
+        val overshoot = smootherstep(
+          (idle - SIMPLE_ROLL_OVERSHOOT_START) /
+            (SIMPLE_ROLL_OVERSHOOT_PEAK - SIMPLE_ROLL_OVERSHOOT_START)
+        )
+        target + d * SIMPLE_ROLL_FINAL_OVERSHOOT * overshoot
+      }
+      idle < SIMPLE_ROLL_SETTLE_END -> {
+        val settle = smootherstep(
+          (idle - SIMPLE_ROLL_OVERSHOOT_PEAK) /
+            (SIMPLE_ROLL_SETTLE_END - SIMPLE_ROLL_OVERSHOOT_PEAK)
+        )
+        target + d * SIMPLE_ROLL_FINAL_OVERSHOOT * (1f - settle)
+      }
+      else -> target
+    }
+  }
+
+  /** Fast-motion contribution left after input stops; zero as the explicit final lane begins. */
+  fun simpleRollFastKeep(secondsSinceTarget: Float, stepCount: Int): Float {
+    if (!simpleRollIsBurst(stepCount)) return 1f
+    return 1f - smoothstep(
+      SIMPLE_ROLL_BRAKE_START,
+      SIMPLE_ROLL_FINAL_START,
+      secondsSinceTarget.coerceAtLeast(0f)
+    )
+  }
+
+  /**
+   * Two-glyph continuity while the fast strip brakes, crosses 9 and releases into the final 0.
+   *
+   * Raw tape presence collapses to one glyph whenever phase is an integer. That is correct at
+   * rest, but not during the measured burst: iOS keeps a spatially separated ghost through both
+   * integer crossings. The blend rises as velocity blur falls, peaks in the middle of 9 -> 0, then
+   * releases over three frames. It is deliberately a presentation value; the phase spring remains
+   * the interruption-safe source of position and velocity.
+   */
+  fun simpleRollSettlingPairBlend(secondsSinceTarget: Float, stepCount: Int): Float {
+    if (!simpleRollIsBurst(stepCount)) return 0f
+    val idle = secondsSinceTarget.coerceAtLeast(0f)
+    return when {
+      idle < SIMPLE_ROLL_BRAKE_START -> 0f
+      idle < SIMPLE_ROLL_FINAL_START ->
+        SIMPLE_ROLL_SETTLING_PAIR_BLEND *
+          smoothstep(SIMPLE_ROLL_BRAKE_START, SIMPLE_ROLL_FINAL_START, idle)
+      idle <= SIMPLE_ROLL_FINAL_END -> {
+        val p = smootherstep(
+          (idle - SIMPLE_ROLL_FINAL_START) /
+            (SIMPLE_ROLL_FINAL_END - SIMPLE_ROLL_FINAL_START)
+        )
+        val bell = 4f * p * (1f - p)
+        SIMPLE_ROLL_SETTLING_PAIR_BLEND +
+          (SIMPLE_ROLL_SETTLING_PAIR_PEAK - SIMPLE_ROLL_SETTLING_PAIR_BLEND) * bell
+      }
+      idle < SIMPLE_ROLL_PAIR_RELEASE_END ->
+        SIMPLE_ROLL_SETTLING_PAIR_BLEND *
+          (1f - smoothstep(SIMPLE_ROLL_FINAL_END, SIMPLE_ROLL_PAIR_RELEASE_END, idle))
+      else -> 0f
+    }
+  }
+
+  /** The first frames retain a readable source digit before the two-lane smear develops. */
+  fun simpleRollPairRamp(ageSeconds: Float): Float =
+    smoothstep(0.042f, 0.117f, ageSeconds.coerceAtLeast(0f))
+
+  /** Opacity starts changing after the first sampled frame, before depth and pair mixing do. */
+  fun simpleRollAlphaRamp(ageSeconds: Float): Float =
+    smoothstep(0.015f, 0.050f, ageSeconds.coerceAtLeast(0f))
+
+  /** Blur starts later than opacity/position, matching the sharp first 2-3 reference frames. */
+  fun simpleRollBlurRamp(ageSeconds: Float): Float =
+    smoothstep(0.045f, 0.115f, ageSeconds.coerceAtLeast(0f))
+
+  /**
+   * Visual inertia during the launch of a crowded tape.
+   *
+   * The measured reference is still showing 0/1 at +100 ms and only reaches the 1/2 hand-off at
+   * +117 ms. The physical retargetable spring is intentionally left untouched; this short-lived
+   * half-lane lag shapes only what is painted, then releases as the roll reaches cruise speed.
+   */
+  fun simpleRollLaunchLag(ageSeconds: Float, stepCount: Int): Float {
+    if (!simpleRollIsBurst(stepCount)) return 0f
+    val age = ageSeconds.coerceAtLeast(0f)
+    val opens = simpleRollPairRamp(age)
+    val releases = 1f - smoothstep(
+      SIMPLE_ROLL_LAUNCH_LAG_RELEASE_START,
+      SIMPLE_ROLL_LAUNCH_LAG_RELEASE_END,
+      age
+    )
+    return SIMPLE_ROLL_LAUNCH_LAG * opens * releases
+  }
+
+  /** Normalised progress of the explicit final lane, or -1 while it is not running. */
+  fun simpleRollFinalProgress(secondsSinceTarget: Float, stepCount: Int): Float {
+    if (!simpleRollIsBurst(stepCount)) return -1f
+    val idle = secondsSinceTarget.coerceAtLeast(0f)
+    if (idle < SIMPLE_ROLL_FINAL_START) return -1f
+    return ((idle - SIMPLE_ROLL_FINAL_START) /
+      (SIMPLE_ROLL_FINAL_END - SIMPLE_ROLL_FINAL_START)).coerceIn(0f, 1f)
+  }
+
+  /** Blur of the explicit final crossing, including soft launch and landing frames. */
+  fun simpleRollFinalBlur(secondsSinceTarget: Float, stepCount: Int): Float {
+    val p = simpleRollFinalProgress(secondsSinceTarget, stepCount)
+    if (p < 0f) return 0f
+    val idle = secondsSinceTarget.coerceAtLeast(0f)
+    if (idle <= SIMPLE_ROLL_FINAL_END) {
+      val eased = smootherstep(p)
+      return sin(PI * eased).toFloat().coerceAtLeast(0.15f)
+    }
+    // Do not become perfectly sharp at the first arrival on the target lane. SwiftUI keeps the
+    // final glyph softly integrated through the small overshoot and resolves it only while the
+    // bounce settles. The previous 33 ms tail produced a sharp frame at ~+567 ms followed by a
+    // second blur pulse when the phase moved past the target.
+    val settle = smootherstep(
+      ((idle - SIMPLE_ROLL_FINAL_END) /
+        (SIMPLE_ROLL_SETTLE_END - SIMPLE_ROLL_FINAL_END)).coerceIn(0f, 1f)
+    )
+    return 0.15f * (1f - settle)
+  }
+
+  /** Whole-column ink envelope for the final crossing. */
+  fun simpleRollFinalAlpha(secondsSinceTarget: Float, stepCount: Int): Float {
+    val p = simpleRollFinalProgress(secondsSinceTarget, stepCount)
+    if (p < 0f) return 1f
+    val idle = secondsSinceTarget.coerceAtLeast(0f)
+    if (idle <= SIMPLE_ROLL_FINAL_END) {
+      val eased = smootherstep(p)
+      val bell = 4f * eased * (1f - eased)
+      // The reference does the opposite of the previous curve: 9 and 0 carry the most ink near
+      // the ends, while the fused middle is the lightest part of the crossing. Pair continuity
+      // above supplies the ghosts, so this only shapes their combined mass.
+      return 1f - 0.30f * bell
+    }
+    // From here the phase's own 14% trail resolves continuously into full target presence. A
+    // separate target-only boost caused a dark pulse and, when phase rounded to the target lane,
+    // accidentally promoted the following digit for one frame.
+    return 1f
+  }
+
+  /** A burst must not be replaced by a static glyph while its measured visual tail is alive. */
+  fun simpleRollCanCommit(secondsSinceTarget: Float, stepCount: Int): Boolean =
+    !simpleRollIsBurst(stepCount) || secondsSinceTarget >= SIMPLE_ROLL_SETTLE_END
 
   // Complementary crossfade: both glyphs ~0.5 at the midpoint → heavy overlap so the
   // blurred old + blurred new read as a single soft smear.

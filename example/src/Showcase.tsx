@@ -115,6 +115,15 @@ const HOLD_STEP_MS = 30;
 const HOLD_TICKS = 14;
 
 /**
+ * The controlled roll: one unit at a time over a short fixed range. The matching reverse preset
+ * below makes the direction comparison explicit while keeping both runs quick to record.
+ */
+const CONTROLLED_ROLL_FROM = 1000;
+const CONTROLLED_ROLL_TO = 1010;
+const CONTROLLED_ROLL_STEP_MS = 30;
+const CONTROLLED_ROLL_TICKS = CONTROLLED_ROLL_TO - CONTROLLED_ROLL_FROM;
+
+/**
  * The third cadence: TAPS, not a hold — the one a person actually makes.
  *
  * 30 ms is a press-and-hold and 1.2 s is a single change, and both are measured. Between them sits
@@ -190,7 +199,13 @@ export function Showcase({ onOpenLab }: Props) {
   const runNines = useCallback(() => runStep(NINES_FROM, NINES_TO), [runStep]);
 
   const runTicks = useCallback(
-    (stepMs: number, ticks: number, from = HOLD_FROM, sign = 1) => {
+    (
+      stepMs: number,
+      ticks: number,
+      from = HOLD_FROM,
+      sign = 1,
+      delta = STEP
+    ) => {
       timers.current.forEach(clearTimeout);
       timers.current = [];
       setSyncing(false);
@@ -199,7 +214,7 @@ export function Showcase({ onOpenLab }: Props) {
         setTimeout(() => {
           // Same one-commit trick as runStep: the first tick of the roll and the marker that dates
           // it land together, so the first dark frame IS the frame the roll started on.
-          setValue(from + sign * STEP);
+          setValue(from + sign * delta);
           setSyncing(true);
           timers.current.push(
             setTimeout(() => setSyncing(false), SYNC_FLASH_MS)
@@ -207,7 +222,7 @@ export function Showcase({ onOpenLab }: Props) {
           for (let i = 2; i <= ticks; i += 1) {
             timers.current.push(
               setTimeout(
-                () => setValue(from + sign * i * STEP),
+                () => setValue(from + sign * i * delta),
                 (i - 1) * stepMs
               )
             );
@@ -227,6 +242,28 @@ export function Showcase({ onOpenLab }: Props) {
   // only goes one way cannot show that, so it went unmeasured while three sessions tuned the roll.
   const runHoldDown = useCallback(
     () => runTicks(HOLD_STEP_MS, HOLD_TICKS, HOLD_FROM + HOLD_TICKS * STEP, -1),
+    [runTicks]
+  );
+  const runControlledRoll = useCallback(
+    () =>
+      runTicks(
+        CONTROLLED_ROLL_STEP_MS,
+        CONTROLLED_ROLL_TICKS,
+        CONTROLLED_ROLL_FROM,
+        1,
+        1
+      ),
+    [runTicks]
+  );
+  const runControlledRollDown = useCallback(
+    () =>
+      runTicks(
+        CONTROLLED_ROLL_STEP_MS,
+        CONTROLLED_ROLL_TICKS,
+        CONTROLLED_ROLL_TO,
+        -1,
+        1
+      ),
     [runTicks]
   );
 
@@ -429,6 +466,34 @@ export function Showcase({ onOpenLab }: Props) {
           >
             <Text style={styles.presetText}>
               roll − ×{HOLD_TICKS} · {HOLD_STEP_MS}ms
+            </Text>
+          </Pressable>
+
+          <Pressable
+            style={({ pressed }) => [styles.preset, pressed && styles.pressed]}
+            onPress={runControlledRoll}
+            disabled={playing}
+            accessibilityRole="button"
+            accessibilityLabel="Controlled continuous roll from 1,000 to 2,350"
+          >
+            <Text style={styles.presetText}>
+              {CONTROLLED_ROLL_FROM.toLocaleString('en-US')} →{' '}
+              {CONTROLLED_ROLL_TO.toLocaleString('en-US')} ·{' '}
+              {CONTROLLED_ROLL_STEP_MS}ms
+            </Text>
+          </Pressable>
+
+          <Pressable
+            style={({ pressed }) => [styles.preset, pressed && styles.pressed]}
+            onPress={runControlledRollDown}
+            disabled={playing}
+            accessibilityRole="button"
+            accessibilityLabel="Controlled continuous roll from 1,010 to 1,000"
+          >
+            <Text style={styles.presetText}>
+              {CONTROLLED_ROLL_TO.toLocaleString('en-US')} →{' '}
+              {CONTROLLED_ROLL_FROM.toLocaleString('en-US')} ·{' '}
+              {CONTROLLED_ROLL_STEP_MS}ms
             </Text>
           </Pressable>
 

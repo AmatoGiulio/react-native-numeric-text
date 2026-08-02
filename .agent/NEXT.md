@@ -1,4 +1,30 @@
-# START HERE — 2026-07-31 (branch `feat/timeline-based-rewrite`)
+# START HERE — 2026-08-02
+
+**Stop measuring the reference from screen recordings. Read `.agent/IOS_GROUND_TRUTH.md` first.**
+
+iOS now records itself: `NumericTextFrameRecorder` writes the SwiftUI reference straight out of its
+layer, one alpha plane per display frame, with exact timestamps and every value change marked, and
+`.agent/tools/ground_truth.py` reports it column by column with the same metrics as the video
+pipeline. No variable frame rate, no resampling, no compression, no hunting for a sync flash.
+
+Two things follow, and they matter for everything written below this line:
+
+- **The reference's algorithm is closed.** Reading its CALayer tree and interposing a custom
+  `TextRenderer` were both tried and both answered no; SwiftUI rasterises the text and animates the
+  raster itself. Pixels are the only channel — but they can now be exact ones. Do not spend another
+  session looking for a way to read the curves directly.
+- **Much of the tuning below was fitted inside the measurement noise.** Three runs of the same APK
+  on the same preset spread by ±0.05, and the iOS side of every table below was a ~48.6 fps capture
+  resampled to 60. Before acting on any delta in this file, re-measure it.
+
+Next, in order: establish the recorder's own noise floor over five runs; then the decrement, which
+is the largest open gap and was never tracked while the increment was tuned; then the structural
+path; then tuning. An equivalent recorder on the Android side is the obvious follow-up — today the
+comparison is exact on one side only.
+
+---
+
+# Earlier — 2026-07-31 (branch `feat/timeline-based-rewrite`)
 
 ## The persistent-column engine, first measurement — added 2026-07-31, evening
 

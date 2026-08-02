@@ -26,6 +26,8 @@ import java.util.Locale
 import kotlin.math.abs
 import kotlin.math.ceil
 import kotlin.math.max
+import kotlin.math.min
+import kotlin.math.floor
 
 class NumericTextView(context: Context) : View(context) {
   // ── Public prop backing fields ──
@@ -115,6 +117,9 @@ class NumericTextView(context: Context) : View(context) {
   // tuned to at the old one. 0.42 rings 0.23 and draws 0.13, landing at 0.058 — deliberately a
   // little above the old value, because the old travel was itself too short for the bounce to have
   // been judged at the right size.
+  // 2026-08-02: tried at 0.90 against the exact recorder and reverted — it moved the settle tail by
+  // 1.5 ms and cost 0.04-0.07 of extent. Neither this nor presenceOffsetFraction's exponent is on
+  // the path a plain roll actually takes. See .agent/IOS_GROUND_TRUTH.md.
   private val arriveDampingRatio: Float = 0.42f
   // Velocity that maps to full roll blur (position+velocity blend below). Scales with the spring:
   // peak presence velocity is ~5.0 at stiffness 150 but ~7.4 at 340, so keeping the old 9 here made
@@ -312,7 +317,16 @@ class NumericTextView(context: Context) : View(context) {
   // 0.5 -> 0.265, refitted together with rollExitFadeRate once the base rate carried part of the
   // slowness: what the reference asks for is the RATIO between the leftmost column's fall and the
   // rightmost's (1.53), not the absolute slowdown, and 0.5 was solving for the ratio alone.
-  private val exitSlowPerColumn: Float = 0.265f
+  // 2026-08-02, two-point fit against the exact recorder. Splitting the capture into outgoing-only
+  // and incoming-only runs showed the floor is carried by the DEPARTURE — at the units' floor ours
+  // holds 0.725 of the outgoing glyph against 0.074 of the arriving one — and that the departure
+  // gets progressively slower rightwards: the outgoing ink reaches zero at ~200 / ~400 / ~600 ms on
+  // the three columns. This constant is what makes it progressive.
+  //
+  // Recorded at 0.265 and at 0. The leftmost column did not move at all either time, which is the
+  // signature this constant must have, and the other two are linear in it — solving each for the
+  // reference's own floor gives 0.092 and 0.126 independently. 0.265 -> 0.11.
+  private val exitSlowPerColumn: Float = 0.11f
   // Structural roles may differ in blur/travel, not in their physical duration. The previous 0.65
   // made the third arrival 2.3× slower than the first and created the reported visible wave.
   //
@@ -504,11 +518,70 @@ class NumericTextView(context: Context) : View(context) {
   private val rollTapeScaleExponent: Float = 1f
   // Velocity continuously moves the blur from isolated to crowded. Unlike the old elapsed-time
   // gates, this cannot switch the stiffness or the look of every live glyph on a tap boundary.
-  private val rollTapeSoftVelocity: Float = 5f
+  private val rollTapeSoftVelocity: Float = 2.5f
   // Once a lane has passed this far behind the live phase it cannot contribute visible ink or be a
   // useful immediate reversal target.
   private val ROLL_TAPE_CULL_DISTANCE: Float = 1.35f
   private val ROLL_TAPE_REUSE_DISTANCE: Float = 1.35f
+  // The visible front is deliberately less than one full lane ahead. A full-lane lead would put
+  // an arriving glyph at presence 0 for the entire fast section of the roll.
+  private val ROLL_FRONT_LEAD: Float = 0.35f
+  // The simple phase roll gets its mass from overlapping glyphs; this defocus merges their edges
+  // at peak speed while the complementary alpha below keeps the strip from becoming over-dense.
+  private val SIMPLE_ROLL_BLUR_SCALE: Float = 1.0f
+  // The source stays readable at launch and the crowded strip keeps enough mass at speed. The
+  // former 55% cruise drop made every integer crossing collapse into a nearly empty frame; the
+  // reference instead keeps a continuous two-glyph stain throughout the fast section.
+  private val SIMPLE_ROLL_SPEED_ALPHA_DROP_EARLY: Float = 0.30f
+  private val SIMPLE_ROLL_SPEED_ALPHA_DROP_FAST: Float = 0.30f
+  // Blur must follow the speed of the simple phase, not the much slower legacy tape. With the old
+  // 2.5 lanes/s reference even the final 9 and the carry were fully blurred; the reference starts
+  // resolving them as soon as the fast middle of the roll is over.
+  private val SIMPLE_ROLL_BLUR_VELOCITY: Float = 12f
+  // At speed SwiftUI does not expose one full intermediate digit at a time. The two neighbouring
+  // lanes carry almost equal visual weight, producing the persistent two-glyph column visible in
+  // the 16.7 ms reference grid. Their combined opacity is about one 70%-dark glyph after the speed
+  // attenuation above, matching the measured reference ink floor.
+  private val SIMPLE_ROLL_FAST_PAIR_PRESENCE: Float = 0.68f
+  // A fast camera-integrated roll occasionally exposes three adjacent lanes. At +117 ms the iOS
+  // reference contains 2/1/0, while a strict two-lane sample can only contain 2/1. Keep one faint
+  // lane behind the main pair once the tape has crossed its first full lane; it fades with speed.
+  private val SIMPLE_ROLL_FAST_TRAIL_PRESENCE: Float = 0.28f
+  private val SIMPLE_ROLL_TRAIL_START: Float = 0.95f
+  private val SIMPLE_ROLL_TRAIL_FULL: Float = 1.10f
+  // At an exact integer lane the shared glyph must remain dominant. Forcing a second lane there
+  // made the centre jump by half the travel every time the pair advanced; the velocity blur itself
+  // supplies the soft trail at that instant. The pair becomes balanced only between lanes.
+  // Velocity owns the fast section, but a slow crossing is still a two-glyph hand-off and remains
+  // soft and dense around its midpoint. Without this bell the final 9/0 pair sharpened into two
+  // outlined digits while iOS still showed one fused mass. It is zero at either settled lane, so
+  // the final glyph still resolves completely sharp.
+  private val SIMPLE_ROLL_SINGLE_HANDOFF_ALPHA_LIFT: Float = 0.50f
+  private val SIMPLE_ROLL_BURST_HANDOFF_ALPHA_LIFT: Float = 0.15f
+  private val SIMPLE_ROLL_BRAKE_ALPHA_LIFT_PER_BLEND: Float = 0.28f
+  // The measured final 9→0 crossing reaches the same softness as the fast smear at its midpoint.
+  private val SIMPLE_ROLL_HANDOFF_BLUR_SCALE: Float = 1.0f
+  // Once the fast pair was made continuous, its measured envelope grew to 1.34-1.48 glyph heights
+  // against iOS's 1.25-1.40. A 0.58 lane keeps the same two-glyph stain without overextending it.
+  private val SIMPLE_ROLL_TRAVEL_FACTOR: Float = 0.58f
+  // During cruise the reference's centre of ink stays slightly on the departure side instead of
+  // alternating above/below the baseline at every integer lane.
+  private val SIMPLE_ROLL_CENTER_BIAS_FACTOR: Float = 0.06f
+  // Two targets belong to the same deterministic burst only when they arrive before a normal
+  // one-lane spring can reach its first target. This includes a genuine fast double tap while an
+  // ordinary later tap remains an isolated roll.
+  private val SIMPLE_ROLL_BURST_GAP_SECONDS: Float = 0.160f
+  // A higher-order carry joins a tape that is already moving. Starting all presentation ramps at
+  // zero delayed the new tens glyph by roughly two frames against iOS.
+  private val SIMPLE_ROLL_CARRY_WARM_AGE_SECONDS: Float = 0.100f
+  // Fabric may coalesce several 30 ms React updates into one native prop commit. Keep a small
+  // skipped run on the same tape instead of mistaking 1 -> 6 for an arbitrary direct replacement.
+  private val SIMPLE_ROLL_MAX_COALESCED_STEPS: Int = 10
+  // One continuously retargeted spring creates the whole speed envelope by itself. Every 30 ms
+  // target adds energy while the counter is running; when updates stop, the same spring naturally
+  // brakes through 9 and resolves into 0. Switching to a 1,200 "cruise" spring made Android peak
+  // 50 ms early, finish 100 ms early and leave sharply outlined ghosts during the settle.
+  private val SIMPLE_ROLL_STIFFNESS: Float = 340f
   // Where a roll's departure asymptotes, in travel units, drawn through rollOffsetShape's 1.43
   // power. Measured on a press-and-hold in the example app — the same 30 ms repeat on both sides —
   // as how far the rolling column's ink sits below where it settles: the reference holds a median
@@ -648,6 +721,10 @@ class NumericTextView(context: Context) : View(context) {
     // Lane on a continuous plain-roll tape. NaN means the glyph is on the structural lifecycle
     // path and its independent p/off springs remain authoritative.
     var tapeLane: Float = Float.NaN
+    // The visible lane may follow the front of a fast tape. Keeping this separate prevents the
+    // latest digit from being left behind while the physical phase continues through intermediate
+    // values; it converges to this target lane when the roll decelerates.
+    var tapeLaneTarget: Float = Float.NaN
     var tapeSoftness: Float = 1f
 
     /**
@@ -678,6 +755,23 @@ class NumericTextView(context: Context) : View(context) {
 
   private class Column {
     val glyphs = ArrayList<GlyphState>(3)
+    // Simple continuous roll state. Unlike the legacy per-glyph tape, phase is an absolute digit
+    // position and the visible glyphs are derived from it every frame.
+    var simpleRollActive: Boolean = false
+    var simplePhase: Float = 0f
+    var simpleVelocity: Float = 0f
+    // The spring remains the interruption-safe phase clock, while this is the phase actually
+    // painted after the measured brake/hold/final-lane choreography has been applied.
+    var simpleVisualPhase: Float = 0f
+    var simpleVisualVelocity: Float = 0f
+    var simpleTarget: Float = 0f
+    var simpleDirection: Int = 1
+    var simpleXRel: Float = 0f
+    var simpleWidth: Float = 0f
+    var simpleTargetChar: String = ""
+    var simpleAgeSeconds: Float = 0f
+    var simpleIdleSeconds: Float = 0f
+    var simpleBurstSteps: Int = 0
     // One persistent position/velocity pair for every glyph on a normal roll. A new value changes
     // only [tapeTarget]; every lane derives its position from phase - lane.
     var tapeActive: Boolean = false
@@ -703,8 +797,13 @@ class NumericTextView(context: Context) : View(context) {
     fun incoming(): GlyphState? = glyphs.lastOrNull { it.effectiveTarget >= 0.5f }
   }
 
-  /** Upper bound on glyphs alive in one column; a fast roll legitimately keeps several in flight. */
-  private val MAX_GLYPHS_PER_COLUMN = 8
+  /**
+   * A roll is a handoff between two glyphs, not a stack of every value crossed by the tape.
+   * Keeping this bound at two is important: on a fast hold the target is retargeted in place,
+   * otherwise Android paints the intermediate 1, 2, 3... values that SwiftUI presents as one
+   * compact two-glyph mass.
+   */
+  private val MAX_GLYPHS_PER_COLUMN = 2
 
   private val columns = LinkedHashMap<String, Column>()
   private var slotTargetText: String = "0"   // last scheduled target
@@ -767,7 +866,18 @@ class NumericTextView(context: Context) : View(context) {
   // was read at the time as "the reference's arriving glyph is a solid digit a full glyph-height up"
   // and is really just a button. The reference's roll is compact, as the original note here said.
   // Any band used for this has to stop above y = 0.55 of the screen, where the buttons start.
-  private val travelFactor = 0.65f
+  // 2026-08-02: 0.65 -> 0.29, measured rather than guessed (.agent/IOS_GROUND_TRUTH.md).
+  //
+  // At each column's floor the reference keeps its crossing pair inside 1.18-1.22 glyph heights;
+  // at 0.65 ours spread over 1.59-1.68, at matching edge energy — the blur was already right, the
+  // pair was simply too far apart. Recording both platforms at 0.65 and at 0.47 gives the line
+  // `extent = glyphHeight + 1.21 x travel`, and solving it for the reference's extent lands on
+  // 0.302 / 0.294 / 0.274 for the three columns independently.
+  //
+  // This undoes 85de2d2, which raised it 0.25 -> 0.65 on the screen-recording pipeline, inside that
+  // pipeline's own noise. Note what it does NOT fix: the ink floor barely moved between 0.65 and
+  // 0.47, so the depth gap against the reference is a separate defect with a separate cause.
+  private val travelFactor = 0.29f
   // Peak radius as a fraction of line-height. A small increase merges adjacent tape lanes into one
   // mass without using blur to conceal a timing mismatch.
   private val blurFactor = 0.18f
@@ -913,62 +1023,8 @@ class NumericTextView(context: Context) : View(context) {
       }
     }
 
-    // drawDebugBounds(canvas)
-  }
-
-  private val debugBorderPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE }
-  private val debugLimitPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE }
-
-  private fun drawDebugBounds(canvas: Canvas) {
-    val cy = height / 2f
-    val bl = baselineY(cy)
-    val h = getTextHeight()
-    val margin = width * 0.05f
-
-    // 1. Text container (green) — dove sta il testo a riposo
-    debugBorderPaint.strokeWidth = 1f
-    debugBorderPaint.color = 0xFF00FF00.toInt()
-    val textTop = bl + fmAscent
-    val textBottom = bl + fmDescent
-    canvas.drawRect(margin, textTop, width - margin, textBottom, debugBorderPaint)
-
-    // 2. Upper travel bound (red) — sopra il container del testo
-    debugLimitPaint.strokeWidth = 2f
-    debugLimitPaint.color = 0xFFFF0000.toInt()
-    val travelPx = h * travelFactor
-    val upperBound = textTop - travelPx
-    canvas.drawLine(margin, upperBound, width - margin, upperBound, debugLimitPaint)
-
-    // 3. Lower travel bound (blue) — sotto il container del testo
-    debugLimitPaint.color = 0xFF0000FF.toInt()
-    val lowerBound = textBottom + travelPx
-    canvas.drawLine(margin, lowerBound, width - margin, lowerBound, debugLimitPaint)
-
-    // 4. Baseline (purple) — dove poggiano le cifre
-    debugBorderPaint.strokeWidth = 1f
-    debugBorderPaint.color = 0xFF9B59B6.toInt()
-    canvas.drawLine(margin, bl, width - margin, bl, debugBorderPaint)
-
-    // 5. Text mid-line (yellow) — centro del testo
-    debugBorderPaint.color = 0x88FFFF00.toInt()
-    val midY = (textTop + textBottom) / 2f
-    canvas.drawLine(margin, midY, width - margin, midY, debugBorderPaint)
-
-    // 6. Debug values
-    textPaint.textSize = 10f * resources.displayMetrics.scaledDensity
-    textPaint.color = 0xFFFFFFFF.toInt()
-    textPaint.alpha = 255
-    var dy = 12f
-    for ((key, col) in columns) {
-      val g = col.incoming() ?: continue
-      val label = "$key p=${"%.2f".format(g.p)} off=${"%.2f".format(g.off)} dir=${
-        if (col.tapeActive) col.tapeDirection else "-"
-      } phase=${"%.2f".format(col.tapePhase)}"
-      canvas.drawText(label, margin, dy, textPaint)
-      dy += 14f
-    }
-    textPaint.textSize = numericFontSize * resources.displayMetrics.scaledDensity
-    textPaint.color = numericTextColor
+    // Ground-truth capture: exactly what was drawn, on the frame it was drawn. No-op unless armed.
+    NumericTextFrameRecorder.capture(this)
   }
 
   private fun drawSettled(canvas: Canvas) {
@@ -1003,11 +1059,15 @@ class NumericTextView(context: Context) : View(context) {
     // Pass 1 — settled, still glyphs. Sharp and cheap.
     textPaint.maskFilter = null; textPaint.alpha = 255
     for (c in columns.values) for (g in c.glyphs) {
+      if (c.simpleRollActive) continue
+      if (NumericTextFrameRecorder.excludes(g.target)) continue
       if (isStill(g, scrub)) drawGlyph(canvas, g.ch, centreX + g.xRel, bl)
     }
 
     // Pass 2 — everything in motion, each glyph a pure function of its own presence.
     for (c in columns.values) for (g in c.glyphs) {
+      if (c.simpleRollActive) continue
+      if (NumericTextFrameRecorder.excludes(g.target)) continue
       if (isStill(g, scrub)) continue
       val p = presenceOf(g)
       val pc = p.coerceIn(0f, 1f)
@@ -1036,12 +1096,20 @@ class NumericTextView(context: Context) : View(context) {
         // sharp and the first thing that changes is the glyph's HEIGHT; the blur arrives with the
         // displacement, about 33 ms later. Blur therefore follows position, not the spring's state.
         val moved = TransitionLogic.smoothstep(0f, BLUR_VELOCITY_GATE, abs(g.off))
-        max(
+        val presenceBlur = max(
           TransitionLogic.presenceBlur(
             renderPc,
             if (g.tapeLane.isNaN()) changeSpacing else g.tapeSoftness
           ),
           (abs(g.v) / blurVelocityRef).coerceIn(0f, 1f) * 0.6f * moved
+        )
+        // A continuous tape is readable at the start and at the settle, but its middle must be a
+        // moving mass. The tape phase is the real roll speed; using it here avoids the old failure
+        // where the latest digit was perfectly sharp even while the tape was crossing several
+        // lanes. This naturally clears again as the phase slows on the final digit.
+        if (g.tapeLane.isNaN()) presenceBlur else max(
+          presenceBlur,
+          (abs(c.tapeVelocity) / rollTapeSoftVelocity).coerceIn(0f, 1f)
         )
       }
       // Adjacent tape lanes have complementary raw presence. Preserve that invariant through the
@@ -1064,7 +1132,184 @@ class NumericTextView(context: Context) : View(context) {
         drawGlyphBlurred(canvas, g.ch, centreX + g.xRel + xDrift, bl + yOff, alpha, radius * 0.6f)
       }
     }
+    for (c in columns.values) {
+      if (c.simpleRollActive) {
+        drawSimpleRoll(canvas, c, centreX, bl, h, maxBlurPx)
+      }
+    }
     textPaint.maskFilter = null; textPaint.alpha = 255
+  }
+
+  /** Draw one continuous digit tape from its absolute phase; no per-update glyph lifecycle. */
+  private fun drawSimpleRoll(
+    canvas: Canvas,
+    col: Column,
+    centreX: Float,
+    baseline: Float,
+    lineHeight: Float,
+    maxBlurPx: Float
+  ) {
+    val fullTravelPx = lineHeight * SIMPLE_ROLL_TRAVEL_FACTOR
+    val speed = (abs(col.simpleVelocity) / SIMPLE_ROLL_BLUR_VELOCITY).coerceIn(0f, 1f)
+    val fastKeep = TransitionLogic.simpleRollFastKeep(
+      col.simpleIdleSeconds,
+      col.simpleBurstSteps
+    )
+    val pairRamp = TransitionLogic.simpleRollPairRamp(col.simpleAgeSeconds)
+    val alphaRamp = TransitionLogic.simpleRollAlphaRamp(col.simpleAgeSeconds)
+    val blurRamp = TransitionLogic.simpleRollBlurRamp(col.simpleAgeSeconds)
+    // SwiftUI's launch trails its physical target by about half a lane, then catches up as the
+    // strip accelerates. This is presentation-only: retargeting still uses the uninterrupted
+    // spring phase, so repeated updates cannot accumulate the lag.
+    val phase = col.simpleVisualPhase - col.simpleDirection *
+      TransitionLogic.simpleRollLaunchLag(col.simpleAgeSeconds, col.simpleBurstSteps)
+    // SwiftUI opens the vertical lane gradually: its first 2-3 sampled frames still read as one
+    // source digit. Applying the full lane travel immediately exposed two hard, distant
+    // outlines on Android before blur had time to develop.
+    val travelPx = fullTravelPx * pairRamp
+    val speedPair = (speed * pairRamp * fastKeep).coerceIn(0f, 1f)
+    val speedBlur = (speed * blurRamp * fastKeep).coerceIn(0f, 1f)
+    val speedAlphaAmount = (speed * alphaRamp * fastKeep).coerceIn(0f, 1f)
+    val speedAlphaDrop = SIMPLE_ROLL_SPEED_ALPHA_DROP_EARLY +
+      (SIMPLE_ROLL_SPEED_ALPHA_DROP_FAST - SIMPLE_ROLL_SPEED_ALPHA_DROP_EARLY) * blurRamp
+    val speedAlpha = 1f - speedAlphaDrop * speedAlphaAmount
+    val finalProgress = TransitionLogic.simpleRollFinalProgress(
+      col.simpleIdleSeconds,
+      col.simpleBurstSteps
+    )
+    val finalBlur = TransitionLogic.simpleRollFinalBlur(
+      col.simpleIdleSeconds,
+      col.simpleBurstSteps
+    )
+    val finalAlpha = TransitionLogic.simpleRollFinalAlpha(
+      col.simpleIdleSeconds,
+      col.simpleBurstSteps
+    )
+    val settlingPairBlend = TransitionLogic.simpleRollSettlingPairBlend(
+      col.simpleIdleSeconds,
+      col.simpleBurstSteps
+    )
+    val readableHold = TransitionLogic.simpleRollIsBurst(col.simpleBurstSteps) &&
+      fastKeep <= 0.10f && finalProgress < 0f
+
+    // The main sample is the outgoing lane plus the lane immediately ahead. During cruise both
+    // stay populated across the whole hand-off; after the first crossing a faint third lane may
+    // remain behind them to reproduce the reference's short exposure trail.
+    val outgoingIndex =
+      if (col.simpleDirection > 0) floor(phase).toInt() else ceil(phase).toInt()
+    val laneProgress = abs(phase - outgoingIndex.toFloat()).coerceIn(0f, 1f)
+    val handoffBell = 4f * laneProgress * (1f - laneProgress)
+    // At cruise there is always a neighbouring glyph, including at an exact integer phase. The
+    // previous handoff bell reduced this to zero every time the phase crossed an integer, causing
+    // the measured one/two-glyph flicker. Pair-centre compensation below keeps this full pair from
+    // reintroducing the old vertical centroid sawtooth.
+    val pairBlend = max(speedPair, settlingPairBlend)
+    val startPhase = col.simpleTarget - col.simpleDirection * col.simpleBurstSteps
+    val travelledFromStart =
+      (col.simpleDirection * (phase - startPhase)).coerceAtLeast(0f)
+    val trailRamp = if (TransitionLogic.simpleRollIsBurst(col.simpleBurstSteps)) {
+      TransitionLogic.smoothstep(
+        SIMPLE_ROLL_TRAIL_START,
+        SIMPLE_ROLL_TRAIL_FULL,
+        travelledFromStart
+      )
+    } else {
+      0f
+    }
+    val trailingPresence = SIMPLE_ROLL_FAST_TRAIL_PRESENCE * speedPair * trailRamp
+    val handoffAlphaLift = when {
+      TransitionLogic.simpleRollIsBurst(col.simpleBurstSteps) && finalProgress >= 0f ->
+        1f + SIMPLE_ROLL_BURST_HANDOFF_ALPHA_LIFT * handoffBell
+      TransitionLogic.simpleRollIsBurst(col.simpleBurstSteps) ->
+        1f + SIMPLE_ROLL_BRAKE_ALPHA_LIFT_PER_BLEND * settlingPairBlend
+      !TransitionLogic.simpleRollIsBurst(col.simpleBurstSteps) ->
+        1f + SIMPLE_ROLL_SINGLE_HANDOFF_ALPHA_LIFT * handoffBell * (1f - speedPair)
+      else -> 1f
+    }
+    // The nonlinear presence/scale curves otherwise pull the populated sample alternately toward
+    // its upper and lower member. Compensate it as one unit while fast, including the faint third
+    // trail, so its measured centre does not jump when the lanes advance.
+    var predictedWeight = 0f
+    var predictedMoment = 0f
+    var predictedShiftWeight = 0f
+    for (pairIndex in -1..1) {
+      val index = outgoingIndex + pairIndex * col.simpleDirection
+      val offset = index - phase
+      val rawPresence = (1f - abs(offset)).coerceIn(0f, 1f)
+      val presence = if (pairIndex < 0) {
+        trailingPresence
+      } else {
+        rawPresence + (SIMPLE_ROLL_FAST_PAIR_PRESENCE - rawPresence) * pairBlend
+      }
+      if (presence <= 0f) continue
+      val rawScale = TransitionLogic.presenceScale(presence, rollDepthMin, rollScaleExponent)
+      val scale = 1f + (rawScale - 1f) * pairRamp
+      val weight = TransitionLogic.presenceAlpha(presence) * scale * scale
+      val relativeY = -col.simpleDirection * travelPx *
+        TransitionLogic.rollOffsetShape(offset)
+      predictedWeight += weight
+      // Canvas scales both the lane translation and the glyph around the text baseline. The latter
+      // matters just as much: a smaller digit's own ink centre moves down toward the baseline. The
+      // old prediction omitted that term and left the fast strip 0.12-0.20 line-heights below iOS.
+      val glyphCentreFromBaseline = (fmAscent + fmDescent) * 0.5f
+      predictedMoment +=
+        (relativeY * scale + (scale - 1f) * glyphCentreFromBaseline) * weight
+      predictedShiftWeight += scale * weight
+    }
+    val desiredCentre = col.simpleDirection * lineHeight * SIMPLE_ROLL_CENTER_BIAS_FACTOR
+    val fullCentreCorrection = if (predictedShiftWeight > 0f) {
+      (desiredCentre * predictedWeight - predictedMoment) / predictedShiftWeight
+    } else {
+      0f
+    }
+    val centreCorrection = fullCentreCorrection * pairBlend
+    for (pairIndex in -1..1) {
+      val index = outgoingIndex + pairIndex * col.simpleDirection
+      val offset = index - phase
+      val rawPresence = (1f - abs(offset)).coerceIn(0f, 1f)
+      val presence = if (pairIndex < 0) {
+        trailingPresence
+      } else {
+        rawPresence + (SIMPLE_ROLL_FAST_PAIR_PRESENCE - rawPresence) * pairBlend
+      }
+      if (presence <= 0f) continue
+      val alpha =
+        (TransitionLogic.presenceAlpha(presence) * speedAlpha * handoffAlphaLift *
+          finalAlpha * 255f)
+        .toInt().coerceIn(0, 255)
+      if (alpha <= 0) continue
+      val digit = ((index % 10) + 10) % 10
+      val text = digit.toString()
+      val rawScale = TransitionLogic.presenceScale(presence, rollDepthMin, rollScaleExponent)
+      val scale = 1f + (rawScale - 1f) * pairRamp
+      val presenceBlur = TransitionLogic.presenceBlur(presence)
+      val laneBlur = when {
+        readableHold -> presenceBlur * 0.75f
+        finalProgress >= 0f -> presenceBlur
+        else -> presenceBlur * blurRamp
+      }
+      val handoffBlur = when {
+        readableHold -> 0f
+        finalProgress >= 0f -> handoffBell
+        else -> handoffBell * blurRamp
+      }
+      val blurBlend = max(
+        max(speedBlur, finalBlur),
+        max(laneBlur, handoffBlur * SIMPLE_ROLL_HANDOFF_BLUR_SCALE)
+      )
+      val radius = maxBlurPx * blurBlend.coerceIn(0f, 1f) * SIMPLE_ROLL_BLUR_SCALE
+      // For an increment the outgoing digit leaves downward and the incoming digit arrives from
+      // above; decrement is the exact mirror. The previous sign sent the incoming glyph out of the
+      // visible band, which looked like a spring losing the digit.
+      val y = baseline - col.simpleDirection * travelPx *
+        TransitionLogic.rollOffsetShape(offset) + centreCorrection
+      val x = centreX + col.simpleXRel
+
+      canvas.save()
+      canvas.scale(scale, scale, x, baseline)
+      drawGlyphBlurred(canvas, text, x, y, alpha, radius)
+      canvas.restore()
+    }
   }
 
   /** Settled at full presence, with nothing pending and no residual motion → draw it sharp. */
@@ -1192,6 +1437,137 @@ class NumericTextView(context: Context) : View(context) {
    * existing structural scheduler without attempting to translate one model into the other.
    */
   private fun scheduleRollTape(newLayout: List<KeyedSlot>, newFormatted: String, dir: Int): Boolean {
+    return scheduleSimpleRoll(newLayout, newFormatted, dir)
+  }
+
+  /**
+   * Simple roll model: one absolute phase per digit column. The phase is continuous across every
+   * update, and drawing derives the neighbouring digits from it. No update creates or retargets a
+   * visible glyph.
+   */
+  private fun scheduleSimpleRoll(newLayout: List<KeyedSlot>, newFormatted: String, dir: Int): Boolean {
+    val newKeys = newLayout.mapTo(LinkedHashSet(newLayout.size)) { it.key }
+    val liveKeys = columns.keys.toCollection(LinkedHashSet(columns.size))
+    if (newKeys != liveKeys) return false
+    if (columns.values.any { it.tapeActive }) return false
+
+    val fractionalDigits = newLayout.count { it.key.startsWith("F") }
+    val displayedSteps = activePlan?.let {
+      TransitionLogic.displayedStepCount(it.oldValue, it.newValue, fractionalDigits)
+    } ?: 0
+    val recentlyRolling = columns.values.any {
+      it.simpleRollActive && it.simpleIdleSeconds <= SIMPLE_ROLL_BURST_GAP_SECONDS
+    }
+    val coalescedSteps = if (
+      recentlyRolling && displayedSteps in 2..SIMPLE_ROLL_MAX_COALESCED_STEPS
+    ) {
+      displayedSteps
+    } else {
+      1
+    }
+
+    // This absolute tape maps lane n to digit n mod 10, so it is authoritative only for adjacent
+    // numeric updates (including 9→0 carries and immediate reversals), plus a bounded number of
+    // cadence updates coalesced by Fabric while that tape is already live. Preflight the whole
+    // layout before mutating any column. An isolated arbitrary jump such as +123 remains on the
+    // general per-glyph renderer.
+    for (ks in newLayout) {
+      val col = columns.getValue(ks.key)
+      val committed = col.incoming()?.ch ?: return false
+      val current = if (col.simpleRollActive) col.simpleTargetChar.ifEmpty { committed } else committed
+      val currentIsDigit = current.length == 1 && current[0].isDigit()
+      val targetIsDigit = ks.char.length == 1 && ks.char[0].isDigit()
+      if (currentIsDigit && targetIsDigit) {
+        if (current != ks.char) {
+          val laneSteps = TransitionLogic.directedDigitSteps(
+            current[0].digitToInt(),
+            ks.char[0].digitToInt(),
+            dir
+          )
+          if (laneSteps == 0 || laneSteps > coalescedSteps) return false
+        }
+      } else if (current != ks.char || col.simpleRollActive) {
+        return false
+      }
+    }
+
+    for (ks in newLayout) {
+      val col = columns.getValue(ks.key)
+      val current = col.incoming()?.ch ?: return false
+      col.simpleXRel = xRelOf(ks)
+      col.simpleWidth = ks.width
+
+      val currentIsDigit = current.length == 1 && current[0].isDigit()
+      val targetIsDigit = ks.char.length == 1 && ks.char[0].isDigit()
+      if (!currentIsDigit || !targetIsDigit) {
+        // Stable punctuation belongs to the layout, not to the digit tape. A changed separator is
+        // structural and must use the existing structural scheduler.
+        if (current != ks.char || col.simpleRollActive) return false
+        col.incoming()?.let {
+          it.xRelTarget = xRelOf(ks)
+          it.w = ks.width
+        }
+        continue
+      }
+
+      val nextDirection = if (dir < 0) -1 else 1
+      val currentTarget = if (col.simpleRollActive) {
+        col.simpleTargetChar.ifEmpty { current }
+      } else {
+        current
+      }
+      val laneSteps = TransitionLogic.directedDigitSteps(
+        currentTarget[0].digitToInt(),
+        ks.char[0].digitToInt(),
+        nextDirection
+      )
+      if (!col.simpleRollActive) {
+        if (current == ks.char) continue
+        val start = current[0].digitToInt().toFloat()
+        col.simpleRollActive = true
+        col.simplePhase = start
+        col.simpleVelocity = 0f
+        col.simpleVisualPhase = start
+        col.simpleVisualVelocity = 0f
+        col.simpleTarget = start
+        col.simpleDirection = nextDirection
+        col.simpleAgeSeconds = if (recentlyRolling) {
+          SIMPLE_ROLL_CARRY_WARM_AGE_SECONDS
+        } else {
+          0f
+        }
+        col.simpleIdleSeconds = 0f
+        col.simpleBurstSteps = laneSteps.coerceAtLeast(1)
+      } else if (col.simpleTargetChar == ks.char) {
+        continue
+      } else {
+        // A later target continues from exactly what was painted. During the measured readable
+        // hold that phase intentionally differs from the hidden spring; rebasing here prevents a
+        // fast double tap from jumping back to the spring when it resumes.
+        col.simplePhase = col.simpleVisualPhase
+        col.simpleVelocity = col.simpleVisualVelocity
+        val joinsBurst = col.simpleDirection == nextDirection &&
+          col.simpleIdleSeconds <= SIMPLE_ROLL_BURST_GAP_SECONDS
+        col.simpleBurstSteps = if (joinsBurst) {
+          col.simpleBurstSteps + laneSteps.coerceAtLeast(1)
+        } else {
+          laneSteps.coerceAtLeast(1)
+        }
+        if (!joinsBurst) col.simpleAgeSeconds = 0f
+      }
+
+      col.simpleDirection = nextDirection
+      col.simpleTarget += col.simpleDirection * laneSteps.coerceAtLeast(1)
+      col.simpleTargetChar = ks.char
+      col.simpleIdleSeconds = 0f
+    }
+
+    slotTargetText = newFormatted
+    return true
+  }
+
+  // Legacy per-glyph tape retained temporarily for comparison; simple rolls return above.
+  private fun scheduleLegacyRollTape(newLayout: List<KeyedSlot>, newFormatted: String, dir: Int): Boolean {
     val newKeys = newLayout.mapTo(LinkedHashSet(newLayout.size)) { it.key }
     val liveKeys = columns.entries
       .filter { it.value.incoming() != null }
@@ -1219,6 +1595,7 @@ class NumericTextView(context: Context) : View(context) {
     for (ks in newLayout) {
       val col = columns.getValue(ks.key)
       val current = col.incoming()
+      val continuedTape = col.tapeActive
 
       if (!col.tapeActive && current != null && current.ch != ks.char) {
         col.tapeActive = true
@@ -1228,6 +1605,7 @@ class NumericTextView(context: Context) : View(context) {
         col.tapePendingTarget = 0f
         col.tapeDelay = 0f
         current.tapeLane = 0f
+        current.tapeLaneTarget = 0f
         current.tapeSoftness = 1f
       }
 
@@ -1288,8 +1666,24 @@ class NumericTextView(context: Context) : View(context) {
         other.driftMul = 0f
       }
 
-      val g = reusable ?: GlyphState(ks.char).apply {
-        tapeLane = nextLane
+      // If the target changes again before the incoming glyph has arrived, retarget that same
+      // incoming object instead of appending another lane. Its phase and velocity remain those
+      // of the live tape; only its character and destination lane change. A reversal can still
+      // reuse the outgoing glyph above, which preserves the natural double-tap behaviour.
+      val retargetableIncoming = current?.takeIf {
+        continuedTape && it !== reusable && !it.tapeLane.isNaN() && it.effectiveTarget >= 0.5f
+      }
+      // The incoming glyph is the visible front of this one roll. When the counter advances
+      // again, keep that glyph on its current front lane instead of throwing it one whole lane
+      // farther away. The tape phase still advances to [nextLane], which gives us the acceleration
+      // and the slow settle at the final digit without making the new digit disappear.
+      val visualLane = if (reusable == null) {
+        retargetableIncoming?.tapeLane ?: nextLane
+      } else {
+        nextLane
+      }
+      val g = reusable ?: retargetableIncoming ?: GlyphState(ks.char).apply {
+        tapeLane = visualLane
         xRel = xRelOf(ks)
         xRelTarget = xRel
         p = TransitionLogic.rollTapePresence(
@@ -1301,10 +1695,12 @@ class NumericTextView(context: Context) : View(context) {
         offV = col.tapeVelocity
       }.also { col.glyphs.add(it) }
 
+      g.ch = ks.char
       g.target = 1f
       g.pendingTarget = -1f
       g.delay = 0f
-      g.tapeLane = nextLane
+      g.tapeLane = visualLane
+      g.tapeLaneTarget = nextLane
       g.tapeSoftness = (1f - abs(col.tapeVelocity) / rollTapeSoftVelocity).coerceIn(0f, 1f)
       g.xRelTarget = xRelOf(ks)
       g.w = ks.width
@@ -1344,6 +1740,18 @@ class NumericTextView(context: Context) : View(context) {
    */
   private fun releaseRollTapes(dir: Int) {
     for (col in columns.values) {
+      if (col.simpleRollActive) {
+        val finalChar = col.simpleTargetChar.ifEmpty {
+          (((col.simpleTarget % 10f) + 10f) % 10f).toInt().toString()
+        }
+        col.glyphs.clear()
+        col.glyphs.add(GlyphState(finalChar).apply {
+          p = 1f; v = 0f; target = 1f
+          xRel = col.simpleXRel; xRelTarget = col.simpleXRel; w = col.simpleWidth
+          minScale = rollDepthMin; scaleExponent = rollScaleExponent
+        })
+        col.simpleRollActive = false
+      }
       if (!col.tapeActive) continue
       for (g in col.glyphs) {
         if (g.tapeLane.isNaN()) continue
@@ -1684,7 +2092,8 @@ class NumericTextView(context: Context) : View(context) {
     slotTargetText = newFormatted
   }
 
-  private fun atRest(col: Column): Boolean = col.glyphs.all { isSettled(it) }
+  private fun atRest(col: Column): Boolean =
+    !col.simpleRollActive && col.glyphs.all { isSettled(it) }
 
   private fun isSettled(g: GlyphState): Boolean =
     g.delay <= 0f && g.pendingTarget < 0f && abs(g.p - g.target) < 0.004f && abs(g.v) < 0.03f &&
@@ -1695,6 +2104,52 @@ class NumericTextView(context: Context) : View(context) {
     val colIt = columns.iterator()
     while (colIt.hasNext()) {
       val col = colIt.next().value
+      if (col.simpleRollActive) {
+        col.simpleAgeSeconds += dt
+        col.simpleIdleSeconds += dt
+        TransitionLogic.springIntegrateInto(
+          col.simplePhase,
+          col.simpleVelocity,
+          col.simpleTarget,
+          SIMPLE_ROLL_STIFFNESS,
+          rollTapeDampingRatio,
+          dt,
+          springOut
+        )
+        col.simplePhase = springOut[0]
+        col.simpleVelocity = springOut[1]
+        val previousVisualPhase = col.simpleVisualPhase
+        col.simpleVisualPhase = TransitionLogic.simpleRollVisualPhase(
+          col.simplePhase,
+          col.simpleTarget,
+          col.simpleDirection,
+          col.simpleIdleSeconds,
+          col.simpleBurstSteps
+        )
+        col.simpleVisualVelocity = if (dt > 0f) {
+          (col.simpleVisualPhase - previousVisualPhase) / dt
+        } else {
+          col.simpleVelocity
+        }
+        if (
+          abs(col.simplePhase - col.simpleTarget) < 0.004f &&
+          abs(col.simpleVelocity) < 0.03f &&
+          TransitionLogic.simpleRollCanCommit(col.simpleIdleSeconds, col.simpleBurstSteps)
+        ) {
+          val finalChar = col.simpleTargetChar.ifEmpty {
+            (((col.simpleTarget % 10f) + 10f) % 10f).toInt().toString()
+          }
+          col.glyphs.clear()
+          col.glyphs.add(GlyphState(finalChar).apply {
+            p = 1f; v = 0f; target = 1f
+            xRel = col.simpleXRel; xRelTarget = col.simpleXRel; w = col.simpleWidth
+            minScale = rollDepthMin; scaleExponent = rollScaleExponent
+          })
+          col.simpleRollActive = false
+          col.simpleTargetChar = finalChar
+        }
+        continue
+      }
       if (col.tapeActive) {
         // Release an owed lane when its hold expires. Only the TARGET waits; the spring below runs
         // every frame regardless, so a column mid-flight keeps flying while a later column waits.
@@ -1723,6 +2178,17 @@ class NumericTextView(context: Context) : View(context) {
       while (gIt.hasNext()) {
         val g = gIt.next()
         if (col.tapeActive && !g.tapeLane.isNaN()) {
+          // Keep the latest incoming digit on the front of the roll while the physical phase
+          // catches up. Once the phase reaches its target, the lane is no longer synthetic and
+          // the glyph settles normally. Outgoing glyphs keep their original lane and provide the
+          // visible trailing half of the handoff.
+          if (g.target >= 0.5f && !g.tapeLaneTarget.isNaN()) {
+            g.tapeLane = if (col.tapeDirection > 0) {
+              min(g.tapeLaneTarget, col.tapePhase + ROLL_FRONT_LEAD)
+            } else {
+              max(g.tapeLaneTarget, col.tapePhase - ROLL_FRONT_LEAD)
+            }
+          }
           val oldPresence = g.p
           g.off = col.tapePhase - g.tapeLane
           g.offV = col.tapeVelocity
@@ -2121,6 +2587,11 @@ class NumericTextView(context: Context) : View(context) {
       animationProgress = 1f; activePlan = null; columns.clear()
       updateContentDescription(); invalidate(); requestLayout(); return
     }
+    NumericTextFrameRecorder.arm(
+      this,
+      formatNumber(newValue),
+      newValue < settledValue
+    )
     // Mid-flight update → retarget the running transition for continuity, instead of
     // cancelling and restarting from rest (which reads as staccato on a rapid hold).
     // Guard on the animator only: the spring value overshoots past 1 during the bounce,
