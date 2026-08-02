@@ -132,11 +132,6 @@ class NumericTextView(context: Context) : View(context), Choreographer.FrameCall
   private var edgeFadeMaskPaint: Paint? = null
   private var lastFadeWidth = -1
   private var lastFadeHeight = -1
-  private val borderPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-    style = Paint.Style.STROKE
-    strokeWidth = 1f
-    color = Color.RED
-  }
 
   override fun onDraw(canvas: Canvas) {
     super.onDraw(canvas)
@@ -186,8 +181,6 @@ class NumericTextView(context: Context) : View(context), Choreographer.FrameCall
     edgeFadeMaskPaint?.let { canvas.drawRect(0f, topClip, width.toFloat(), bottomClip, it) }
 
     canvas.restore()
-
-    canvas.drawRect(0f, topClip, width.toFloat(), bottomClip, borderPaint)
 
     // Ground-truth capture: exactly what was drawn, on the frame it was drawn. No-op unless armed.
     NumericTextFrameRecorder.capture(this)

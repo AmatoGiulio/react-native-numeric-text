@@ -85,14 +85,14 @@ internal class NumericRollEngine {
      * of one settled glyph. Two glyphs at `presence^2 = 0.25` sum to 0.50. Linear opacity would sum
      * to 1.0 and the crossing would never dip at all.
      */
-    const val ALPHA_EXPONENT = 2.0f
+    const val ALPHA_EXPONENT = 1.0f
 
     /** MEASURED — position spring. Being fitted; the reference's geometry is done at ~400 ms. */
     private const val RESPONSE_SECONDS = 0.40f
     private const val DAMPING_RATIO = 0.90f
 
     /** MEASURED — opacity follower. Being fitted; the reference's opacity arrives at ~750 ms. */
-    private const val SETTLE_RESPONSE_SECONDS = 0.55f
+    private const val SETTLE_RESPONSE_SECONDS = 0.22f
 
     /** Horizontal share of a directional blur, so a smear stays vertical. Renderer detail. */
     internal const val BLUR_X_FACTOR = 0.05f
