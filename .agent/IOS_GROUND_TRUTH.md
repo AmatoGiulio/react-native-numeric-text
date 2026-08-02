@@ -462,3 +462,52 @@ re-record these four presets against the Android build before and after.
 
 The Android side has no equivalent recorder. It could have one — the same trick works on a
 `View`'s canvas — and until it does, the comparison is exact on one side only.
+
+---
+
+# Apple's own parameters, read out of SwiftUICore — 2026-08-02
+
+The two probes established that the *behaviour* cannot be read from outside. The *parameters* can:
+`ContentTransition.NumericTextConfiguration` is a real type in the shipped framework, and its
+accessors are small enough to read directly.
+
+```
+/Library/Developer/CoreSimulator/Volumes/iOS_23B86/.../iOS 26.1.simruntime/Contents/Resources/
+  RuntimeRoot/System/Library/Frameworks/SwiftUICore.framework/SwiftUICore
+```
+
+`nm -gU … | swift demangle` lists the members; the getters decode the packing; `init` copies four
+default bytes from a constant in `__TEXT,__const`.
+
+| member | storage | default | value |
+|---|---|---|---|
+| `delay` | `byte / 120` | 18 | **0.15 s** |
+| `offset` | `signed byte / 32` | 19 | **0.59375** |
+| `scale` | `byte / 128` | 51 | **0.3984** |
+| `blur` | `byte / 4` (or `/128` as `relativeBlur`) | 32 | **8.0** (or 0.25) |
+| `maxDurationMultiple` | immediate in the getter | — | **1.25** |
+| `options` | `OptionSet` | 0 | neither `relativeBlur` nor `reversed` |
+| `axis`, `direction` | enums | — | — |
+
+Two of these are independently confirmed by the recorder, which is what makes the rest credible:
+
+- **`offset` = 0.59375.** The old renderer's `travelFactor` is the amplitude of ONE glyph and was
+  fitted against the recorder at 0.29 (0.302 / 0.294 / 0.274 on the three columns). The pair's
+  separation is twice that — 0.58 — against Apple's 0.59375.
+- **`delay` = 0.15 s, and it is the wave's TOTAL, not the gap.** Three changing columns give
+  0.075 s per gap; the recorder measured the three columns starting 67 and 83 ms apart, mean 75.
+  A fixed total divided by the column count is exactly the thing `.agent/NEXT.md` could not express
+  with one constant after seeing a 3-column and a 6-column change spread over the same ~139 ms.
+
+`delay` being stored in 120ths is itself a finding: the wave is quantised to half a 60 Hz frame,
+which is why the recorder kept measuring steps of 67 and 83 ms (8/120 and 10/120) rather than one
+number.
+
+**What this does not give.** The spring, the alpha curve and the blur curve are compiled code, not
+stored parameters — `scale = 0.3984` and `blur = 8.0` are amplitudes, and how they are applied
+across a crossing is still only measurable from the pixels. So the recorder is not replaced; it now
+has four of its answers checked against the source of truth.
+
+**Do not treat these as portable API.** They are internal defaults of one OS version, read for
+interoperability. They should be written into the Android renderer as measured constants with this
+note, never depended on at runtime.

@@ -53,26 +53,32 @@ internal class NumericRollEngine {
      * Separation between consecutive digits on the strip, as a fraction of the line height — which
      * is the same physical quantity the old renderer called `travelFactor`.
      *
-     * 0.5 -> 0.29, carried over from the exact-recorder fit of 2026-08-02 (see
-     * .agent/IOS_GROUND_TRUTH.md): at each column's floor the reference keeps its crossing pair
-     * inside 1.18-1.22 glyph heights, and `extent = glyphHeight + 1.21 x separation` solves to
-     * 0.302 / 0.294 / 0.274 on the three columns independently. Re-fit here rather than trusted,
-     * since the two engines place their glyphs differently.
+     * This is Apple's own `ContentTransition.NumericTextConfiguration.offset`, read out of
+     * SwiftUICore: stored as a signed byte over 32, default 19/32. See .agent/IOS_GROUND_TRUTH.md.
+     *
+     * It agrees with the independent measurement. The old renderer's `travelFactor` is the
+     * amplitude of ONE glyph, fitted against the recorder at 0.29; the separation of the pair is
+     * twice that, 0.58, and here the strip's stop spacing IS that separation.
      */
-    const val STEP_FRACTION = 0.29f
+    const val STEP_FRACTION = 0.59375f
 
     /**
-     * Seconds between one column starting and the next one to its right.
+     * TOTAL spread of the left-to-right wave, in seconds — not the gap between two columns.
      *
-     * The reference does not move its columns together: measured with the exact recorder, the
-     * three columns of a plain roll begin 67-83 ms apart and their ink floors step by the same
-     * amount. Without this the whole old number slides off as one block while the whole new one
-     * slides in — two legible compositions swapping, which is the single largest visual difference.
+     * Apple's own `NumericTextConfiguration.delay`, read out of SwiftUICore: stored as a byte over
+     * 120, default 18/120 = 0.15 s. Storing it in 120ths is itself informative — the wave is
+     * quantised to half a 60 Hz frame.
+     *
+     * Dividing a fixed total by the number of gaps is what the measurements could not express with
+     * one constant: three changing columns give 0.075 s steps, and the recorder measured the three
+     * columns beginning 67 and 83 ms apart — mean exactly 75. It also predicts that a wider number
+     * does not take proportionally longer, which is the open question .agent/NEXT.md left after
+     * seeing a 3-column and a 6-column change spread over the same ~139 ms.
      *
      * It is a hold on the column's TARGET, never on its position: a glyph already on screen is
-     * never restarted, so a burst still merges into one continuous roll.
+     * never restarted, so a burst still merges.
      */
-    const val COLUMN_STAGGER_SECONDS = 0.075f
+    const val WAVE_TOTAL_SECONDS = 0.15f
 
     /** Fisica molla reattiva e smorzata. */
     private const val BASE_RESPONSE_SECONDS = 0.40f
@@ -150,6 +156,15 @@ internal class NumericRollEngine {
       if (incoming[column.key] == null) column.retiring = true
     }
 
+    // Two passes: the wave's total duration is fixed, so each column's share needs the count.
+    var changingCount = 0
+    for (slot in layout) {
+      val existing = columns[slot.key] ?: continue
+      val current = existing.glyphs[existing.pendingTarget ?: existing.target]
+      if (current != slot.char) changingCount += 1
+    }
+    val gap = if (changingCount > 1) WAVE_TOTAL_SECONDS / (changingCount - 1) else 0f
+
     var changing = 0
     for (slot in layout) {
       val x = xRel(slot)
@@ -178,7 +193,7 @@ internal class NumericRollEngine {
           // Left-to-right wave. Only the columns that actually change content are counted, so a
           // change deep in the number does not inherit a delay from unchanged columns to its left.
           column.pendingTarget = next
-          column.hold = COLUMN_STAGGER_SECONDS * changing
+          column.hold = gap * changing
           changing += 1
         }
       }
