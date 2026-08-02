@@ -26,7 +26,15 @@ echo "── build"
   ./gradlew assembleDebug -PreactNativeArchitectures=arm64-v8a -q 2>&1 | grep -E "^e:" || true)
 
 echo "── install"
-adb -s "$SERIAL" install -r -d "$APK" 2>&1 | grep -E "Success|failed"
+# Each round leaves a few hundred MB of recordings and an orphaned APK behind, and the emulator's
+# /data fills after a handful of them — the install then fails with an empty error message.
+adb -s "$SERIAL" shell rm -rf "$FILES/numerictext-record" 2>/dev/null || true
+if ! adb -s "$SERIAL" install -r -d "$APK" 2>&1 | grep -qE "Success"; then
+  echo "   install failed, reclaiming space"
+  adb -s "$SERIAL" uninstall numerictext.example >/dev/null 2>&1 || true
+  adb -s "$SERIAL" shell pm trim-caches 999G >/dev/null 2>&1 || true
+  adb -s "$SERIAL" install -r -d "$APK" 2>&1 | grep -E "Success|failed"
+fi
 # The external files dir only exists once the app has run; a fresh install has none.
 adb -s "$SERIAL" shell mkdir -p "$FILES" 2>/dev/null || true
 adb -s "$SERIAL" shell touch "$FILES/numerictext-record.on"

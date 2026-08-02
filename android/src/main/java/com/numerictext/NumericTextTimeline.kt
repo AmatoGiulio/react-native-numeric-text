@@ -92,7 +92,7 @@ internal class NumericRollEngine {
      * measurable at zero effect, and invisible. The side-by-side grid against iOS is unambiguous —
      * the reference's crossing is mostly blur, Android's had none.
      */
-    const val BLUR_FRACTION = 0.45f
+    const val BLUR_FRACTION = 0.22f
 
     /** APPLE — `NumericTextConfiguration.maxDurationMultiple`. Caps how far the spring may stretch. */
     const val MAX_DURATION_MULTIPLE = 1.25f
@@ -106,8 +106,13 @@ internal class NumericRollEngine {
      */
     const val ALPHA_EXPONENT = 1.0f
 
-    /** MEASURED — position spring. Being fitted; the reference's geometry is done at ~400 ms. */
-    private const val RESPONSE_SECONDS = 0.40f
+    /**
+     * MEASURED — position spring.
+     *
+     * The reference's last column comes to rest at 537 ms on the decrement 1,242 -> 1,160; at 0.40
+     * this engine took 602, a consistent 65-80 ms per column too slow.
+     */
+    private const val RESPONSE_SECONDS = 0.30f
     private const val DAMPING_RATIO = 0.90f
 
     /** MEASURED — opacity follower. Being fitted; the reference's opacity arrives at ~750 ms. */
@@ -115,6 +120,17 @@ internal class NumericRollEngine {
 
     /** Horizontal share of a directional blur, so a smear stays vertical. Renderer detail. */
     internal const val BLUR_X_FACTOR = 0.05f
+
+    /**
+     * Shutter interval for the motion blur, in seconds.
+     *
+     * BLUR_FRACTION alone scales with DISTANCE, which is bounded by one stop, so a glyph tearing
+     * through a continuous roll blurred no more than one crossing at walking pace — the number
+     * stayed legible and sharp through a burst, which is the opposite of what a fast roll looks
+     * like. This term is the distance actually covered while the shutter is open, so it grows with
+     * speed and vanishes at rest.
+     */
+    private const val SHUTTER_SECONDS = 0.016f
 
     /** Rest thresholds. Not tuning — they decide when to stop asking for frames. */
     private const val POSITION_EPSILON = 0.001f
@@ -394,7 +410,13 @@ internal class NumericRollEngine {
       alpha = alpha.coerceIn(0f, 1f),
       scale = 1f - SCALE_AMOUNT * distance,
       velocityY = column.velocity * stepPx,
-      blurLengthPx = if (settled) 0f else lineHeightPx * BLUR_FRACTION * distance,
+      blurLengthPx =
+        if (settled) {
+          0f
+        } else {
+          lineHeightPx * BLUR_FRACTION * distance +
+            abs(column.velocity) * lineHeightPx * STEP_FRACTION * SHUTTER_SECONDS
+        },
       direction = if (column.velocity < 0f) -1f else 1f,
       stable = settled,
     )
