@@ -72,7 +72,7 @@ internal class NumericRollEngine {
      * heights against 1.55 here, and that gap did not close across five fits of every other knob.
      * So 0.59375 is not the separation of two visible stops; being fitted here instead.
      */
-    const val STEP_FRACTION = 0.25f
+    const val STEP_FRACTION = 0.29f
 
     /** APPLE — `NumericTextConfiguration.delay`, 18/120. TOTAL spread of the wave, not the gap. */
     const val WAVE_TOTAL_SECONDS = 0.15f
@@ -87,7 +87,7 @@ internal class NumericRollEngine {
      * and is not. Like `offset` before it, Apple's number does not appear to mean the thing it is
      * being used for here, so it is fitted.
      */
-    const val SCALE_AMOUNT = 0.20f
+    const val SCALE_AMOUNT = 0.28f
 
     /**
      * Blur amplitude as a fraction of the line height, at full separation.
@@ -107,13 +107,18 @@ internal class NumericRollEngine {
     const val MAX_DURATION_MULTIPLE = 1.25f
 
     /**
-     * MEASURED — the crossing's ink floor.
+     * MEASURED — the crossing's two glyphs do not share a curve.
      *
-     * At mid-crossing both glyphs sit half a stop away and the reference's total ink there is 0.51
-     * of one settled glyph. Two glyphs at `presence^2 = 0.25` sum to 0.50. Linear opacity would sum
-     * to 1.0 and the crossing would never dip at all.
+     * They did, and both readings of the result said the same thing: the arriving digit looked
+     * weak, and the old one hung around long after the reference had cleared it. A single curve
+     * cannot do both — brightening it lifts the ghost too, dimming it starves the arrival.
+     *
+     * So the arriver rises faster than linear and the leaver falls faster. Their sum at the
+     * crossing still has to land on the reference's ink floor of ~0.51, which is what keeps the
+     * pair honest: raising one without lowering the other shows up immediately.
      */
-    const val ALPHA_EXPONENT = 1.0f
+    const val ENTER_ALPHA_EXPONENT = 0.65f
+    const val EXIT_ALPHA_EXPONENT = 1.60f
 
     /**
      * MEASURED — position spring.
@@ -385,7 +390,9 @@ internal class NumericRollEngine {
         // early as the reference does, was measured and rejected: it never dips far enough and the
         // crossing's floor went from 0.017 off the reference to 0.144 off.
         val opacity = if (stop == column.target) min(presence, column.settle) else presence
-        val alpha = pow(opacity, ALPHA_EXPONENT) * column.alive
+        val exponent =
+          if (stop == column.target) ENTER_ALPHA_EXPONENT else EXIT_ALPHA_EXPONENT
+        val alpha = pow(opacity, exponent) * column.alive
         if (alpha <= 0.01f) continue
 
         val ch = column.charAt[stop] ?: continue
