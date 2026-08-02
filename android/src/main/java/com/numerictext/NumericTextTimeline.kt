@@ -1,15 +1,47 @@
 package com.numerictext
 
 import kotlin.math.abs
+import kotlin.math.floor
 import kotlin.math.max
 import kotlin.math.min
-import kotlin.math.roundToInt
 
 /**
- * Motore a rullo per colonne persistenti basato su molle smorzate.
- * Ogni colonna di cifre è una molla indipendente con momentum.
- * Il retargeting sposta solo il target di ciascuna colonna senza ricostruire.
- * Il rullo mostra le cifre in transizione in simultanea per l'effetto tamburo.
+ * The roll engine: one persistent column per logical position, each a single continuous position on
+ * an endless strip of digits.
+ *
+ * Written from scratch on 2026-08-02 against two sources that did not exist before, and it is worth
+ * saying which is which, because every constant here is one or the other:
+ *
+ *  - **Apple's own numbers.** `ContentTransition.NumericTextConfiguration` is a real type in the
+ *    shipped SwiftUICore and its defaults are readable: `offset` 19/32, `delay` 18/120,
+ *    `scale` 51/128, `blur` 32/4, `maxDurationMultiple` 1.25. Constants marked APPLE are those,
+ *    unchanged. See `.agent/IOS_GROUND_TRUTH.md`.
+ *  - **The exact-frame recorder.** Constants marked MEASURED were fitted against it: record at two
+ *    values, check the knob does not move the columns it should not touch, solve.
+ *
+ * There is nothing to tune that is not in the companion object.
+ *
+ * ## The model
+ *
+ * A digit column is a `position` in *stop* units on a strip where stop `n` shows digit `n mod 10`.
+ * Deriving the glyph from the index instead of storing one per stop is what makes a reversal safe:
+ * indices move the other way and can never collide with a stop that is currently on screen.
+ *
+ * A change moves a column's `target` and never restarts anything. That one property is what makes a
+ * single tap and a press-and-hold **the same code** — a hold is a target that keeps moving before
+ * the spring has caught up.
+ *
+ * Two scalars per column, deliberately not one:
+ *
+ *  - `position` owns geometry — the offset, and the scale that goes with distance.
+ *  - `settle` owns opacity, chasing the position's arrival with a slower spring.
+ *
+ * The recorder measured the reference finishing its geometry at ~400 ms and then taking another
+ * ~350 ms to bring opacity from 0.81 to 1.00 with nothing moving. One scalar cannot express that:
+ * when the position stops, everything derived from it stops.
+ *
+ * The wave is a hold on a column's *target*, never on its position, so a glyph already on screen is
+ * never restarted and a burst still merges into one continuous roll.
  */
 internal class NumericRollEngine {
 
@@ -30,107 +62,87 @@ internal class NumericRollEngine {
     val stable: Boolean,
   )
 
-  private data class Column(
-    val key: String,
-    var kind: TokenKind,
-    val glyphs: MutableMap<Int, String> = HashMap(),
-    var position: Float = 0f,
-    var velocity: Float = 0f,
-    var target: Int = 0,
-    var targetX: Float = 0f,
-    var x: Float = 0f,
-    var xVelocity: Float = 0f,
-    var retiring: Boolean = false,
-    var retireAlpha: Float = 1f,
-    /** Where this column is going once its turn in the wave comes. */
-    var pendingTarget: Int? = null,
-    /** Seconds still to wait before [pendingTarget] becomes [target]. */
-    var hold: Float = 0f,
-    /**
-     * The second scalar: how far this column's handover has RESOLVED, 0..1, on its own clock.
-     *
-     * Position owns geometry, this owns opacity, and they are deliberately not the same number.
-     * The recorder measured the reference finishing its geometry at ~400 ms — final size, final
-     * sharpness — and then spending another ~350 ms bringing opacity from 0.81 to 1.00 with
-     * nothing moving. A model where alpha is a function of position cannot express that at all:
-     * when the position stops, the alpha stops. This follows the position's arrival instead of
-     * tracking it, so it is still rising after the glyph has come to rest.
-     */
-    var settle: Float = 1f,
-    var settleVelocity: Float = 0f,
-  )
-
   companion object {
-    /**
-     * Separation between consecutive digits on the strip, as a fraction of the line height — which
-     * is the same physical quantity the old renderer called `travelFactor`.
-     *
-     * This is Apple's own `ContentTransition.NumericTextConfiguration.offset`, read out of
-     * SwiftUICore: stored as a signed byte over 32, default 19/32. See .agent/IOS_GROUND_TRUTH.md.
-     *
-     * It agrees with the independent measurement. The old renderer's `travelFactor` is the
-     * amplitude of ONE glyph, fitted against the recorder at 0.29; the separation of the pair is
-     * twice that, 0.58, and here the strip's stop spacing IS that separation.
-     */
+    /** APPLE — `NumericTextConfiguration.offset`, 19/32. Separation of two stops, in line heights. */
     const val STEP_FRACTION = 0.59375f
 
-    /**
-     * TOTAL spread of the left-to-right wave, in seconds — not the gap between two columns.
-     *
-     * Apple's own `NumericTextConfiguration.delay`, read out of SwiftUICore: stored as a byte over
-     * 120, default 18/120 = 0.15 s. Storing it in 120ths is itself informative — the wave is
-     * quantised to half a 60 Hz frame.
-     *
-     * Dividing a fixed total by the number of gaps is what the measurements could not express with
-     * one constant: three changing columns give 0.075 s steps, and the recorder measured the three
-     * columns beginning 67 and 83 ms apart — mean exactly 75. It also predicts that a wider number
-     * does not take proportionally longer, which is the open question .agent/NEXT.md left after
-     * seeing a 3-column and a 6-column change spread over the same ~139 ms.
-     *
-     * It is a hold on the column's TARGET, never on its position: a glyph already on screen is
-     * never restarted, so a burst still merges.
-     */
+    /** APPLE — `NumericTextConfiguration.delay`, 18/120. TOTAL spread of the wave, not the gap. */
     const val WAVE_TOTAL_SECONDS = 0.15f
 
-    /** Fisica molla reattiva e smorzata. */
-    private const val BASE_RESPONSE_SECONDS = 0.40f
-    private const val DAMPING_RATIO = 0.80f
+    /** APPLE — `NumericTextConfiguration.scale`, 51/128. How far a glyph shrinks at full distance. */
+    const val SCALE_AMOUNT = 0.3984f
+
+    /** APPLE — `NumericTextConfiguration.blur`, 32/4, in points. */
+    const val BLUR_POINTS = 8.0f
+
+    /** APPLE — `NumericTextConfiguration.maxDurationMultiple`. Caps how far the spring may stretch. */
+    const val MAX_DURATION_MULTIPLE = 1.25f
 
     /**
-     * Response of the opacity follower, in seconds. Larger means opacity trails geometry further.
+     * MEASURED — the crossing's ink floor.
      *
-     * Being fitted against the recorder: the reference's geometry is done at ~400 ms and its
-     * opacity still has 0.19 to go, arriving at ~750 ms.
+     * At mid-crossing both glyphs sit half a stop away and the reference's total ink there is 0.51
+     * of one settled glyph. Two glyphs at `presence^2 = 0.25` sum to 0.50. Linear opacity would sum
+     * to 1.0 and the crossing would never dip at all.
      */
+    const val ALPHA_EXPONENT = 2.0f
+
+    /** MEASURED — position spring. Being fitted; the reference's geometry is done at ~400 ms. */
+    private const val RESPONSE_SECONDS = 0.40f
+    private const val DAMPING_RATIO = 0.90f
+
+    /** MEASURED — opacity follower. Being fitted; the reference's opacity arrives at ~750 ms. */
     private const val SETTLE_RESPONSE_SECONDS = 0.55f
 
-    /** Soglie di arresto. */
-    private const val POSITION_EPSILON = 0.001f
-    private const val VELOCITY_EPSILON = 0.005f
-
-    /** Modello ottico. */
-    private const val VISIBLE_RANGE = 1.0f
-    private const val SHUTTER_SECONDS = 0.080f
-    private const val MAX_TRAIL_FRACTION = 0.60f
+    /** Horizontal share of a directional blur, so a smear stays vertical. Renderer detail. */
     internal const val BLUR_X_FACTOR = 0.05f
 
-    /** Asimmetria ENTER / EXIT */
-    private const val ENTER_ALPHA_START = 0.15f
-    private const val ENTER_START_SCALE = 0.65f
-    private const val EXIT_ALPHA_HOLD = 0.35f
-    private const val EXIT_END_SCALE = 0.75f
+    /** Rest thresholds. Not tuning — they decide when to stop asking for frames. */
+    private const val POSITION_EPSILON = 0.001f
+    private const val VELOCITY_EPSILON = 0.005f
+  }
 
-    fun smootherstep(x: Float): Float {
-      val t = x.coerceIn(0f, 1f)
-      return t * t * t * (t * (t * 6f - 15f) + 10f)
-    }
+  private class Column(
+    val key: String,
+    var kind: TokenKind,
+    /** The character shown when this column is a separator or sign; null for digit columns. */
+    var literal: String?,
+  ) {
+    /**
+     * What each stop shows. A handover advances the target by exactly ONE stop and writes the new
+     * digit there, so a crossing is always two glyphs however far apart the digits are: 6 -> 4 is
+     * one crossing, not eight. The reference's crossing measures ~1.2 glyph heights, which is two
+     * glyphs, and its ink floor does not deepen with the digit distance.
+     *
+     * Indices only ever advance in the current direction, and anything more than one stop from the
+     * position is culled, so a reversal can never write onto a stop that is on screen.
+     */
+    val charAt = HashMap<Int, String>()
+    var position = 0f
+    var velocity = 0f
+    var target = 0
+    var pendingTarget: Int? = null
+    var hold = 0f
+
+    var settle = 1f
+    var settleVelocity = 0f
+
+    var x = 0f
+    var xVelocity = 0f
+    var targetX = 0f
+
+    /** 1 while the column belongs to the number, falling to 0 once it has been removed. */
+    var alive = 1f
+    var retiring = false
+
+    fun goalStop(): Int = pendingTarget ?: target
   }
 
   private val columns = LinkedHashMap<String, Column>()
   private var targetLayout: List<KeyedSlot> = emptyList()
-  private var lineHeightPx: Float = 1f
-  private var durationMs: Long = 320L
-  private var directionSign: Int = 1
+  private var lineHeightPx = 1f
+  private var durationScale = 1f
+  private var lastDirection = 1
 
   var targetText: String = ""
     private set
@@ -138,21 +150,23 @@ internal class NumericRollEngine {
   var isRunning: Boolean = false
     private set
 
+  fun targetWidth(): Float = targetLayout.firstOrNull()?.totalWidth ?: 0f
+
+  // ── Public API ──────────────────────────────────────────────────────────────────────────────
+
   fun reset(layout: List<KeyedSlot>, text: String, lineHeight: Float) {
     columns.clear()
     targetLayout = layout
     targetText = text
     lineHeightPx = max(1f, lineHeight)
     for (slot in layout) {
-      columns[slot.key] = Column(
-        key = slot.key,
-        kind = slot.kind,
-        glyphs = hashMapOf(0 to slot.char),
-        position = 0f,
-        target = 0,
-        targetX = xRel(slot),
-        x = xRel(slot),
-      )
+      val column = Column(slot.key, slot.kind, literalOf(slot))
+      column.target = 0
+      column.charAt[0] = slot.char
+      column.position = 0f
+      column.x = xRel(slot)
+      column.targetX = column.x
+      columns[slot.key] = column
     }
     isRunning = false
   }
@@ -165,58 +179,49 @@ internal class NumericRollEngine {
     animationDurationMs: Long,
   ) {
     lineHeightPx = max(1f, lineHeight)
-    durationMs = animationDurationMs.coerceAtLeast(80L)
-    directionSign = if (direction < 0) 1 else -1
+    durationScale = animationDurationMs.coerceAtLeast(80L) / 320f
+    lastDirection = if (direction < 0) -1 else 1
     targetText = text
     targetLayout = layout
 
     val incoming = layout.associateBy { it.key }
+    for (column in columns.values) column.retiring = incoming[column.key] == null
 
-    for (column in columns.values) {
-      if (incoming[column.key] == null) column.retiring = true
-    }
-
-    // Two passes: the wave's total duration is fixed, so each column's share needs the count.
+    // The wave's total is fixed, so a column's share of it needs the count first.
     var changingCount = 0
     for (slot in layout) {
-      val existing = columns[slot.key] ?: continue
-      val current = existing.glyphs[existing.pendingTarget ?: existing.target]
-      if (current != slot.char) changingCount += 1
+      val column = columns[slot.key] ?: continue
+      if (stopFor(column, slot, lastDirection) != column.goalStop()) changingCount += 1
     }
     val gap = if (changingCount > 1) WAVE_TOTAL_SECONDS / (changingCount - 1) else 0f
 
-    var changing = 0
+    var waveIndex = 0
     for (slot in layout) {
-      val x = xRel(slot)
-      val column = columns[slot.key]
-      if (column == null) {
-        val c = Column(
-          key = slot.key,
-          kind = slot.kind,
-          glyphs = hashMapOf(0 to slot.char),
-          position = -directionSign.toFloat(),
-          velocity = 0f,
-          target = 0,
-          targetX = x,
-          x = x,
-          retireAlpha = 0f,
-        )
-        columns[slot.key] = c
-      } else {
-        column.kind = slot.kind
-        column.targetX = x
-        column.retiring = false
-        val currentTargetGlyph = column.glyphs[column.pendingTarget ?: column.target]
-        if (currentTargetGlyph != slot.char) {
-          val next = (column.pendingTarget ?: column.target) + directionSign
-          column.glyphs[next] = slot.char
-          // Left-to-right wave. Only the columns that actually change content are counted, so a
-          // change deep in the number does not inherit a delay from unchanged columns to its left.
-          column.pendingTarget = next
-          column.hold = gap * changing
-          android.util.Log.i("nt-wave", "${slot.key} ${currentTargetGlyph}->${slot.char} idx=$changing hold=${column.hold} n=$changingCount")
-          changing += 1
-        }
+      val existing = columns[slot.key]
+      if (existing == null) {
+        // A column being born starts one stop out, so it arrives the way a roll does.
+        val born = Column(slot.key, slot.kind, literalOf(slot))
+        born.target = 0
+        born.charAt[0] = slot.char
+        born.position = -lastDirection.toFloat()
+        born.settle = 0f
+        born.alive = 0f
+        born.x = xRel(slot)
+        born.targetX = born.x
+        columns[slot.key] = born
+        continue
+      }
+      existing.kind = slot.kind
+      existing.targetX = xRel(slot)
+      existing.retiring = false
+
+      val next = stopFor(existing, slot, lastDirection)
+      if (next != existing.goalStop()) {
+        existing.literal = literalOf(slot)
+        existing.charAt[next] = slot.char
+        existing.pendingTarget = next
+        existing.hold = gap * waveIndex
+        waveIndex += 1
       }
     }
     isRunning = true
@@ -230,23 +235,24 @@ internal class NumericRollEngine {
       val slot = alive[entry.key]
       if (slot == null) {
         iterator.remove()
-      } else {
-        val c = entry.value
-        c.retiring = false
-        c.retireAlpha = 1f
-        c.pendingTarget?.let { c.target = it }
-        c.pendingTarget = null
-        c.hold = 0f
-        c.position = c.target.toFloat()
-        c.velocity = 0f
-        c.settle = 1f
-        c.settleVelocity = 0f
-        c.x = xRel(slot)
-        c.targetX = c.x
-        c.xVelocity = 0f
-        c.glyphs.clear()
-        c.glyphs[c.target] = slot.char
+        continue
       }
+      val column = entry.value
+      column.pendingTarget?.let { column.target = it }
+      column.pendingTarget = null
+      column.hold = 0f
+      column.position = column.target.toFloat()
+      column.velocity = 0f
+      column.settle = 1f
+      column.settleVelocity = 0f
+      column.alive = 1f
+      column.retiring = false
+      column.literal = literalOf(slot)
+      column.charAt.keys.retainAll(setOf(column.target))
+      column.charAt[column.target] = slot.char
+      column.x = xRel(slot)
+      column.targetX = column.x
+      column.xVelocity = 0f
     }
     isRunning = false
   }
@@ -255,200 +261,183 @@ internal class NumericRollEngine {
     val dt = dtSeconds.coerceAtMost(0.04f)
     var active = false
 
-    val scaleFactor = durationMs / 320f
-    val baseResponse = BASE_RESPONSE_SECONDS * scaleFactor
+    // A wider number does not take proportionally longer: the wave is a fixed total, and this caps
+    // how far the spring itself may stretch with the caller's duration. (APPLE.)
+    val response = (RESPONSE_SECONDS * durationScale).coerceIn(
+      RESPONSE_SECONDS / MAX_DURATION_MULTIPLE,
+      RESPONSE_SECONDS * MAX_DURATION_MULTIPLE,
+    )
 
-    val alive = targetLayout.associateBy { it.key }
     val iterator = columns.entries.iterator()
-
     while (iterator.hasNext()) {
-      val entry = iterator.next()
-      val c = entry.value
+      val column = iterator.next().value
 
-      if (c.retiring) {
-        c.retireAlpha = max(0f, c.retireAlpha - dt * 10f)
-        if (c.retireAlpha <= 0f) {
+      if (column.retiring) {
+        column.alive = max(0f, column.alive - dt / max(0.01f, response))
+        if (column.alive <= 0f) {
           iterator.remove()
           continue
         }
         active = true
-      } else {
-        c.retireAlpha = min(1f, c.retireAlpha + dt * 12f)
+      } else if (column.alive < 1f) {
+        column.alive = min(1f, column.alive + dt / max(0.01f, response))
+        active = true
       }
 
-      if (c.pendingTarget != null) {
-        c.hold -= dt
-        if (c.hold <= 0f) {
-          c.target = c.pendingTarget!!
-          c.pendingTarget = null
-          // A handover begins: initialise the opacity follower at the start of its own run rather
-          // than letting it spring down from the previous handover's 1. Springing down and back up
-          // is a visible dip — the flicker reported on the columns that are not first in the wave.
-          c.settle = 0f
-          c.settleVelocity = 0f
+      if (column.pendingTarget != null) {
+        column.hold -= dt
+        if (column.hold <= 0f) {
+          column.target = column.pendingTarget!!
+          column.pendingTarget = null
+          // The follower starts its own run here rather than springing down from the previous
+          // handover's 1, which reads as a dip.
+          column.settle = 0f
+          column.settleVelocity = 0f
         }
         active = true
       }
 
-      val posError = c.target.toFloat() - c.position
-      val dist = abs(posError)
-
-      val adaptiveResponse = if (dist > 0.8f) {
-        baseResponse / (1f + 0.80f * (dist - 0.8f))
-      } else {
-        baseResponse
-      }
-
-      val omega = (2f * Math.PI / max(0.05f, adaptiveResponse)).toFloat()
-      val accel = (omega * omega * posError) - (2f * DAMPING_RATIO * omega * c.velocity)
-
-      c.velocity += accel * dt
-      c.position += c.velocity * dt
-
-      if (abs(c.position - c.target) > POSITION_EPSILON || abs(c.velocity) > VELOCITY_EPSILON) {
-        active = true
-      } else {
-        c.pendingTarget?.let { c.target = it }
-        c.pendingTarget = null
-        c.hold = 0f
-        c.position = c.target.toFloat()
-        c.velocity = 0f
-      }
-
-      // The second scalar. `arrived` is how complete the GEOMETRY is; `settle` chases it with a
-      // slower spring, so opacity keeps resolving after the glyph has stopped moving.
-      val arrived = (1f - min(1f, abs(c.target.toFloat() - c.position))).coerceIn(0f, 1f)
-      val settleOmega = (2f * Math.PI / SETTLE_RESPONSE_SECONDS).toFloat()
-      val settleAccel =
-        (settleOmega * settleOmega * (arrived - c.settle)) -
-          (2f * DAMPING_RATIO * settleOmega * c.settleVelocity)
-      c.settleVelocity += settleAccel * dt
-      c.settle = (c.settle + c.settleVelocity * dt).coerceIn(0f, 1f)
-      if (abs(c.settle - arrived) > 0.002f || abs(c.settleVelocity) > VELOCITY_EPSILON) active = true
-
-      val slot = alive[c.key]
-      val targetXVal = slot?.let { xRel(it) } ?: c.targetX
-      c.targetX = targetXVal
-
-      val xError = c.targetX - c.x
-      val xOmega = (2f * Math.PI / baseResponse).toFloat()
-      val xAccel = (xOmega * xOmega * xError) - (2f * DAMPING_RATIO * xOmega * c.xVelocity)
-
-      c.xVelocity += xAccel * dt
-      c.x += c.xVelocity * dt
-
-      if (abs(c.x - c.targetX) > 0.1f || abs(c.xVelocity) > 0.1f) {
-        active = true
-      }
-
-      pruneGlyphs(c)
+      if (stepPosition(column, response, dt)) active = true
+      if (stepSettle(column, dt)) active = true
+      if (stepX(column, response, dt)) active = true
     }
 
-    if (!active) {
-      snapToTarget()
-    }
+    if (!active) snapToTarget()
     isRunning = active
     return active
   }
 
   fun samples(): List<GlyphSample> {
-    val out = ArrayList<GlyphSample>()
+    val out = ArrayList<GlyphSample>(columns.size * 2)
     val stepPx = lineHeightPx * STEP_FRACTION
 
-    for (c in columns.values) {
-      val velocityPx = c.velocity * stepPx
-      val trail = (abs(velocityPx) * SHUTTER_SECONDS).coerceAtMost(lineHeightPx * MAX_TRAIL_FRACTION)
-      val dir = if (velocityPx < 0f) -1f else 1f
-
-      val sortedIndices = c.glyphs.keys.sorted()
-      for (index in sortedIndices) {
-        val ch = c.glyphs[index] ?: continue
-        val relative = index - c.position
-        val distance = abs(relative)
-
-        if (distance >= VISIBLE_RANGE) continue
-
-        val p = (distance / VISIBLE_RANGE).coerceIn(0f, 1f)
-        val isEntering = index == c.target
-        // Per COLUMN, not for the whole number. `isRunning` is global, so while any column was
-        // still moving every other column kept a non-ANCHOR role and therefore kept its blur —
-        // which is the blur that appeared frozen over the finished digits at the end of a run.
-        val isSettled = distance < POSITION_EPSILON &&
-          abs(c.velocity) < VELOCITY_EPSILON &&
-          c.settle > 0.999f
-
-        val role = when {
-          isSettled -> GlyphRole.ANCHOR
-          isEntering -> GlyphRole.ENTER
-          else -> GlyphRole.EXIT
-        }
-
-        val (alpha, scale, extraBlur) = when (role) {
-          GlyphRole.ANCHOR -> Triple(1f, 1f, 0f)
-          GlyphRole.EXIT -> {
-            val a = 1f - p * p * p
-            val s = 1f - p * (1f - EXIT_END_SCALE)
-            val b = lineHeightPx * MAX_TRAIL_FRACTION * p * p
-            Triple(a, s, b)
-          }
-          GlyphRole.ENTER -> {
-            // Opacity rides the second scalar, not the distance: it is still filling in after the
-            // glyph has stopped. Scale stays on the distance, because the reference's geometry
-            // finishes with the motion.
-            // The geometry is the ceiling while the glyph is in flight; the follower takes over
-            // once it has landed. Reading the follower alone made an arrival appear at full
-            // opacity the instant its turn came, because the follower still held the previous
-            // handover's value; reading the distance alone is what cannot keep fading after the
-            // motion stops. The reference does both, so the alpha is the smaller of the two.
-            val a = ENTER_ALPHA_START + (1f - ENTER_ALPHA_START) * min(c.settle, 1f - p)
-            val s = ENTER_START_SCALE + (1f - ENTER_START_SCALE) * (1f - p)
-            val b = lineHeightPx * MAX_TRAIL_FRACTION * (1f - p)
-            Triple(a, s, b)
-          }
-        }
-
-        val finalAlpha = (alpha * c.retireAlpha).coerceIn(0f, 1f)
-
-        if (finalAlpha <= 0.01f) continue
-
-        val finalBlur = if (role == GlyphRole.ANCHOR) 0f else trail + extraBlur
-
+    for (column in columns.values) {
+      val literal = column.literal
+      if (literal != null) {
+        // A separator has no strip to roll along; it only fades and glides.
+        val alpha = column.alive
+        if (alpha <= 0.01f) continue
         out.add(
-          GlyphSample(
-            key = c.key,
-            ch = ch,
-            kind = c.kind,
-            role = role,
-            x = c.x,
-            offsetY = relative * stepPx,
-            alpha = finalAlpha,
-            scale = scale,
-            velocityY = velocityPx,
-            blurLengthPx = finalBlur,
-            direction = dir,
-            stable = isSettled,
-          )
+          sample(column, literal, stop = column.target, distance = 0f, alpha = alpha, stepPx = stepPx)
         )
+        continue
+      }
+
+      val lowest = floor(column.position).toInt()
+      for (stop in lowest..lowest + 1) {
+        val distance = abs(stop - column.position)
+        if (distance >= 1f) continue
+
+        val presence = 1f - distance
+        // Geometry is the ceiling while a glyph is in flight; the follower takes over once it has
+        // landed, which is the only way opacity can still resolve after the motion has stopped.
+        val opacity = if (stop == column.target) min(presence, column.settle) else presence
+        val alpha = pow(opacity, ALPHA_EXPONENT) * column.alive
+        if (alpha <= 0.01f) continue
+
+        val ch = column.charAt[stop] ?: continue
+        out.add(sample(column, ch, stop, distance, alpha, stepPx))
       }
     }
     return out
   }
 
-  fun targetWidth(): Float = targetLayout.firstOrNull()?.totalWidth ?: 0f
+  // ── Internals ───────────────────────────────────────────────────────────────────────────────
 
-  private fun pruneGlyphs(c: Column) {
-    val centre = c.position.roundToInt()
-    val minIndex = min(centre, c.target) - 1
-    val maxIndex = max(centre, c.target) + 1
-    val iterator = c.glyphs.keys.iterator()
-    while (iterator.hasNext()) {
-      val i = iterator.next()
-      if (i < minIndex || i > maxIndex) iterator.remove()
+  private fun sample(
+    column: Column,
+    ch: String,
+    stop: Int,
+    distance: Float,
+    alpha: Float,
+    stepPx: Float,
+  ): GlyphSample {
+    val settled = distance < POSITION_EPSILON &&
+      abs(column.velocity) < VELOCITY_EPSILON &&
+      column.settle > 0.999f &&
+      column.alive > 0.999f
+    val role = when {
+      settled -> GlyphRole.ANCHOR
+      stop == column.target -> GlyphRole.ENTER
+      else -> GlyphRole.EXIT
     }
+    return GlyphSample(
+      key = column.key,
+      ch = ch,
+      kind = column.kind,
+      role = role,
+      x = column.x,
+      offsetY = (stop - column.position) * stepPx,
+      alpha = alpha.coerceIn(0f, 1f),
+      scale = 1f - SCALE_AMOUNT * distance,
+      velocityY = column.velocity * stepPx,
+      blurLengthPx = if (settled) 0f else BLUR_POINTS * distance,
+      direction = if (column.velocity < 0f) -1f else 1f,
+      stable = settled,
+    )
   }
 
-  private fun xRel(slot: KeyedSlot): Float {
-    val total = targetWidth()
-    return slot.centerFromLeft - total / 2f
+  private fun literalOf(slot: KeyedSlot): String? =
+    if (slot.kind == TokenKind.DIGIT) null else slot.char
+
+  /**
+   * The stop this slot wants, reached from `from` in `direction`.
+   *
+   * A digit column takes the run that goes the way the value moved — 9 → 0 on an increment is one
+   * step forward, not nine back — which is what makes a carry read as part of the same roll.
+   */
+  private fun stopFor(column: Column, slot: KeyedSlot, direction: Int): Int {
+    val from = column.goalStop()
+    if (slot.kind != TokenKind.DIGIT) return from
+    if (column.charAt[from] == slot.char) return from
+    return from + direction
   }
+
+  private fun stepPosition(column: Column, response: Float, dt: Float): Boolean {
+    val error = column.target - column.position
+    if (abs(error) <= POSITION_EPSILON && abs(column.velocity) <= VELOCITY_EPSILON) {
+      column.position = column.target.toFloat()
+      column.velocity = 0f
+      return false
+    }
+    val omega = (2.0 * Math.PI / max(0.05f, response)).toFloat()
+    column.velocity +=
+      ((omega * omega * error) - (2f * DAMPING_RATIO * omega * column.velocity)) * dt
+    column.position += column.velocity * dt
+    return true
+  }
+
+  private fun stepSettle(column: Column, dt: Float): Boolean {
+    val arrived = (1f - min(1f, abs(column.target - column.position))).coerceIn(0f, 1f)
+    if (abs(column.settle - arrived) <= 0.002f && abs(column.settleVelocity) <= VELOCITY_EPSILON) {
+      column.settle = arrived
+      column.settleVelocity = 0f
+      return false
+    }
+    val omega = (2.0 * Math.PI / SETTLE_RESPONSE_SECONDS).toFloat()
+    column.settleVelocity +=
+      ((omega * omega * (arrived - column.settle)) -
+        (2f * DAMPING_RATIO * omega * column.settleVelocity)) * dt
+    column.settle = (column.settle + column.settleVelocity * dt).coerceIn(0f, 1f)
+    return true
+  }
+
+  private fun stepX(column: Column, response: Float, dt: Float): Boolean {
+    val error = column.targetX - column.x
+    if (abs(error) <= 0.1f && abs(column.xVelocity) <= 0.1f) {
+      column.x = column.targetX
+      column.xVelocity = 0f
+      return false
+    }
+    val omega = (2.0 * Math.PI / max(0.05f, response)).toFloat()
+    column.xVelocity +=
+      ((omega * omega * error) - (2f * DAMPING_RATIO * omega * column.xVelocity)) * dt
+    column.x += column.xVelocity * dt
+    return true
+  }
+
+  private fun xRel(slot: KeyedSlot): Float = slot.centerFromLeft - slot.totalWidth / 2f
+
+  private fun pow(base: Float, exponent: Float): Float =
+    Math.pow(base.toDouble(), exponent.toDouble()).toFloat()
 }
