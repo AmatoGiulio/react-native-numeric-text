@@ -42,6 +42,16 @@ class NumericTextView(context: Context) : View(context), Choreographer.FrameCall
   // Props
   private var numericValue: Double = 0.0
   private var settledValue: Double = 0.0
+
+  /**
+   * The value the engine is currently rolling TOWARDS, which is not the settled one during a burst.
+   *
+   * The roll's direction has to be read against this. `settledValue` only advances when motion
+   * finishes, so during a burst every change was compared against where the number was before the
+   * burst began: 1,010 -> 1,020 -> 1,010 resolved the last step as "up", and the roll kept going
+   * the same way whichever way the value moved.
+   */
+  private var targetValue: Double = 0.0
   private var settledText: String = "0"
   private var targetText: String = "0"
   private var hasSettledOnce = false
@@ -337,6 +347,7 @@ class NumericTextView(context: Context) : View(context), Choreographer.FrameCall
     engine.snapToTarget()
     settledText = targetText
     settledValue = numericValue
+    targetValue = numericValue
     measureOldWidth = 0f
     measureNewWidth = 0f
     lastFrameNanos = 0L
@@ -356,13 +367,14 @@ class NumericTextView(context: Context) : View(context), Choreographer.FrameCall
 
     val oldWidth = if (engine.isRunning) engine.targetWidth() else advanceOf(settledText)
     val newLayout = layoutOf(formatted)
-    val direction = resolveDirection(numericValue, if (engine.isRunning) settledValue else settledValue)
+    val direction = resolveDirection(numericValue, if (engine.isRunning) targetValue else settledValue)
 
     if (!engine.isRunning && targetText == settledText) {
       engine.reset(layoutOf(settledText), settledText, textHeightPx)
     }
 
     targetText = formatted
+    targetValue = numericValue
     measureOldWidth = oldWidth
     measureNewWidth = newLayout.firstOrNull()?.totalWidth ?: 0f
 

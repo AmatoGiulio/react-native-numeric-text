@@ -63,8 +63,16 @@ internal class NumericRollEngine {
   )
 
   companion object {
-    /** APPLE — `NumericTextConfiguration.offset`, 19/32. Separation of two stops, in line heights. */
-    const val STEP_FRACTION = 0.59375f
+    /**
+     * Separation of two stops, in line heights.
+     *
+     * Apple's `NumericTextConfiguration.offset` is 19/32 = 0.59375 and this was that, but the
+     * side-by-side grid says the reference's two glyphs CONTEND for the same space — they overlap,
+     * blurred, rather than sliding past each other stacked apart. Its crossing spans 1.18 glyph
+     * heights against 1.55 here, and that gap did not close across five fits of every other knob.
+     * So 0.59375 is not the separation of two visible stops; being fitted here instead.
+     */
+    const val STEP_FRACTION = 0.25f
 
     /** APPLE — `NumericTextConfiguration.delay`, 18/120. TOTAL spread of the wave, not the gap. */
     const val WAVE_TOTAL_SECONDS = 0.15f
@@ -72,8 +80,19 @@ internal class NumericRollEngine {
     /** APPLE — `NumericTextConfiguration.scale`, 51/128. How far a glyph shrinks at full distance. */
     const val SCALE_AMOUNT = 0.3984f
 
-    /** APPLE — `NumericTextConfiguration.blur`, 32/4, in points. */
-    const val BLUR_POINTS = 8.0f
+    /**
+     * Blur amplitude as a fraction of the line height, at full separation.
+     *
+     * Apple stores both an absolute `blur` (32/4 = 8.0 points) and a `relativeBlur` (32/128 = 0.25)
+     * on the same byte and picks with an option flag; the default picks the absolute one. A library
+     * that has to hold up at any font size wants the relative reading, and 0.25 is what the
+     * reference's own crossing looks like.
+     *
+     * It was 8.0 raw pixels, which the shader turns into a ~3 px smear on a 180 px glyph: applied,
+     * measurable at zero effect, and invisible. The side-by-side grid against iOS is unambiguous —
+     * the reference's crossing is mostly blur, Android's had none.
+     */
+    const val BLUR_FRACTION = 0.25f
 
     /** APPLE — `NumericTextConfiguration.maxDurationMultiple`. Caps how far the spring may stretch. */
     const val MAX_DURATION_MULTIPLE = 1.25f
@@ -371,7 +390,7 @@ internal class NumericRollEngine {
       alpha = alpha.coerceIn(0f, 1f),
       scale = 1f - SCALE_AMOUNT * distance,
       velocityY = column.velocity * stepPx,
-      blurLengthPx = if (settled) 0f else BLUR_POINTS * distance,
+      blurLengthPx = if (settled) 0f else lineHeightPx * BLUR_FRACTION * distance,
       direction = if (column.velocity < 0f) -1f else 1f,
       stable = settled,
     )

@@ -27,6 +27,8 @@ echo "── build"
 
 echo "── install"
 adb -s "$SERIAL" install -r -d "$APK" 2>&1 | grep -E "Success|failed"
+# The external files dir only exists once the app has run; a fresh install has none.
+adb -s "$SERIAL" shell mkdir -p "$FILES" 2>/dev/null || true
 adb -s "$SERIAL" shell touch "$FILES/numerictext-record.on"
 adb -s "$SERIAL" shell rm -rf "$FILES/numerictext-record"
 
