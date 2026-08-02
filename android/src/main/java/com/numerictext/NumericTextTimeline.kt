@@ -72,7 +72,7 @@ internal class NumericRollEngine {
      * heights against 1.55 here, and that gap did not close across five fits of every other knob.
      * So 0.59375 is not the separation of two visible stops; being fitted here instead.
      */
-    const val STEP_FRACTION = 0.25f
+    const val STEP_FRACTION = 0.36f
 
     /** APPLE — `NumericTextConfiguration.delay`, 18/120. TOTAL spread of the wave, not the gap. */
     const val WAVE_TOTAL_SECONDS = 0.15f
@@ -92,7 +92,7 @@ internal class NumericRollEngine {
      * measurable at zero effect, and invisible. The side-by-side grid against iOS is unambiguous —
      * the reference's crossing is mostly blur, Android's had none.
      */
-    const val BLUR_FRACTION = 0.25f
+    const val BLUR_FRACTION = 0.45f
 
     /** APPLE — `NumericTextConfiguration.maxDurationMultiple`. Caps how far the spring may stretch. */
     const val MAX_DURATION_MULTIPLE = 1.25f
@@ -348,8 +348,12 @@ internal class NumericRollEngine {
         if (distance >= 1f) continue
 
         val presence = 1f - distance
-        // Geometry is the ceiling while a glyph is in flight; the follower takes over once it has
-        // landed, which is the only way opacity can still resolve after the motion has stopped.
+        // Geometry is the arriver's ceiling while it is in flight; the follower takes over once it
+        // has landed, which is the only way opacity can still resolve after the motion has stopped.
+        //
+        // The leaver stays on its distance. Putting it on the fade clock instead, to clear it as
+        // early as the reference does, was measured and rejected: it never dips far enough and the
+        // crossing's floor went from 0.017 off the reference to 0.144 off.
         val opacity = if (stop == column.target) min(presence, column.settle) else presence
         val alpha = pow(opacity, ALPHA_EXPONENT) * column.alive
         if (alpha <= 0.01f) continue

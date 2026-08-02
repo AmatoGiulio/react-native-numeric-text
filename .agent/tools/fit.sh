@@ -33,9 +33,12 @@ adb -s "$SERIAL" shell touch "$FILES/numerictext-record.on"
 adb -s "$SERIAL" shell rm -rf "$FILES/numerictext-record"
 
 echo "── launch"
+# Reach Metro over adb reverse rather than 10.0.2.2: after a reinstall the dev client drops its
+# server list and the 10.0.2.2 deep link lands on the connect screen instead of the app.
+adb -s "$SERIAL" reverse "tcp:$PORT" "tcp:$PORT" >/dev/null
 adb -s "$SERIAL" shell am force-stop numerictext.example
 adb -s "$SERIAL" shell am start -a android.intent.action.VIEW \
-  -d "exp+react-native-numeric-text-example://expo-development-client/?url=http%3A%2F%2F10.0.2.2%3A$PORT" >/dev/null 2>&1
+  -d "exp+react-native-numeric-text-example://expo-development-client/?url=http%3A%2F%2Flocalhost%3A$PORT" >/dev/null 2>&1
 sleep 45
 
 echo "── drive"
