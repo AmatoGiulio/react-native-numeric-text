@@ -281,6 +281,11 @@ internal class NumericRollEngine {
         if (c.hold <= 0f) {
           c.target = c.pendingTarget!!
           c.pendingTarget = null
+          // A handover begins: initialise the opacity follower at the start of its own run rather
+          // than letting it spring down from the previous handover's 1. Springing down and back up
+          // is a visible dip — the flicker reported on the columns that are not first in the wave.
+          c.settle = 0f
+          c.settleVelocity = 0f
         }
         active = true
       }
@@ -365,7 +370,12 @@ internal class NumericRollEngine {
 
         val p = (distance / VISIBLE_RANGE).coerceIn(0f, 1f)
         val isEntering = index == c.target
-        val isSettled = !isRunning && distance < POSITION_EPSILON
+        // Per COLUMN, not for the whole number. `isRunning` is global, so while any column was
+        // still moving every other column kept a non-ANCHOR role and therefore kept its blur —
+        // which is the blur that appeared frozen over the finished digits at the end of a run.
+        val isSettled = distance < POSITION_EPSILON &&
+          abs(c.velocity) < VELOCITY_EPSILON &&
+          c.settle > 0.999f
 
         val role = when {
           isSettled -> GlyphRole.ANCHOR
