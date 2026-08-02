@@ -75,91 +75,103 @@ class TransitionLogicTest {
   @Test fun smootherstep_at0_is0() = assertEquals(0f, TransitionLogic.smootherstep(0f), 0.001f)
   @Test fun smootherstep_at1_is1() = assertEquals(1f, TransitionLogic.smootherstep(1f), 0.001f)
   @Test fun remap_linear() = assertEquals(0.5f, TransitionLogic.remap(0.5f, 0f, 1f, 0f, 1f), 0.001f)
+}
 
-  // ── Measured crowded-roll choreography ───────────────────────────────────
+class NumericRollEngineTest {
 
-  @Test fun simpleRoll_singleStepKeepsPhysicalPhase() {
-    assertEquals(
-      0.42f,
-      TransitionLogic.simpleRollVisualPhase(0.42f, 1f, 1, 0.2f, 1),
-      0.001f
-    )
+  private fun slot(ch: String, key: String, width: Float = 10f, total: Float = 50f): KeyedSlot =
+    KeyedSlot(key, TokenKind.DIGIT, ch, width / 2f, width, total)
+
+  private fun slots(text: String): List<KeyedSlot> =
+    TransitionLogic.layoutKeyedSlots(text, ',', '.', '-') { 10f }
+
+  // ── Direction sign ─────────────────────────────────────────────────────────
+
+  @Test fun direction_increment_newEntersFromAbove() {
+    val engine = NumericRollEngine()
+    engine.reset(slots("5"), "5", 100f)
+    engine.setTarget(slots("6"), "6", direction = 1, lineHeight = 100f, animationDurationMs = 320L)
+
+    val samples = engine.samples()
+    val entering = samples.first { it.ch == "6" }
+    val exiting = samples.first { it.ch == "5" }
+
+    assertTrue(entering.offsetY < 0f)  // enters from above (negative offset)
+    assertEquals(0f, exiting.offsetY, 0.01f)  // still at center at t=0
   }
 
-  @Test fun simpleRoll_recoversDisplayedStepsCoalescedByFabric() {
-    assertEquals(5, TransitionLogic.displayedStepCount(1001.0, 1006.0, 0))
-    assertEquals(2, TransitionLogic.displayedStepCount(10.01, 10.03, 2))
-    assertEquals(0, TransitionLogic.displayedStepCount(1.0, 1.25, 0))
-    assertEquals(5, TransitionLogic.directedDigitSteps(1, 6, 1))
-    assertEquals(2, TransitionLogic.directedDigitSteps(8, 0, 1))
-    assertEquals(2, TransitionLogic.directedDigitSteps(0, 8, -1))
-    assertEquals(0, TransitionLogic.directedDigitSteps(4, 4, 1))
+  @Test fun direction_decrement_newEntersFromBelow() {
+    val engine = NumericRollEngine()
+    engine.reset(slots("6"), "6", 100f)
+    engine.setTarget(slots("5"), "5", direction = -1, lineHeight = 100f, animationDurationMs = 320L)
+
+    val samples = engine.samples()
+    val entering = samples.first { it.ch == "5" }
+    val exiting = samples.first { it.ch == "6" }
+
+    assertTrue(entering.offsetY > 0f)  // enters from below (positive offset)
+    assertEquals(0f, exiting.offsetY, 0.01f)  // still at center at t=0
   }
 
-  @Test fun simpleRoll_incrementHoldsPenultimateThenCrossesFinalLane() {
-    assertEquals(8.86f, TransitionLogic.simpleRollVisualPhase(8.7f, 10f, 1, 0.100f, 10), 0.001f)
-    assertEquals(8.86f, TransitionLogic.simpleRollVisualPhase(9.2f, 10f, 1, 0.146f, 10), 0.001f)
-    assertEquals(9.36f, TransitionLogic.simpleRollVisualPhase(9.6f, 10f, 1, 0.2045f, 10), 0.002f)
-    assertEquals(9.86f, TransitionLogic.simpleRollVisualPhase(9.9f, 10f, 1, 0.263f, 10), 0.001f)
-    assertEquals(9.86f, TransitionLogic.simpleRollVisualPhase(9.9f, 10f, 1, 0.280f, 10), 0.001f)
-    assertEquals(10f, TransitionLogic.simpleRollVisualPhase(9.9f, 10f, 1, 0.300f, 10), 0.001f)
-    assertEquals(10.025f, TransitionLogic.simpleRollVisualPhase(9.9f, 10f, 1, 0.335f, 10), 0.002f)
-    assertEquals(10.05f, TransitionLogic.simpleRollVisualPhase(9.9f, 10f, 1, 0.370f, 10), 0.001f)
-    assertEquals(10.025f, TransitionLogic.simpleRollVisualPhase(9.9f, 10f, 1, 0.435f, 10), 0.002f)
-    assertEquals(10f, TransitionLogic.simpleRollVisualPhase(9.9f, 10f, 1, 0.500f, 10), 0.001f)
+  // ── Samples visibility ─────────────────────────────────────────────────────
+
+  @Test fun samples_bothDigitsVisibleDuringRoll() {
+    val engine = NumericRollEngine()
+    engine.reset(slots("5"), "5", 100f)
+    engine.setTarget(slots("6"), "6", direction = 1, lineHeight = 100f, animationDurationMs = 320L)
+
+    // Advance halfway through
+    for (i in 0..15) engine.step(0.01f)
+
+    val samples = engine.samples()
+    assertEquals(2, samples.count { it.kind == TokenKind.DIGIT })
+    assertTrue(samples.any { it.ch == "5" })
+    assertTrue(samples.any { it.ch == "6" })
+    // Both should have partial alpha (overlapping in transition)
+    assertTrue(samples.all { it.alpha in 0.1f..0.99f })
   }
 
-  @Test fun simpleRoll_decrementIsExactMirror() {
-    assertEquals(-8.86f, TransitionLogic.simpleRollVisualPhase(-8.7f, -10f, -1, 0.100f, 10), 0.001f)
-    assertEquals(-8.86f, TransitionLogic.simpleRollVisualPhase(-9.2f, -10f, -1, 0.146f, 10), 0.001f)
-    assertEquals(-9.36f, TransitionLogic.simpleRollVisualPhase(-9.6f, -10f, -1, 0.2045f, 10), 0.002f)
-    assertEquals(-9.86f, TransitionLogic.simpleRollVisualPhase(-9.9f, -10f, -1, 0.263f, 10), 0.001f)
-    assertEquals(-9.86f, TransitionLogic.simpleRollVisualPhase(-9.9f, -10f, -1, 0.280f, 10), 0.001f)
-    assertEquals(-10f, TransitionLogic.simpleRollVisualPhase(-9.9f, -10f, -1, 0.300f, 10), 0.001f)
-    assertEquals(-10.025f, TransitionLogic.simpleRollVisualPhase(-9.9f, -10f, -1, 0.335f, 10), 0.002f)
-    assertEquals(-10.05f, TransitionLogic.simpleRollVisualPhase(-9.9f, -10f, -1, 0.370f, 10), 0.001f)
-    assertEquals(-10.025f, TransitionLogic.simpleRollVisualPhase(-9.9f, -10f, -1, 0.435f, 10), 0.002f)
-    assertEquals(-10f, TransitionLogic.simpleRollVisualPhase(-9.9f, -10f, -1, 0.500f, 10), 0.001f)
+  @Test fun samples_onlyOneVisibleWhenSettled() {
+    val engine = NumericRollEngine()
+    engine.reset(slots("5"), "5", 100f)
+    engine.setTarget(slots("6"), "6", direction = 1, lineHeight = 100f, animationDurationMs = 320L)
+    engine.snapToTarget()
+
+    val samples = engine.samples()
+    assertEquals(1, samples.size)
+    assertEquals("6", samples[0].ch)
+    assertEquals(1f, samples[0].alpha, 0.001f)
   }
 
-  @Test fun simpleRoll_fastSmearBrakesBeforeReadableHold() {
-    assertEquals(1f, TransitionLogic.simpleRollFastKeep(0.045f, 10), 0.001f)
-    assertTrue(TransitionLogic.simpleRollFastKeep(0.095f, 10) in 0.45f..0.55f)
-    assertEquals(0f, TransitionLogic.simpleRollFastKeep(0.146f, 10), 0.001f)
-    assertEquals(1f, TransitionLogic.simpleRollFastKeep(1f, 1), 0.001f)
+  // ── Column persistence (retargeting) ──────────────────────────────────────
+
+  @Test fun columns_persistAcrossRetargets() {
+    val engine = NumericRollEngine()
+    engine.reset(slots("5"), "5", 100f)
+    engine.setTarget(slots("6"), "6", direction = 1, lineHeight = 100f, animationDurationMs = 320L)
+
+    // Simulate mid-flight
+    for (i in 0..4) engine.step(0.01f)
+
+    // Retarget to 7 before reaching 6
+    engine.setTarget(slots("7"), "7", direction = 1, lineHeight = 100f, animationDurationMs = 320L)
+
+    val samples = engine.samples()
+    // Should have all three glyphs (5 exiting, 6 intermediate, 7 entering)
+    assertTrue(samples.any { it.ch == "5" })
+    assertTrue(samples.any { it.ch == "6" })
+    assertTrue(samples.any { it.ch == "7" })
   }
 
-  @Test fun simpleRoll_launchStartsSlowThenReleasesItsHalfLaneLag() {
-    assertEquals(0f, TransitionLogic.simpleRollLaunchLag(0.040f, 4), 0.001f)
-    assertTrue(TransitionLogic.simpleRollLaunchLag(0.100f, 4) in 0.42f..0.45f)
-    assertEquals(0.50f, TransitionLogic.simpleRollLaunchLag(0.117f, 4), 0.002f)
-    assertTrue(TransitionLogic.simpleRollLaunchLag(0.167f, 4) in 0.24f..0.26f)
-    assertEquals(0f, TransitionLogic.simpleRollLaunchLag(0.217f, 4), 0.001f)
-    assertEquals(0f, TransitionLogic.simpleRollLaunchLag(0.117f, 1), 0.001f)
+  // ── Smoothstep ─────────────────────────────────────────────────────────────
+
+  @Test fun smootherstep_endpoints() {
+    assertEquals(0f, NumericRollEngine.smootherstep(0f), 0.001f)
+    assertEquals(1f, NumericRollEngine.smootherstep(1f), 0.001f)
   }
 
-  @Test fun simpleRoll_finalCrossingAndInkEnvelopeMatchMeasuredMilestones() {
-    assertEquals(0.15f, TransitionLogic.simpleRollFinalBlur(0.146f, 10), 0.001f)
-    assertEquals(1f, TransitionLogic.simpleRollFinalBlur(0.2045f, 10), 0.001f)
-    assertTrue(TransitionLogic.simpleRollFinalBlur(0.300f, 10) in 0.14f..0.15f)
-    assertTrue(TransitionLogic.simpleRollFinalBlur(0.370f, 10) in 0.08f..0.10f)
-    assertTrue(TransitionLogic.simpleRollFinalBlur(0.435f, 10) in 0.01f..0.03f)
-    assertEquals(0f, TransitionLogic.simpleRollFinalBlur(0.500f, 10), 0.001f)
-    assertEquals(1f, TransitionLogic.simpleRollFinalAlpha(0.146f, 10), 0.001f)
-    assertEquals(0.70f, TransitionLogic.simpleRollFinalAlpha(0.2045f, 10), 0.002f)
-    assertEquals(1f, TransitionLogic.simpleRollFinalAlpha(0.263f, 10), 0.001f)
-    assertEquals(1f, TransitionLogic.simpleRollFinalAlpha(0.296f, 10), 0.001f)
-    assertEquals(1f, TransitionLogic.simpleRollFinalAlpha(0.500f, 10), 0.001f)
-    assertEquals(0f, TransitionLogic.simpleRollSettlingPairBlend(0.045f, 10), 0.001f)
-    assertTrue(TransitionLogic.simpleRollSettlingPairBlend(0.095f, 10) in 0.30f..0.35f)
-    assertEquals(0.65f, TransitionLogic.simpleRollSettlingPairBlend(0.146f, 10), 0.001f)
-    assertEquals(0.85f, TransitionLogic.simpleRollSettlingPairBlend(0.2045f, 10), 0.002f)
-    assertEquals(0.65f, TransitionLogic.simpleRollSettlingPairBlend(0.263f, 10), 0.001f)
-    assertEquals(0.325f, TransitionLogic.simpleRollSettlingPairBlend(0.288f, 10), 0.002f)
-    assertEquals(0f, TransitionLogic.simpleRollSettlingPairBlend(0.313f, 10), 0.001f)
-    assertEquals(0f, TransitionLogic.simpleRollSettlingPairBlend(0.2f, 1), 0.001f)
-    assertTrue(!TransitionLogic.simpleRollCanCommit(0.499f, 10))
-    assertTrue(TransitionLogic.simpleRollCanCommit(0.500f, 10))
-    assertTrue(TransitionLogic.simpleRollCanCommit(0f, 1))
+  @Test fun smootherstep_midpoint() {
+    val v = NumericRollEngine.smootherstep(0.5f)
+    assertEquals(0.5f, v, 0.001f)
   }
 }
