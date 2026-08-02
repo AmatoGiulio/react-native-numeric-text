@@ -72,22 +72,23 @@ internal class NumericRollEngine {
      * heights against 1.55 here, and that gap did not close across five fits of every other knob.
      * So 0.59375 is not the separation of two visible stops; being fitted here instead.
      */
-    const val STEP_FRACTION = 0.29f
+    const val STEP_FRACTION = 0.32f
 
     /** APPLE — `NumericTextConfiguration.delay`, 18/120. TOTAL spread of the wave, not the gap. */
     const val WAVE_TOTAL_SECONDS = 0.15f
 
     /**
-     * How far a glyph shrinks at full separation.
+     * APPLE — `NumericTextConfiguration.scale`, 51/128. How far a glyph shrinks at full separation.
      *
-     * Apple's `NumericTextConfiguration.scale` is 51/128 = 0.3984 and this was that, which puts an
-     * arriving glyph at 80% of its size halfway through the crossing. Two things say that is too
-     * much: the arrival reads pale, and a smaller glyph carries less ink — the crossing's floor
-     * measures DARKER than the reference's, 0.444 against 0.515, which is ink that should be there
-     * and is not. Like `offset` before it, Apple's number does not appear to mean the thing it is
-     * being used for here, so it is fitted.
+     * Restored to Apple's own number after the crossing's two glyphs were given separate opacity
+     * curves. It had been cut to 0.20 because the arrival looked pale, but that was the shared
+     * curve's fault, not the shrink's: with one curve, making a glyph smaller was the same thing
+     * as making it fainter, because a smaller glyph carries less ink. With ENTER_ALPHA_EXPONENT
+     * holding the arrival's brightness on its own, the size is free to be Apple's again.
+     *
+     * So of the five stored constants, `delay` and `scale` transfer and `offset` does not.
      */
-    const val SCALE_AMOUNT = 0.28f
+    const val SCALE_AMOUNT = 0.3984f
 
     /**
      * Blur amplitude as a fraction of the line height, at full separation.
@@ -117,7 +118,7 @@ internal class NumericRollEngine {
      * crossing still has to land on the reference's ink floor of ~0.51, which is what keeps the
      * pair honest: raising one without lowering the other shows up immediately.
      */
-    const val ENTER_ALPHA_EXPONENT = 0.65f
+    const val ENTER_ALPHA_EXPONENT = 0.52f
     const val EXIT_ALPHA_EXPONENT = 1.60f
 
     /**
