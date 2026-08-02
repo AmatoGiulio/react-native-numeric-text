@@ -413,7 +413,11 @@ internal class NumericRollEngine {
     val from = column.goalStop()
     if (slot.kind != TokenKind.DIGIT) return from
     if (column.charAt[from] == slot.char) return from
-    return from + direction
+    // MINUS the direction, which is not a typo. Measured on a matched pair of reference runs from
+    // the same starting value, tracking each column's ink centroid: 2,599 -> 2,722 moves the ink
+    // DOWN by 0.070 glyph heights and 2,599 -> 2,476 moves it UP by 0.054. So the reference brings
+    // an incrementing digit in from ABOVE. This engine had it the other way on both directions.
+    return from - direction
   }
 
   private fun stepPosition(column: Column, response: Float, dt: Float): Boolean {

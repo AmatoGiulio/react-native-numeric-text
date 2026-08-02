@@ -2,6 +2,7 @@ package com.numerictext
 
 import android.annotation.SuppressLint
 import android.content.Context
+import android.graphics.BlurMaskFilter
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.LinearGradient
@@ -140,6 +141,7 @@ class NumericTextView(context: Context) : View(context), Choreographer.FrameCall
   }
   private var edgeFadeGradient: LinearGradient? = null
   private var edgeFadeMaskPaint: Paint? = null
+  private val softwareBlurCache = HashMap<Int, BlurMaskFilter>()
   private var lastFadeWidth = -1
   private var lastFadeHeight = -1
 
@@ -220,14 +222,34 @@ class NumericTextView(context: Context) : View(context), Choreographer.FrameCall
         drawGlyphNode(canvas, sample, x, baseline, alpha)
       } else {
         textPaint.alpha = alpha
+        // The software path blurs too. It used to draw plain text, so every device without a
+        // hardware canvas lost the blur silently — and so did the ground-truth recorder, which
+        // draws the view into a Bitmap. Measurements taken through it could not see the blur at
+        // all: setting the amplitude to 8 and to 0 produced identical numbers, which read as
+        // "the blur is too small" when it was in fact absent.
+        textPaint.maskFilter = softwareBlurFor(sample.blurLengthPx)
         canvas.save()
         canvas.scale(sample.scale, sample.scale, x, baseline + sample.offsetY)
         canvas.drawText(sample.ch, x - advanceOf(sample.ch) / 2f, baseline + sample.offsetY, textPaint)
         canvas.restore()
+        textPaint.maskFilter = null
       }
     }
     textPaint.alpha = 255
     textPaint.maskFilter = null
+  }
+
+  /**
+   * Isotropic stand-in for the directional shader, for canvases that cannot run one.
+   *
+   * Bucketed because BlurMaskFilter allocates, and this is called per glyph per frame.
+   */
+  private fun softwareBlurFor(lengthPx: Float): BlurMaskFilter? {
+    if (lengthPx < 0.5f) return null
+    val bucket = (lengthPx * 0.5f).roundToInt().coerceIn(1, 64)
+    return softwareBlurCache.getOrPut(bucket) {
+      BlurMaskFilter(bucket.toFloat(), BlurMaskFilter.Blur.NORMAL)
+    }
   }
 
   @SuppressLint("NewApi")
