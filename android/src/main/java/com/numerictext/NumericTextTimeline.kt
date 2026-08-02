@@ -46,6 +46,18 @@ internal class NumericRollEngine {
     var pendingTarget: Int? = null,
     /** Seconds still to wait before [pendingTarget] becomes [target]. */
     var hold: Float = 0f,
+    /**
+     * The second scalar: how far this column's handover has RESOLVED, 0..1, on its own clock.
+     *
+     * Position owns geometry, this owns opacity, and they are deliberately not the same number.
+     * The recorder measured the reference finishing its geometry at ~400 ms — final size, final
+     * sharpness — and then spending another ~350 ms bringing opacity from 0.81 to 1.00 with
+     * nothing moving. A model where alpha is a function of position cannot express that at all:
+     * when the position stops, the alpha stops. This follows the position's arrival instead of
+     * tracking it, so it is still rising after the glyph has come to rest.
+     */
+    var settle: Float = 1f,
+    var settleVelocity: Float = 0f,
   )
 
   companion object {
@@ -83,6 +95,14 @@ internal class NumericRollEngine {
     /** Fisica molla reattiva e smorzata. */
     private const val BASE_RESPONSE_SECONDS = 0.40f
     private const val DAMPING_RATIO = 0.80f
+
+    /**
+     * Response of the opacity follower, in seconds. Larger means opacity trails geometry further.
+     *
+     * Being fitted against the recorder: the reference's geometry is done at ~400 ms and its
+     * opacity still has 0.19 to go, arriving at ~750 ms.
+     */
+    private const val SETTLE_RESPONSE_SECONDS = 0.55f
 
     /** Soglie di arresto. */
     private const val POSITION_EPSILON = 0.001f
@@ -194,6 +214,7 @@ internal class NumericRollEngine {
           // change deep in the number does not inherit a delay from unchanged columns to its left.
           column.pendingTarget = next
           column.hold = gap * changing
+          android.util.Log.i("nt-wave", "${slot.key} ${currentTargetGlyph}->${slot.char} idx=$changing hold=${column.hold} n=$changingCount")
           changing += 1
         }
       }
@@ -218,6 +239,8 @@ internal class NumericRollEngine {
         c.hold = 0f
         c.position = c.target.toFloat()
         c.velocity = 0f
+        c.settle = 1f
+        c.settleVelocity = 0f
         c.x = xRel(slot)
         c.targetX = c.x
         c.xVelocity = 0f
@@ -287,6 +310,17 @@ internal class NumericRollEngine {
         c.velocity = 0f
       }
 
+      // The second scalar. `arrived` is how complete the GEOMETRY is; `settle` chases it with a
+      // slower spring, so opacity keeps resolving after the glyph has stopped moving.
+      val arrived = (1f - min(1f, abs(c.target.toFloat() - c.position))).coerceIn(0f, 1f)
+      val settleOmega = (2f * Math.PI / SETTLE_RESPONSE_SECONDS).toFloat()
+      val settleAccel =
+        (settleOmega * settleOmega * (arrived - c.settle)) -
+          (2f * DAMPING_RATIO * settleOmega * c.settleVelocity)
+      c.settleVelocity += settleAccel * dt
+      c.settle = (c.settle + c.settleVelocity * dt).coerceIn(0f, 1f)
+      if (abs(c.settle - arrived) > 0.002f || abs(c.settleVelocity) > VELOCITY_EPSILON) active = true
+
       val slot = alive[c.key]
       val targetXVal = slot?.let { xRel(it) } ?: c.targetX
       c.targetX = targetXVal
@@ -348,7 +382,15 @@ internal class NumericRollEngine {
             Triple(a, s, b)
           }
           GlyphRole.ENTER -> {
-            val a = ENTER_ALPHA_START + (1f - ENTER_ALPHA_START) * (1f - p)
+            // Opacity rides the second scalar, not the distance: it is still filling in after the
+            // glyph has stopped. Scale stays on the distance, because the reference's geometry
+            // finishes with the motion.
+            // The geometry is the ceiling while the glyph is in flight; the follower takes over
+            // once it has landed. Reading the follower alone made an arrival appear at full
+            // opacity the instant its turn came, because the follower still held the previous
+            // handover's value; reading the distance alone is what cannot keep fading after the
+            // motion stops. The reference does both, so the alpha is the smaller of the two.
+            val a = ENTER_ALPHA_START + (1f - ENTER_ALPHA_START) * min(c.settle, 1f - p)
             val s = ENTER_START_SCALE + (1f - ENTER_START_SCALE) * (1f - p)
             val b = lineHeightPx * MAX_TRAIL_FRACTION * (1f - p)
             Triple(a, s, b)
