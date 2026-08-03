@@ -144,7 +144,7 @@ internal class NumericRollEngine {
      * pair honest: raising one without lowering the other shows up immediately.
      */
     const val ENTER_ALPHA_EXPONENT = 0.52f
-    const val EXIT_ALPHA_EXPONENT = 1.60f
+    const val EXIT_ALPHA_EXPONENT = 1.40f
 
     /**
      * MEASURED — position spring.
@@ -432,8 +432,20 @@ internal class NumericRollEngine {
         // early as the reference does, was measured and rejected: it never dips far enough and the
         // crossing's floor went from 0.017 off the reference to 0.144 off.
         val opacity = if (stop == column.target) min(presence, column.settle) else presence
+        // Weighted by how close this glyph is to its own stop, NOT by which stop is the target.
+        //
+        // A binary role means the two glyphs exchange exponents the instant the target moves. On a
+        // single change that is invisible — the arriving glyph is a whole stop away and its opacity
+        // is clamped near zero anyway — but under an alternation it is the whole behaviour: flipping
+        // 0/1 every 67 ms made this engine slam between a solid 0 and a solid 1 with three times the
+        // reference's swing, 0.307 against 0.103. Forcing both exponents equal collapsed it to
+        // 0.082, which is what identified the swap as the cause.
+        //
+        // Weighting recovers the fitted values where they were fitted — at rest the arrival has
+        // presence 1 and gets ENTER, the departure 0 and gets EXIT — while a strip parked between
+        // two stops gives both the same blend, with nothing left to swap.
         val exponent =
-          if (stop == column.target) ENTER_ALPHA_EXPONENT else EXIT_ALPHA_EXPONENT
+          EXIT_ALPHA_EXPONENT + (ENTER_ALPHA_EXPONENT - EXIT_ALPHA_EXPONENT) * presence
         val alpha = pow(opacity, exponent) * column.alive
         if (alpha <= 0.01f) continue
 

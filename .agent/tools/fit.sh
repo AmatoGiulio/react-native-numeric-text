@@ -18,8 +18,12 @@ APK="example/android/app/build/outputs/apk/debug/app-debug.apk"
 
 # The decrement preset, 1,242 -> 1,160. It must match the iOS reference: every metric is
 # normalised against the column's own settled glyph, so the other direction is a different number.
-TAP_X=356
-TAP_Y=1234
+# Coordinates of the "1,242 -> 1,160" button. They are positional, so ADDING A PRESET MOVES THEM —
+# three new buttons once pushed this onto "9,950 -> 10,123" and two rounds of measurements were of
+# the wrong transition before the six column groups in the capture gave it away. If a run reads far
+# worse than the last one for no reason, check this first.
+TAP_X=351
+TAP_Y=966
 
 echo "── build"
 (cd example/android && ANDROID_HOME="${ANDROID_HOME:-$HOME/Library/Android/sdk}" \

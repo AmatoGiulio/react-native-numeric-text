@@ -707,3 +707,52 @@ evenly through one.
 A roll up reversed into a roll down at the halfway mark. Both platforms bend the motion rather
 than restart it, and the ghosting through the turn is comparable. The digit sequences differ in
 phase, which the burst work already explained.
+
+---
+
+# The inertia against a moving target — found, 2026-08-03
+
+Three observations pointed at one missing mechanism: the reference is faster than us after a burst,
+steps more evenly through one, and refuses to chase an alternation. It is none of the things that
+sound like inertia.
+
+**It is a discontinuity in our opacity, not a difference in our spring.**
+
+The arithmetic gives it away. With RESPONSE 0.30 driven by a square wave at 67 ms, a second-order
+system transmits about 18% of the target's swing — a position ripple of ~0.056 glyph heights. We
+measured a centroid swing of 0.307, five times that. So what oscillates is not the position.
+
+`GlyphRole` was binary and tied to the current target: `stop == column.target`. When the target
+flips, the two glyphs exchange ENTER (0.52) and EXIT (1.60) **instantly**. Forcing both exponents
+to 1.0 collapsed the swing from 0.307 to 0.082, which identifies the swap as the whole cause.
+
+It is invisible on a single change because the arriving glyph is a full stop away and its opacity
+is clamped near zero by `min(presence, settle)` — which is why it survived a day of fitting.
+
+## The fix, and what it costs
+
+Weight the exponent by how close a glyph is to its own stop rather than by which stop is the
+target. At rest the arrival has presence 1 and gets ENTER, the departure has 0 and gets EXIT — the
+fitted values recovered where they were fitted — and a strip parked between two stops gives both
+the same blend, with nothing left to swap.
+
+| | swing | centroid | ink |
+|---|---|---|---|
+| iOS | 0.103 | +0.613 | 0.322 |
+| binary role | 0.307 | +0.629 | 0.478 |
+| **weighted** | **0.137** | +0.645 | 0.468 |
+
+EXIT_ALPHA_EXPONENT re-fitted 1.60 → 1.40, because the blend darkened the crossing: the mid-point
+exponent is the mean of the two, so the pair has to move to keep the same ink there.
+
+Single transition 0.024 → 0.031. Alternation swing error 0.204 → 0.034. Reverting is one line.
+
+**Still open:** the reference's blend is fainter than ours under alternation, 0.322 against 0.468,
+and the weighting does not touch it. That is a separate mechanism.
+
+## A tooling trap that cost two rounds
+
+`fit.sh` taps a fixed coordinate, and adding three preset buttons moved the layout so it hit
+"9,950 → 10,123" instead. Two rounds were measured against the wrong transition — including a
+"restored" baseline that read 0.242 instead of 0.024, which is what gave it away. If a run reads
+far worse than the previous one for no reason, check the preset in the capture's marks first.
