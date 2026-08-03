@@ -141,6 +141,23 @@ const CONTROLLED_ROLL_TICKS = CONTROLLED_ROLL_TO - CONTROLLED_ROLL_FROM;
  * Scripted rather than tapped, for the same reason as the hold above: a hand cannot repeat a
  * cadence closely enough for two platforms to be answering the same question.
  */
+/**
+ * Two behaviours that no preset covered, both about what happens when a change arrives before the
+ * previous one has finished.
+ *
+ * REVERSAL: a roll that is interrupted, halfway through, by a roll the other way. The engine's
+ * central claim is that a change moves where a column is going and never where it is, so a
+ * reversal should bend the motion rather than restart it. Nothing tested that.
+ *
+ * ALTERNATION: the same digit flipped back and forth faster than it can settle. The reference
+ * parks the strip BETWEEN two stops and the parking point depends on the cadence — press quickly
+ * and it sits nearer the incoming digit, slower and it falls back toward the outgoing one. Two
+ * intervals, because one cannot show a dependence on the interval.
+ */
+const ALTERNATE_TICKS = 20;
+const ALTERNATE_FAST_MS = 60;
+const ALTERNATE_SLOW_MS = 120;
+
 const TAP_STEP_MS = 220;
 const TAP_TICKS = 8;
 /**
@@ -302,6 +319,63 @@ export function Showcase({ onOpenLab }: Props) {
       }, PRESET_SETTLE_MS)
     );
   }, []);
+  /** A roll up, reversed into a roll down halfway. */
+  const runReversal = useCallback(() => {
+    timers.current.forEach(clearTimeout);
+    timers.current = [];
+    cancelFrames.current?.();
+    setSyncing(false);
+    setValue(HOLD_FROM);
+    timers.current.push(
+      setTimeout(() => {
+        setValue(HOLD_FROM + STEP);
+        setSyncing(true);
+        timers.current.push(setTimeout(() => setSyncing(false), SYNC_FLASH_MS));
+        const half = Math.floor(HOLD_TICKS / 2);
+        const entries = [];
+        for (let i = 2; i <= HOLD_TICKS; i += 1) {
+          // Up to the halfway point, then back down through the same values.
+          const step = i <= half ? i : half - (i - half);
+          entries.push({
+            at: (i - 1) * HOLD_STEP_MS,
+            run: () => setValue(HOLD_FROM + step * STEP),
+          });
+        }
+        cancelFrames.current = scheduleOnFrames(entries);
+      }, PRESET_SETTLE_MS)
+    );
+  }, []);
+
+  /** One digit flipped back and forth faster than it settles. */
+  const runAlternate = useCallback((stepMs: number) => {
+    timers.current.forEach(clearTimeout);
+    timers.current = [];
+    cancelFrames.current?.();
+    setSyncing(false);
+    setValue(HOLD_FROM);
+    timers.current.push(
+      setTimeout(() => {
+        setValue(HOLD_FROM + 1);
+        setSyncing(true);
+        timers.current.push(setTimeout(() => setSyncing(false), SYNC_FLASH_MS));
+        const entries = [];
+        for (let i = 2; i <= ALTERNATE_TICKS; i += 1) {
+          const to = HOLD_FROM + (i % 2 === 0 ? 0 : 1);
+          entries.push({ at: (i - 1) * stepMs, run: () => setValue(to) });
+        }
+        cancelFrames.current = scheduleOnFrames(entries);
+      }, PRESET_SETTLE_MS)
+    );
+  }, []);
+  const runAlternateFast = useCallback(
+    () => runAlternate(ALTERNATE_FAST_MS),
+    [runAlternate]
+  );
+  const runAlternateSlow = useCallback(
+    () => runAlternate(ALTERNATE_SLOW_MS),
+    [runAlternate]
+  );
+
   const runTaps = useCallback(
     () => runTicks(TAP_STEP_MS, TAP_TICKS),
     [runTicks]
@@ -453,6 +527,42 @@ export function Showcase({ onOpenLab }: Props) {
           >
             <Text style={styles.presetText}>
               human ×{HUMAN_GAPS.length + 1}
+            </Text>
+          </Pressable>
+
+          <Pressable
+            style={({ pressed }) => [styles.preset, pressed && styles.pressed]}
+            onPress={runReversal}
+            disabled={playing}
+            accessibilityRole="button"
+            accessibilityLabel="Reversed roll"
+          >
+            <Text style={styles.presetText}>
+              roll ⇄ ×{HOLD_TICKS} · {HOLD_STEP_MS}ms
+            </Text>
+          </Pressable>
+
+          <Pressable
+            style={({ pressed }) => [styles.preset, pressed && styles.pressed]}
+            onPress={runAlternateFast}
+            disabled={playing}
+            accessibilityRole="button"
+            accessibilityLabel="Fast alternation"
+          >
+            <Text style={styles.presetText}>
+              alterna ×{ALTERNATE_TICKS} · {ALTERNATE_FAST_MS}ms
+            </Text>
+          </Pressable>
+
+          <Pressable
+            style={({ pressed }) => [styles.preset, pressed && styles.pressed]}
+            onPress={runAlternateSlow}
+            disabled={playing}
+            accessibilityRole="button"
+            accessibilityLabel="Slow alternation"
+          >
+            <Text style={styles.presetText}>
+              alterna ×{ALTERNATE_TICKS} · {ALTERNATE_SLOW_MS}ms
             </Text>
           </Pressable>
 

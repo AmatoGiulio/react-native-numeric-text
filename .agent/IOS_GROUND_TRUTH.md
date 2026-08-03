@@ -669,3 +669,41 @@ Four attempts, all measured, none kept:
 Critical damping is worth noting separately: it improved the single transition to 0.020 from 0.024
 while pushing back-to-full 65–80 ms late and the burst tail to 685. It buys the crossing's shape at
 the cost of every timing, which is not a trade worth making.
+
+---
+
+# Two behaviours under interruption — 2026-08-03
+
+Three scripted presets, added so both platforms receive the same sequence: `roll ⇄` reverses a
+continuous roll halfway, and `alterna ×20` flips one digit between 0 and 1 at two cadences.
+
+## Alternation: the reference converges, this engine keeps chasing
+
+Units column, steady state (300 ms in, up to the last change). `centroid` is where the ink sits
+between the two stops, `swing` is how far it moves over the run, `ink` is total coverage.
+
+| | iOS centroid | android centroid | iOS swing | android swing | iOS ink | android ink |
+|---|---|---|---|---|---|---|
+| 60 ms | +0.613 | +0.629 | **0.103** | **0.307** | 0.322 | 0.478 |
+| 120 ms | +0.551 | +0.599 | **0.139** | **0.324** | 0.382 | 0.500 |
+
+Three things, in order of size:
+
+- **The swing is 3x ours.** The reference settles into a nearly static superposition — a faint
+  half-1 over a half-0, held almost still from 135 ms to the end of the run — while this engine
+  keeps visibly flipping between a solid 0 and a solid 1. It is the clearest behavioural gap left.
+- **Its blend is fainter.** 0.322 against our 0.478: the reference holds both glyphs at low opacity
+  rather than showing one of them properly.
+- **The parking point does move with the cadence, on both, the same way.** Faster pressing parks
+  nearer the incoming digit: iOS 0.613 → 0.551, ours 0.629 → 0.599. So the effect reproduces, at
+  about half the sensitivity.
+
+All three point one way: the reference has more inertia against a target that keeps moving than we
+do. The same shape as two earlier findings — it is faster than us after a burst, and it steps more
+evenly through one.
+
+## Reversal: no defect found
+
+A roll up reversed into a roll down at the halfway mark. Both platforms bend the motion rather
+than restart it, and the ghosting through the turn is comparable. The digit sequences differ in
+phase, which the burst work already explained.
