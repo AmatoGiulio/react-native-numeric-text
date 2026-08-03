@@ -98,20 +98,25 @@ def main():
     top = strip(ios, times, column, ios_mark)
     bottom = strip(runs[-1][:-5], times, column, and_mark)
 
+    # A left gutter for the row labels. Drawing them inside the band puts each one under the next
+    # row's tiles, and every label but the last is lost — which makes a multi-row sheet unreadable.
+    gutter = 74
     cell_w = max(max(t.width for t in top), max(t.width for t in bottom)) + 8
-    sheet = Image.new("L", (cell_w * len(times), ROW_HEIGHT * 2 + 34), 255)
+    sheet = Image.new("L", (gutter + cell_w * len(times), ROW_HEIGHT * 2 + 34), 255)
     draw = ImageDraw.Draw(sheet)
 
     for row, (tiles, label) in enumerate(((top, "iOS"), (bottom, "android"))):
         y = 20 + row * ROW_HEIGHT
         for n, tile in enumerate(tiles):
-            x = n * cell_w + (cell_w - tile.width) // 2
+            x = gutter + n * cell_w + (cell_w - tile.width) // 2
             sheet.paste(tile, (x, y + (ROW_HEIGHT - 30 - tile.height) // 2))
-        draw.text((4, y + ROW_HEIGHT - 26), label, fill=90)
+        draw.text((6, y + ROW_HEIGHT // 2 - 6), label, fill=60)
 
     for n, t in enumerate(times):
-        draw.text((n * cell_w + 4, 4), f"{t}", fill=140)
-        draw.line([(n * cell_w, 18), (n * cell_w, ROW_HEIGHT * 2 + 20)], fill=225)
+        draw.text((gutter + n * cell_w + 4, 4), f"{t}", fill=140)
+        draw.line(
+            [(gutter + n * cell_w, 18), (gutter + n * cell_w, ROW_HEIGHT * 2 + 20)], fill=225
+        )
 
     sheet.save(out)
     print("scritto", out, sheet.size)

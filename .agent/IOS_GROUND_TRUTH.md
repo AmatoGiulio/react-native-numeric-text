@@ -883,3 +883,35 @@ at 0.3984, which is Apple's own number and the size approved by eye at a single 
 
 The finding stands on its own: at the bottom of a crossing the reference's glyph is 12% smaller
 than ours, and no single constant closes that without opening two others.
+
+## The gap between the two digits — a third signature of the same regime, 2026-08-03
+
+Reported from the 60 ms grid: after ~135 ms the reference shows visible SPACE between the 1 and the
+0, while ours stay crossed. Measured as the mean normalised vertical profile's middle third over
+its outer thirds — literally how full the space between the two glyphs is:
+
+| | 60 ms | 240 ms |
+|---|---|---|
+| iOS | **0.756** | 1.362 |
+| android | **1.513** | 1.328 |
+
+At 60 ms the reference's middle is EMPTIER than its ends and ours is half again fuller: it holds
+two separated forms where we hold one merged mass. At 240 ms the two agree — 1.362 against 1.328 —
+which is the same crossover as the opacity.
+
+A first attempt at this measured peak separation and the valley between the peaks, and reported the
+opposite. It was peak-finding on a faint smooth profile and resolved two lobes in only 14 frames of
+the iOS run against 43 of ours, so it was measuring noise. Band ink needs no peaks and uses every
+frame.
+
+So three independent signatures now separate the two engines in the overlapped regime and vanish
+outside it:
+
+| | 60 ms | 240 ms |
+|---|---|---|
+| peak opacity vs own single crossing | 0.66 / 1.11 | 1.52 / 1.50 |
+| middle band vs ends | 0.756 / 1.513 | 1.362 / 1.328 |
+| total ink swing | 0.046 / 0.194 | — |
+
+The glyph-size finding is a fourth difference but NOT part of this group: it is flat across cadence,
+1.14 at every one, so it is present with or without overlap.
