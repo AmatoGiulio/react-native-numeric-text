@@ -616,3 +616,56 @@ Consistent with the single transition, where the increment measures 0.014 agains
 The increment reference carries its own noise floor: amplitudes identical to three decimals across
 five runs, timings spread by 13 ms. Anything above 0.001 on an amplitude, or 13 ms on a time, is
 real.
+
+## Chasing the two burst targets — what did not work, 2026-08-03
+
+Both were replicated and real. Neither is fixed, and the attempts are worth not repeating.
+
+### The decrement's sharpness deficit is largely a phase artefact
+
+The metric was the MEDIAN edge energy over the burst window, and the signal oscillates once per
+crossing — so it reads the phase as much as the amount. Frame by frame the two platforms sit on top
+of each other at 0, 60, 120, 180 and 300 ms and diverge by 0.59 at 240, where ours is at the bottom
+of a crossing and the reference has not entered one.
+
+Separated into phase-independent statistics:
+
+| | iOS min | android min | iOS max | android max |
+|---|---|---|---|---|
+| down | 0.831 | 0.635 | 1.661 | 1.649 |
+| up | 0.472 | 0.407 | 1.001 | 0.992 |
+
+The maxima match — at rest we are the same. The minima do not: our deepest point in a burst is
+deeper in BOTH directions, not just the decrement.
+
+But on a SINGLE crossing the deepest point measures the other way:
+
+| | iOS | android | |
+|---|---|---|---|
+| increment | 0.459 | 0.555 | we are 1.21x SHARPER |
+| decrement | 0.667 | 0.642 | 0.96x, matched |
+
+So there is no blur amplitude that is wrong. What differs is how the blur responds to a continuous
+roll, where crossings run into each other — a modelling question, and one that risks the single
+transition, which is the primary target and is at 0.014 / 0.024.
+
+### The increment's long tail is not the hold rule, the damping, or the follower
+
+Our tail is 586 ms after the last change and the reference's 545. The useful framing is not that
+ours is long: our single transition finishes in 585 and theirs in 587, so **the reference is faster
+after a burst than after one change and we take the same time either way.** It has a shortcut we do
+not.
+
+Four attempts, all measured, none kept:
+
+| change | tail | note |
+|---|---|---|
+| DAMPING_RATIO 0.90 → 1.00 | 685 | worse; the tail is asymptotic approach, not ringing |
+| reset the opacity follower only from rest | 586 | no effect at all |
+| skip the hold for a column already moving | 403 | overshoots by 142 |
+| skip the hold for a column with work queued | 469 | overshoots by 76 |
+| **unchanged** | **586** | **+41, the smallest error of the five** |
+
+Critical damping is worth noting separately: it improved the single transition to 0.020 from 0.024
+while pushing back-to-full 65–80 ms late and the burst tail to 685. It buys the crossing's shape at
+the cost of every timing, which is not a trade worth making.

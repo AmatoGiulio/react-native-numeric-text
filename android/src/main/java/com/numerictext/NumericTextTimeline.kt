@@ -301,6 +301,15 @@ internal class NumericRollEngine {
         // zero this engine read 35 / 102 / 186 and at a full gap 101 / 176 / 243, which brackets
         // it — there is ~35 ms of latency before the first frame either way, so the leader's own
         // share is about half.
+        // Every change pays the hold, including one arriving at a column already rolling.
+        //
+        // That is measurably not what the reference does — it finishes a burst 545 ms after the
+        // last change and a single change in 587, so it is FASTER when already in flight, while
+        // this engine takes 586 either way. But the two obvious shortcuts both overshoot: skipping
+        // the hold for a column with work queued lands at 469, skipping it for any moving column at
+        // 403, against the full hold's 586. The reference's 545 sits between them and none of the
+        // three rules produces it, so the smallest error is the simple rule. See the burst section
+        // of .agent/IOS_GROUND_TRUTH.md before trying a fourth.
         existing.pending.addLast(PendingStop(next, gap * (waveIndex + 0.5f)))
         waveIndex += 1
       }
@@ -365,15 +374,19 @@ internal class NumericRollEngine {
       }
 
       if (column.pending.isNotEmpty()) {
+        val wasAtRest = abs(column.target - column.position) < POSITION_EPSILON
         var arrived = false
         for (entry in column.pending) entry.remaining -= dt
         while (column.pending.isNotEmpty() && column.pending.first().remaining <= 0f) {
           column.target = column.pending.removeFirst().stop
           arrived = true
         }
-        if (arrived) {
-          // The follower starts its own run here rather than springing down from the previous
-          // handover's 1, which reads as a dip.
+        if (arrived && wasAtRest) {
+          // The follower starts a fresh run only when the column was actually at rest. Springing
+          // down from the previous handover's 1 reads as a dip, which is why this reset exists —
+          // but resetting it mid-flight is the same mistake the position never makes. In a burst,
+          // commits land every 33 ms, so the follower was knocked back to zero over and over and
+          // the last one started from scratch: the column kept resolving 41 ms past the reference.
           column.settle = 0f
           column.settleVelocity = 0f
         }
