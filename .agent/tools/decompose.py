@@ -39,8 +39,8 @@ from ground_truth import load, ink_box, columns_of  # noqa: E402
 
 # Deliberately wide on scale: the point is to MEASURE the shrink, so a grid centred on Apple's
 # 0.3984 could only ever confirm it.
-SX = np.array([0.50, 0.62, 0.74, 0.86, 0.94, 1.00, 1.06])
-SY = np.array([0.50, 0.62, 0.74, 0.86, 0.94, 1.00, 1.06])
+SX = np.array([0.25, 0.34, 0.42, 0.50, 0.62, 0.74, 0.86, 0.94, 1.00, 1.06])
+SY = np.array([0.25, 0.34, 0.42, 0.50, 0.62, 0.74, 0.86, 0.94, 1.00, 1.06])
 SIGMA = np.array([0.0, 0.03, 0.06, 0.10, 0.15, 0.21])
 DOWN = 2       # the search runs at half resolution; the amplitude is re-solved at full
 PASSES = 3     # matching-pursuit sweeps, so a pass refines a glyph rather than fitting its leftovers
@@ -92,7 +92,10 @@ class Bank:
 
     def __init__(self, base, shape, cy, cx, glyph_px):
         self.shape, self.cy, self.cx = shape, cy, cx
-        self.n = int(2 ** np.ceil(np.log2(shape[0] // DOWN * 2)))
+        self.glyph_px = glyph_px
+        small = (shape[0] // DOWN, shape[1] // DOWN)
+        self.ny = int(2 ** np.ceil(np.log2(small[0] * 2)))
+        self.nx = int(2 ** np.ceil(np.log2(small[1] * 2)))
         self.params, spectra, energies = [], [], []
         for sx in SX:
             for sy in SY:
@@ -100,30 +103,56 @@ class Bank:
                     tile = tile_of(base, sx, sy, sig * glyph_px)
                     canvas = place(tile, shape, cy, cx)[::DOWN, ::DOWN]
                     self.params.append((sx, sy, sig))
-                    spectra.append(np.fft.rfft(canvas, self.n, axis=0).astype(np.complex64))
+                    spectra.append(
+                        np.fft.rfft2(canvas, (self.ny, self.nx)).astype(np.complex64))
                     energies.append(float((canvas * canvas).sum()))
-        self.spectra = np.stack(spectra)               # (T, n/2+1, W)
+        self.spectra = np.stack(spectra)
         self.energy = np.maximum(np.array(energies), 1e-9)
         self.base = base
+        # How far the glyph is allowed to be from the column's rest centre, horizontally. The
+        # window is wider than one column so a wide digit is not clipped, which means a neighbour's
+        # glyph is inside it too — unconstrained, the fit happily latches onto the neighbour.
+        self.dx_limit = max(2, int(round(glyph_px * 0.30 / DOWN)))
 
     def best(self, target):
-        """(gain, dy_px, sx, sy, sigma, amplitude) maximising the explained energy."""
-        small = target[::DOWN, ::DOWN]
-        ft = np.fft.rfft(small, self.n, axis=0).astype(np.complex64)
-        # Contract x first: C[t, dy] = sum_x  IFFT( Ftgt[:,x] * conj(Ftpl[t,:,x]) )
-        prod = np.einsum("nw,tnw->tn", ft, np.conj(self.spectra))
-        corr = np.fft.irfft(prod, self.n, axis=1)
-        gains = (corr * corr) / self.energy[:, None]
-        t, dy = np.unravel_index(int(np.argmax(gains)), gains.shape)
-        if dy > self.n // 2:
-            dy -= self.n
-        sx, sy, sig = self.params[t]
-        amp = float(corr[t, dy] / self.energy[t])
-        return float(gains[t, dy]), dy * DOWN, sx, sy, sig, amp
+        """(gain, dy_px, dx_px, sx, sy, sigma, amplitude) maximising the explained energy.
 
-    def model(self, dy_px, sx, sy, sigma, amp, glyph_px):
+        The search is 2-D. A 1-D one, over the vertical offset only, is what the first version did
+        and it cannot work: "1,242" and "1,160" have different digit widths, so the number
+        re-lays-out and every column MOVES horizontally during a transition. The fit was then
+        matching a template against a glyph that had slid out from under it, and the residual came
+        back at 1.66 — larger than the target itself.
+        """
+        small = target[::DOWN, ::DOWN]
+        ft = np.fft.rfft2(small, (self.ny, self.nx)).astype(np.complex64)
+        best = None
+        # Chunked: the full correlation stack is (templates, ny, nx) and does not need to exist.
+        for lo in range(0, len(self.params), 48):
+            block = self.spectra[lo:lo + 48]
+            corr = np.fft.irfft2(ft[None] * np.conj(block), (self.ny, self.nx))
+            gains = (corr * corr) / self.energy[lo:lo + 48, None, None]
+            # Only shifts within the allowed horizontal band; wrap-around puts negative dx at the
+            # far end of the axis, so both ends are kept.
+            mask = np.zeros(self.nx, dtype=bool)
+            mask[:self.dx_limit + 1] = True
+            mask[-self.dx_limit:] = True
+            gains[:, :, ~mask] = -1.0
+            idx = int(np.argmax(gains))
+            t, dy, dx = np.unravel_index(idx, gains.shape)
+            if best is None or gains[t, dy, dx] > best[0]:
+                best = (float(gains[t, dy, dx]), lo + t, dy, dx,
+                        float(corr[t, dy, dx] / self.energy[lo + t]))
+        gain, t, dy, dx, amp = best
+        if dy > self.ny // 2:
+            dy -= self.ny
+        if dx > self.nx // 2:
+            dx -= self.nx
+        sx, sy, sig = self.params[t]
+        return gain, dy * DOWN, dx * DOWN, sx, sy, sig, amp
+
+    def model(self, dy_px, dx_px, sx, sy, sigma, amp, glyph_px):
         tile = tile_of(self.base, sx, sy, sigma * glyph_px)
-        return amp * place(tile, self.shape, self.cy + dy_px, self.cx)
+        return amp * place(tile, self.shape, self.cy + dy_px, self.cx + dx_px)
 
 
 def main():
@@ -140,20 +169,28 @@ def main():
     meta, frames = load(args.prefix)
     y0, y1, x0, x1 = ink_box(frames)
     w = frames[:, y0:y1, x0:x1].astype(np.float64)
-    a, b = columns_of(w[-1])[args.col]
+    groups = columns_of(w[-1])
+    a, b = groups[args.col]
+    col = args.col if args.col >= 0 else len(groups) + args.col
 
-    # The column's SETTLED box is not wide enough to hold the transition.
+    # The window is bounded by the MIDPOINTS to the neighbouring columns, not by this column's own
+    # settled box and not by a fixed margin. Two failures got it here, and only the residual showed
+    # either:
     #
-    # `columns_of` splits the last frame, so a column that ends on a "1" gets an 86 px window while
-    # a "2" passing through it is 130 px wide — the template was being clipped at the sides and the
-    # fit was meaningless. Only the residual showed it: 1.66 against a target of ~0. Take a window
-    # centred on the column instead, wide enough for the widest glyph there is.
+    #   - the settled box is too NARROW. A column ending on a "1" gets 86 px while the "2" passing
+    #     through it is 130 px wide, so the template was clipped at the sides. Residual 1.66.
+    #   - a fixed generous margin is too WIDE. It swallows the separator and part of the next
+    #     digit, and the fit spends a glyph on the neighbour's ink: a phantom "1" at amplitude 0.46
+    #     sitting a third of a glyph off centre. Residual 0.18 on a frame that is one settled digit.
+    #
+    # Halfway to each neighbour is the boundary that is both wide enough for any glyph and owned by
+    # exactly one column.
+    lo_x = 0 if col == 0 else int((groups[col - 1][1] + a) / 2)
+    hi_x = w.shape[2] if col == len(groups) - 1 else int((b + groups[col + 1][0]) / 2)
     centre = (a + b) / 2.0
     settled_rows = w[-1][:, a:b].sum(axis=1)
     lit = np.nonzero(settled_rows > settled_rows.max() * 0.05)[0]
     glyph_px = float(lit[-1] - lit[0])
-    half = int(glyph_px * 0.60)
-    lo_x, hi_x = max(0, int(centre) - half), min(w.shape[2], int(centre) + half)
     patches = w[:, :, lo_x:hi_x]
     rest_y = (lit[0] + lit[-1]) / 2.0
     cx = centre - lo_x
@@ -178,7 +215,7 @@ def main():
 
     print(f"   glifo {glyph_px:.0f}px  colonna {args.col}  cifre {digits}  "
           f"({len(banks[digits[0]].params)} template per cifra)")
-    print("      t(ms)   " + "   ".join(f"{d}:  dy    sx    sy   blur    a" for d in digits)
+    print("      t(ms)   " + "  ".join(f"{d}:  dy     dx     sx    sy   blur    a" for d in digits)
           + "    resid")
     for i in picked:
         target = patches[i]
@@ -190,15 +227,36 @@ def main():
             for d in digits:
                 if fits[d] is not None:
                     residual = residual + fits[d][1]
-                _, dy, sx, sy, sig, amp = banks[d].best(residual)
-                model = banks[d].model(dy, sx, sy, sig, max(0.0, amp), glyph_px)
-                fits[d] = ((dy / glyph_px, sx, sy, sig, max(0.0, amp)), model)
-                residual = residual - model
+                _, dy, dx, sx, sy, sig, _ = banks[d].best(residual)
+                unit = banks[d].model(dy, dx, sx, sy, sig, 1.0, glyph_px)
+                fits[d] = ([dy / glyph_px, dx / glyph_px, sx, sy, sig, 0.0], unit)
+                residual = residual - unit * 0.0
+
+            # Solve the amplitudes JOINTLY, not one after the other.
+            #
+            # Greedy pursuit gives the first glyph credit for ink that belongs to the second, and
+            # through the middle of a crossing — where they overlap most and where the answer
+            # matters most — it collapses outright: the departing "2" came back at amplitude 1.18
+            # with the arriving "1" at 0.00, residual 0.556. Least squares over both at once, with
+            # the amplitudes clamped at zero, is the whole fix.
+            models = [fits[d][1] for d in digits]
+            gram = np.array([[float((m * n).sum()) for n in models] for m in models])
+            rhs = np.array([float((m * target).sum()) for m in models])
+            try:
+                amps = np.linalg.solve(gram + np.eye(len(models)) * 1e-6, rhs)
+            except np.linalg.LinAlgError:
+                amps = np.zeros(len(models))
+            amps = np.clip(amps, 0.0, None)
+            residual = target.copy()
+            for d, amp, unit in zip(digits, amps, models):
+                fits[d][0][5] = float(amp)
+                fits[d] = (fits[d][0], unit * float(amp))
+                residual = residual - fits[d][1]
         err = float(np.abs(residual).sum() / max(1.0, np.abs(target).sum()))
         cells = []
         for d in digits:
-            dy, sx, sy, sig, amp = fits[d][0]
-            cells.append(f"{d}:{dy:+.2f}  {sx:.2f}  {sy:.2f}  {sig:.2f}  {amp:.2f}")
+            dy, dx, sx, sy, sig, amp = fits[d][0]
+            cells.append(f"{d}:{dy:+.2f}  {dx:+.2f}  {sx:.2f}  {sy:.2f}  {sig:.2f}  {amp:.2f}")
         print(f"   {times[i]:8.1f}   " + "   ".join(cells) + f"    {err:.3f}")
     return 0
 
