@@ -511,3 +511,67 @@ has four of its answers checked against the source of truth.
 **Do not treat these as portable API.** They are internal defaults of one OS version, read for
 interoperability. They should be written into the Android renderer as measured constants with this
 note, never depended on at runtime.
+
+---
+
+# Which of Apple's constants transfer — 2026-08-03
+
+Five constants were read out of `NumericTextConfiguration`. After a day of fitting each against
+the recorder, they split cleanly:
+
+| constant | stored | transfers? | what it is here |
+|---|---|---|---|
+| `delay` | 18/120 = 0.15 s | **yes, exactly** | total spread of the wave, divided by the gaps |
+| `scale` | 51/128 = 0.3984 | **yes** | how far a glyph shrinks at full separation |
+| `offset` | 19/32 = 0.59375 | **no** | separation of two stops fits at ~0.32 |
+| `blur` | 32/4 = 8.0 pt | **no** | as a fraction of the line height, fits at ~0.42 |
+| `maxDurationMultiple` | 1.25 | untested | caps how far the spring stretches |
+
+The timing parameter transfers to the millisecond; the geometric ones do not, which is what one
+would expect if SwiftUI measures them against a glyph box defined differently from ours.
+
+`scale` only transferred once the crossing's two glyphs were given separate opacity curves. With a
+shared curve, shrinking a glyph and dimming it are the same act — a smaller glyph carries less ink
+— so Apple's shrink read as "too pale" and got cut. The lesson generalises: a constant that does
+not transfer may be right, with the model around it wrong.
+
+## What the eye caught that the metric could not
+
+Four defects were found by looking at the app or at a frame grid, none of which moved the headline
+number in the direction that would have found them:
+
+- **the roll ran backwards, both ways.** Confirmed by tracking each column's ink centroid on a
+  matched pair of reference runs from the same value: `2,599 -> 2,722` moves the ink DOWN by 0.070
+  glyph heights, `2,599 -> 2,476` moves it UP by 0.054. The reference brings an incrementing digit
+  in from ABOVE.
+- **the blur was absent, not small.** `drawRolling` picks its path on `canvas.isHardwareAccelerated`
+  and the software branch drew plain text. The recorder draws into a Bitmap, so it always took that
+  branch: setting the blur amplitude to 8 and to 0 produced identical numbers.
+- **the blur was along a line, not a defocus.** A directional blur preserves a glyph's structure
+  across its axis, so the digit stays readable and merely looks streaked. The reference's
+  mid-crossing glyphs are unreadable clouds. SwiftUI's `.blur(radius:)` is isotropic and the stored
+  constant has no axis.
+- **the radius was quantised at half a pixel**, so a decaying blur walked down its buckets one
+  visible notch at a time and the glyph read as vibrating. Eight steps per pixel fixed it, which
+  also ruled out the more expensive hypothesis — that the RenderEffect's layer was being resampled
+  by `node.scaleX`.
+
+**So: the metric ranks candidates, it does not find defects.** Every one of these was invisible to
+it, and two of them were artefacts of the measurement path itself rather than of the engine.
+
+## Where it stands
+
+Decrement `1,242 -> 1,160`, `.agent/tools/fit.sh` then `compare.py`:
+
+| | android | iOS | error |
+|---|---|---|---|
+| wave starts | 68.4 / 135.3 / 218.5 | 70.2 / 136.8 / 220.1 | 2 ms |
+| back to full | 418 / 502 / 585 | 420 / 504 / 587 | |
+| ink floor | 0.472 / 0.453 / 0.439 | 0.515 / 0.435 / 0.428 | 0.024 |
+| extent | 1.186 / 1.113 / 1.245 | 1.181 / 1.147 / 1.196 | 0.029 |
+| headline | | | **0.027** |
+
+Open: the increment has no numeric reference — `compare.py` knows only the decrement, so the
+increment is still judged by eye. And no continuous roll has been compared at all, because every
+multi-change recording on the simulator has a zero-byte plane file: the recorder silently writes
+nothing above some run length, and that needs fixing before a burst can be measured.

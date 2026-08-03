@@ -56,9 +56,7 @@ internal class NumericRollEngine {
     val offsetY: Float,
     val alpha: Float,
     val scale: Float,
-    val velocityY: Float,
     val blurLengthPx: Float,
-    val direction: Float,
     val stable: Boolean,
   )
 
@@ -98,9 +96,10 @@ internal class NumericRollEngine {
      * that has to hold up at any font size wants the relative reading, and 0.25 is what the
      * reference's own crossing looks like.
      *
-     * It was 8.0 raw pixels, which the shader turns into a ~3 px smear on a 180 px glyph: applied,
-     * measurable at zero effect, and invisible. The side-by-side grid against iOS is unambiguous —
-     * the reference's crossing is mostly blur, Android's had none.
+     * It is isotropic — a defocus, not a smear along the roll. A directional blur preserves a
+     * glyph's structure across its axis, so the digit stays readable and merely looks streaked;
+     * the reference's mid-crossing glyphs are unreadable clouds. `NumericTextConfiguration` storing
+     * its blur as a single number with no axis fits that reading.
      */
     const val BLUR_FRACTION = 0.42f
 
@@ -133,17 +132,14 @@ internal class NumericRollEngine {
     /** MEASURED — opacity follower. Being fitted; the reference's opacity arrives at ~750 ms. */
     private const val SETTLE_RESPONSE_SECONDS = 0.22f
 
-    /** Horizontal share of a directional blur, so a smear stays vertical. Renderer detail. */
-    internal const val BLUR_X_FACTOR = 0.05f
-
     /**
      * Shutter interval for the motion blur, in seconds.
      *
      * BLUR_FRACTION alone scales with DISTANCE, which is bounded by one stop, so a glyph tearing
-     * through a continuous roll blurred no more than one crossing at walking pace — the number
-     * stayed legible and sharp through a burst, which is the opposite of what a fast roll looks
-     * like. This term is the distance actually covered while the shutter is open, so it grows with
-     * speed and vanishes at rest.
+     * through a continuous roll defocused no more than one crossing at walking pace — the number
+     * stayed legible through a burst, which is the opposite of what a fast roll looks like. This
+     * term is the distance actually covered while the shutter is open: it grows with speed and
+     * vanishes at rest.
      */
     private const val SHUTTER_SECONDS = 0.026f
 
@@ -431,7 +427,6 @@ internal class NumericRollEngine {
       offsetY = (stop - column.position) * stepPx,
       alpha = alpha.coerceIn(0f, 1f),
       scale = 1f - SCALE_AMOUNT * distance,
-      velocityY = column.velocity * stepPx,
       blurLengthPx =
         if (settled) {
           0f
@@ -439,7 +434,6 @@ internal class NumericRollEngine {
           lineHeightPx * BLUR_FRACTION * distance +
             abs(column.velocity) * lineHeightPx * STEP_FRACTION * SHUTTER_SECONDS
         },
-      direction = if (column.velocity < 0f) -1f else 1f,
       stable = settled,
     )
   }

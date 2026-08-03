@@ -313,13 +313,13 @@ class NumericTextView(context: Context) : View(context), Choreographer.FrameCall
     node.scaleY = sample.scale
     node.alpha = alpha / 255f
 
-    node.setRenderEffect(effectFor(sample.blurLengthPx, sample.direction))
+    node.setRenderEffect(effectFor(sample.blurLengthPx))
     canvas.drawRenderNode(node)
   }
 
 
   @SuppressLint("NewApi")
-  private fun effectFor(lengthPx: Float, @Suppress("UNUSED_PARAMETER") direction: Float): RenderEffect? {
+  private fun effectFor(lengthPx: Float): RenderEffect? {
     if (lengthPx < BLUR_MIN_PX) return null
     if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return null
     val bucket = (lengthPx * BLUR_RADIUS_FACTOR * BLUR_STEPS_PER_PX).roundToInt().coerceIn(1, 480)
