@@ -40,11 +40,17 @@ this engine leans on one glyph and it slides, where the reference holds two toge
 barely moves. Halved, not closed. It is visible by eye on a side-by-side GIF and no number in
 `compare.py` sees any of it, which is why `balance.py` exists.
 
-| | reference travel | android | reference balance | android |
-|---|---|---|---|---|
-| single crossing | 0.163 | 0.165 | 0.18 | 0.17 |
-| alternation 60 ms | 0.103 | 0.226 | 0.19 | 0.39 |
-| continuous roll | 0.119 | 0.290 | 0.19 | 0.50 |
+| | travel iOS / android | balance iOS / android | width iOS / android |
+|---|---|---|---|
+| single crossing | 0.163 / 0.165 | 0.072 / 0.061 | 0.900 / 0.912 |
+| alternation 60 ms | 0.103 / 0.226 | 0.058 / 0.104 | **0.779 / 0.907** |
+| continuous roll | 0.119 / 0.305 | 0.052 / 0.101 | 0.969 / 0.959 |
+
+Balance is a standard deviation, not a peak-to-peak: the peak-to-peak on these same captures said
+0.19 against 0.39 and was set by a handful of extreme frames. Frame by frame the reference sits at
+0.37 and oscillates 0.27–0.47; this engine sits at 0.40 and oscillates 0.25–0.58. The residual has
+roughly the reference's shape. **The width is the real gap** — 1.18x too wide under a fast
+alternation, and it is what a viewer actually reports seeing.
 
 ## The measuring rig — the part that makes progress possible
 
@@ -168,9 +174,12 @@ All three are zero at rest, which is why the single crossing has not moved since
    third, the alpha exponent at 1.33, was tried and reverted: it does improve the balance and it
    costs the travel, 0.29 out to 0.43. What remains after that is the drum's own `cos`, worth 1.13.
 
-   So the cheap terms are spent. Before reaching for a fourth mechanism, check whether the RESIDUAL
-   is the same shape as the reference's — the reference's 0.19 is not zero either, and nobody has
-   compared the two residuals frame by frame rather than as a peak-to-peak.
+   The residual HAS been compared frame by frame now, and it is roughly the reference's shape —
+   see the ground truth. So the balance is closer than the old metric said, and what is actually
+   left is the **width**: our glyphs are 1.18x too wide under a crowd. Levelling the shrink onto the
+   pair's own mid-distance instead of onto 1 reaches the reference on the roll — balance 0.056
+   against 0.052 — and costs the roll tail, 920 ms against 615. That fork is written up in the
+   ground truth and is where the next round should start, on the RELEASE rather than the level.
 
 2. **The alternation's opacity**, ~15% too bright at every cadence, 0.341 / 0.360 / 0.401 against
    0.294 / 0.307 / 0.334, and the chase moved it by 0.002. Flat across cadence, unlike the spacing,

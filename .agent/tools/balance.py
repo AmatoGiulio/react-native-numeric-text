@@ -7,8 +7,17 @@ Two numbers per regime, both about the pair rather than about either glyph:
 
   travel    peak-to-peak excursion of the column's ink centroid, in glyph heights. How far the
             visible mass slides.
-  balance   the ink's share of the UPPER half of the pair, peak to peak. 0 would be a pair that
-            never changes hands; a large number means one glyph at a time rather than two together.
+  balance   the ink's share of the UPPER half of the pair, as a STANDARD DEVIATION over the run.
+            Small means the pair holds together; large means one glyph at a time.
+  width     the ink's horizontal 2nd-98th percentile span, in settled glyph widths — how big the
+            glyphs are, which is the one thing here that vertical separation cannot confound.
+
+Balance is a standard deviation and not a peak-to-peak, and that correction mattered: on the same
+captures the peak-to-peak read 0.19 against 0.39 and the standard deviation reads 0.059 against
+0.075. The peak-to-peak is set by a handful of extreme frames, so it said this engine was twice the
+reference's when the distributions are a quarter apart. Frame by frame the reference sits at 0.37,
+not at a balanced 0.50, and oscillates continuously — which is what the eye sees and what a
+peak-to-peak throws away.
 
 The reference does not vary the second one at all — 0.19 in a single crossing, 0.19 under a 60 ms
 alternation, 0.19 through a continuous roll — and barely varies the first, 0.163 / 0.103 / 0.119.
@@ -59,13 +68,16 @@ def measure(prefix, col, mark, window):
         return None
     glyph = float(lit[-1] - lit[0])
     base = profile_stats(settled, glyph)[0]
+    cols = settled.sum(axis=0)
+    wlit = np.nonzero(cols > cols.max() * 0.05)[0]
+    base_width = float(wlit[-1] - wlit[0]) if len(wlit) > 1 else 1.0
 
     marks = meta["marks"]
     origin = marks[burst_mark(meta) if mark == "burst" else mark]["t"]
     times = np.array(meta["times"]) - origin
     selected = (times >= window[0]) & (times <= window[1])
 
-    centres, shares = [], []
+    centres, shares, widths = [], [], []
     for i in np.nonzero(selected)[0]:
         patch = w[i, :, a:b]
         rows = patch.sum(axis=1)
@@ -77,9 +89,15 @@ def measure(prefix, col, mark, window):
         span = rows[np.searchsorted(cumulative, 0.02): np.searchsorted(cumulative, 0.98) + 1]
         if span.sum() > 0:
             shares.append(span[: len(span) // 2].sum() / span.sum())
+        cols = patch.sum(axis=0)
+        if cols.sum() > 0:
+            c = np.cumsum(cols) / cols.sum()
+            widths.append(
+                (np.searchsorted(c, 0.98) - np.searchsorted(c, 0.02)) / base_width
+            )
     if len(centres) < 4 or len(shares) < 4:
         return None
-    return float(np.ptp(centres)), float(np.ptp(shares))
+    return float(np.ptp(centres)), float(np.std(shares)), float(np.median(widths))
 
 
 def rows_of(pattern, col, mark, window, label=None):
@@ -101,7 +119,7 @@ def main():
         print(__doc__)
         return 1
 
-    print("   regime            escursione baricentro      squilibrio della coppia")
+    print("   regime            escursione        squilibrio (dev.st)   larghezza")
     for (name, (ios, label, col, mark, window)), android in zip(REGIMES.items(), args):
         # The Android capture always aligns on the burst mark: every preset resets the value first
         # and that reset takes a mark of its own.
@@ -110,11 +128,11 @@ def main():
         if not theirs or not ours:
             print(f"   {name:17} nessun run confrontabile")
             continue
-        t = [float(np.median([r[i] for r in theirs])) for i in (0, 1)]
-        o = [float(np.median([r[i] for r in ours])) for i in (0, 1)]
+        t = [float(np.median([r[i] for r in theirs])) for i in (0, 1, 2)]
+        o = [float(np.median([r[i] for r in ours])) for i in (0, 1, 2)]
         print(
-            f"   {name:17} iOS {t[0]:.3f}  android {o[0]:.3f}      "
-            f"iOS {t[1]:.2f}  android {o[1]:.2f}"
+            f"   {name:17} {t[0]:.3f} / {o[0]:.3f}      "
+            f"{t[1]:.3f} / {o[1]:.3f}        {t[2]:.3f} / {o[2]:.3f}"
         )
     return 0
 

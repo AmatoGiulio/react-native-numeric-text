@@ -276,11 +276,22 @@ in `compare.py` sees any of it. `balance.py` measures both halves of it:
 - **balance** — the ink's share of the upper half of the pair, peak to peak. Small means two glyphs
   held together; large means one glyph at a time.
 
-| | reference travel | before | after | reference balance | before | after |
-|---|---|---|---|---|---|---|
-| single crossing | 0.163 | 0.165 | 0.165 | 0.18 | 0.17 | 0.17 |
-| alternation 60 ms | 0.103 | 0.341 | **0.226** | 0.19 | 0.55 | **0.39** |
-| continuous roll | 0.119 | 0.474 | **0.290** | 0.19 | 0.73 | **0.50** |
+| | travel iOS / android | balance iOS / android | width iOS / android |
+|---|---|---|---|
+| single crossing | 0.163 / 0.165 | 0.072 / 0.061 | 0.900 / 0.912 |
+| alternation 60 ms | 0.103 / 0.226 | 0.058 / 0.104 | **0.779 / 0.907** |
+| continuous roll | 0.119 / 0.305 | 0.052 / 0.101 | 0.969 / 0.959 |
+
+**Balance is a standard deviation, not a peak-to-peak, and the correction changed the story.** On the
+same captures the peak-to-peak read 0.19 against 0.39 and the standard deviation reads 0.058 against
+0.104 — the peak-to-peak is set by a handful of extreme frames and said this engine was twice the
+reference when the distributions are much closer than that. Frame by frame over a 60 ms alternation
+the reference sits at a mean of 0.37, NOT at a balanced 0.50, and oscillates continuously between
+0.27 and 0.47; this engine sits at 0.40 and oscillates between 0.25 and 0.58. The residual has
+roughly the reference's shape, which a peak-to-peak threw away.
+
+`width` is the ink's horizontal span in settled glyph widths — the one number here that vertical
+separation cannot confound, and the largest gap left: **1.18x too wide under a 60 ms alternation**.
 
 **The reference does not vary the balance at all** — 0.19 in all three regimes — and barely varies
 the travel, moving its ink LESS through a crowd than through a single change. This engine matched it
@@ -320,9 +331,20 @@ The band moves with it and mostly for the better: 60 ms 0.730 → 0.820 against 
 
 | attempt | result |
 |---|---|
-| flattening the alpha exponent too — the product's third term, worth 1.33 | balance 0.50 → 0.43 as predicted, and travel 0.29 → 0.43 against the reference's 0.119, on both runs. The two exponents are what give the arriver and the leaver different curves; removing that makes the pair hand over faster rather than more evenly. Reverted |
+| flattening the alpha exponent too — the product's third term, worth 1.33 | balance improves as predicted and travel goes 0.29 → 0.43 against the reference's 0.119, on both runs. The two exponents are what give the arriver and the leaver different curves; removing that makes the pair hand over faster rather than more evenly. Reverted |
+| levelling the shrink onto the pair's own mid-distance instead of onto 1 — "even AND small" | width 0.907 → 0.855, roll travel 0.305 → **0.190** and roll balance 0.101 → **0.056** against the reference's 0.052, nearly exact. And roll tail 636 → **920 ms** against 615, sharpness 0.603 → 0.649, band 0.820 → 0.592. Reverted, but it is a FORK and not a dead end |
 
-What is left is the drum's own `cos`, worth 1.13, which is the foreshortening itself.
+### The fork worth taking next
+
+Levelling the shrink onto the pair's mid-distance is the only thing tried that reaches the
+reference on the roll — balance 0.056 against 0.052, travel 0.190 against 0.119 — and it is also the
+only thing that moves the width, which is the biggest gap left and the one visible by eye: the
+reference's glyphs are SMALLER than ours under a crowd, not bigger, and levelling towards 1 had made
+ours bigger still. `1 - SCALE_AMOUNT * 0.5` is 0.801 against the reference's measured 0.779.
+
+What it costs is the roll's timing, and that is where the next round should start: 920 ms against
+615 says the ink is being held too thin for too long after the last change, which points at the
+release rather than at the level. What is left after that is the drum's own `cos`, worth 1.13.
 
 ### Closed brackets on the balance — do not re-walk these
 
