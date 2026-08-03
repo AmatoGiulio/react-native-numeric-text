@@ -756,3 +756,32 @@ and the weighting does not touch it. That is a separate mechanism.
 "9,950 → 10,123" instead. Two rounds were measured against the wrong transition — including a
 "restored" baseline that read 0.242 instead of 0.024, which is what gave it away. If a run reads
 far worse than the previous one for no reason, check the preset in the capture's marks first.
+
+## The alternation ink gap, measured — 2026-08-03
+
+Units column, 0↔1 every ~60 ms, steady state. No interpretation, just what the pixels say.
+
+| | total ink mean | min | max | swing | peak opacity |
+|---|---|---|---|---|---|
+| iOS | 0.322 | 0.298 | 0.344 | **0.046** | **0.317** |
+| android | 0.468 | 0.386 | 0.580 | **0.194** | **0.582** |
+
+Upper lobe / lower lobe: iOS 0.112 / 0.210, android 0.156 / 0.312. The RATIO matches, 0.53 against
+0.50 — the two glyphs are balanced the same way and sit in the same places. What differs is level.
+
+The comparison that makes it legible is against each platform's own single crossing:
+
+| peak opacity | single crossing floor | alternation |
+|---|---|---|
+| iOS | 0.478 | **0.317** |
+| android | 0.525 | **0.582** |
+
+**The two move in opposite directions.** Chased with a target it cannot reach, the reference goes
+fainter than it ever goes in one crossing — 0.478 down to 0.317, a third quieter. This engine goes
+brighter, 0.525 up to 0.582. At a single crossing the two are close.
+
+And the reference's total ink is nearly constant across the whole alternation, swinging 0.046,
+while ours still pulses by 0.194 after the exponent fix.
+
+No hypothesis recorded here on purpose. What is established: it is not the balance between the two
+glyphs, and it is not a small offset in one direction — the sign of the effect differs.
