@@ -42,6 +42,10 @@ REGIMES = {
 
 def measure(prefix, col, mark, window):
     meta, frames = load(prefix)
+    # A capture that caught only the preset's reset has one mark and no transition in it; that is a
+    # lost run, not a reason to take the whole round's analysis down with an IndexError.
+    if len(meta.get("marks", [])) < 2:
+        return None
     y0, y1, x0, x1 = ink_box(frames)
     w = frames[:, y0:y1, x0:x1].astype(np.float64)
     groups = columns_of(w[-1])

@@ -171,6 +171,33 @@ internal class NumericRollEngine {
     private const val CROWD_STEP = 0.60f
     private const val CROWD_RELAX = 0.15f
 
+    /**
+     * How far the pair is drawn EVENLY while the column is chased — both its opacity and its size.
+     *
+     * The reference shares its ink evenly between the two glyphs in every regime: the share in the
+     * upper half of the pair swings 0.19 in a single crossing, 0.19 under a 60 ms alternation and
+     * 0.19 through a continuous roll. This engine matched it where it was fitted and ran from 0.14
+     * to 0.91 elsewhere — one glyph at a time, and the survivor slid, carrying the ink's centroid
+     * three times as far as the reference's.
+     *
+     * Three earlier attempts each bought about a fifth of that and paid for it on the band or the
+     * roll tail, and the arithmetic says why: the imbalance is a PRODUCT, not a cause. With the two
+     * glyphs at 0.8 and 0.2 presence,
+     *
+     *     opacity   0.864 / 0.181                     ratio 4.8
+     *     area      0.840 / 0.406  (shrink SQUARED)   ratio 2.1
+     *     ink                                         ratio 9.9   -> share 0.91
+     *
+     * and 0.91 is exactly the measured worst frame. Levelling the opacity alone leaves 2.1 behind;
+     * flattening the shrink alone leaves 4.8. Each is worth a fifth on its own and they multiply, so
+     * they have to move together — which is why this is one knob driving both.
+     *
+     * Zero at rest like everything `crowd` drives, so `SCALE_AMOUNT` keeps Apple's value and the
+     * single crossing cannot move. Above 1 and clamped, because `crowd` averages ~0.5 over a run.
+     */
+    private const val CROWD_EVEN = 2.00f
+    private const val EVEN_LEVEL = 0.5f
+
     /** APPLE — `NumericTextConfiguration.delay`, 18/120. TOTAL spread of the wave, not the gap. */
     const val WAVE_TOTAL_SECONDS = 0.15f
 
@@ -558,7 +585,10 @@ internal class NumericRollEngine {
         // The leaver stays on its distance. Putting it on the fade clock instead, to clear it as
         // early as the reference does, was measured and rejected: it never dips far enough and the
         // crossing's floor went from 0.017 off the reference to 0.144 off.
-        val opacity = if (stop == column.target) min(presence, column.settle) else presence
+        // Levelled onto one opacity as the chase rises — half of the pair's ink imbalance. The
+        // other half is the shrink, in `sample` below, and they only work together.
+        val resting = if (stop == column.target) min(presence, column.settle) else presence
+        val opacity = resting + (EVEN_LEVEL - resting) * evenness(column)
         // Weighted by how close this glyph is to its own stop, NOT by which stop is the target.
         //
         // A binary role means the two glyphs exchange exponents the instant the target moves. On a
@@ -571,6 +601,13 @@ internal class NumericRollEngine {
         // Weighting recovers the fitted values where they were fitted — at rest the arrival has
         // presence 1 and gets ENTER, the departure 0 and gets EXIT — while a strip parked between
         // two stops gives both the same blend, with nothing left to swap.
+        //
+        // Flattening this to the midpoint with the chase as well — the product's third term, worth
+        // 1.33 — was measured and rejected. It does what it says on the balance, 0.50 to 0.43 on
+        // the roll, and it costs the travel that was the whole point: 0.29 out to 0.43 against the
+        // reference's 0.119, consistently across runs. The two exponents are what give the arriver
+        // and the leaver different curves, and taking that away makes the pair hand over faster
+        // rather than more evenly.
         val exponent =
           EXIT_ALPHA_EXPONENT + (ENTER_ALPHA_EXPONENT - EXIT_ALPHA_EXPONENT) * presence
         val alpha = pow(opacity, exponent) * column.alive
@@ -604,7 +641,10 @@ internal class NumericRollEngine {
     // The face's angle around the drum's axis. Signed, so a glyph above the front and one below it
     // are foreshortened alike but offset opposite ways.
     val angle = (stop - column.position) * FACE_ANGLE
-    val shrink = 1f - SCALE_AMOUNT * distance
+    // The shrink flattens as the chase rises. Area goes as the SQUARE of it, so at 0.8 against 0.2
+    // presence it alone hands the near glyph 2.1 times the far one's ink — the half of the
+    // imbalance that levelling the opacity cannot touch.
+    val shrink = 1f - SCALE_AMOUNT * distance * (1f - evenness(column))
     // Only the OFFSET widens with the chase. The foreshortening is the face's own angle and has
     // nothing to do with how big the drum is, which is the whole reason the two are separate.
     val apothem = APOTHEM * (1f + CROWD_SPREAD * column.crowd)
@@ -622,6 +662,21 @@ internal class NumericRollEngine {
       stable = settled,
     )
   }
+
+  /**
+   * How evenly this column's pair is drawn right now: 0 at rest, 1 while fully chased.
+   *
+   * Off the RAW signal, not the lagged one the apothem uses, and the roll tail is why. The lag adds
+   * ~150 ms on top of the bleed, so the last crossing of a burst — which takes ~400 ms — was still
+   * being drawn evenly for most of its length, never dipped, and read as finished at 236 ms against
+   * the reference's 615, with its floor at 0.637 against 0.409. The reference's last crossing looks
+   * like an ordinary one. The raw signal is back to zero within `CROWD_RELAX`, which leaves the
+   * final crossing to resolve on its own.
+   *
+   * The lag was there to stop a sawtooth, and this does not need it: through a fast alternation the
+   * raw signal saws between 0.6 and 1.0, and 2.0 times either of those clamps to 1.
+   */
+  private fun evenness(column: Column): Float = min(1f, CROWD_EVEN * column.crowdRaw)
 
   private fun literalOf(slot: KeyedSlot): String? =
     if (slot.kind == TokenKind.DIGIT) null else slot.char

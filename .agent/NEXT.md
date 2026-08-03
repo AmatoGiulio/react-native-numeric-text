@@ -27,24 +27,24 @@ Under a fast alternation, the middle band between the two digits:
 | | 60 ms | 120 ms | 240 ms |
 |---|---|---|---|
 | reference | 0.760 | 1.460 | 1.292 |
-| android | **0.730** | 1.369 | 1.281 |
+| android | 0.820 | **1.474** | 1.281 |
 
-And the continuous roll, 14 changes 30 ms apart: sharpness 0.603 against 0.600, tail 619 ms against
+And the continuous roll, 14 changes 30 ms apart: sharpness 0.603 against 0.600, tail 636 ms against
 615.
 
-The timings match to a frame, the single crossing to within three times the noise floor, and the
-alternation's SPACING is solved — the drum's apothem widens while the column is being chased.
+The timings match to a frame and the single crossing to within three times the noise floor. Under a
+crowd the drum's apothem widens and its pair is drawn evenly, both off the same chase signal.
 
-What is left is that **the pair changes hands**: through a crowd this engine shows one glyph at a
-time and it slides, where the reference holds two together and its ink barely moves. It is visible
-by eye on a side-by-side GIF and no number in `compare.py` sees any of it, which is why `balance.py`
-exists.
+What is left is that **the pair still changes hands more than the reference's** — through a crowd
+this engine leans on one glyph and it slides, where the reference holds two together and its ink
+barely moves. Halved, not closed. It is visible by eye on a side-by-side GIF and no number in
+`compare.py` sees any of it, which is why `balance.py` exists.
 
 | | reference travel | android | reference balance | android |
 |---|---|---|---|---|
 | single crossing | 0.163 | 0.165 | 0.18 | 0.17 |
-| alternation 60 ms | 0.103 | 0.341 | 0.19 | 0.55 |
-| continuous roll | 0.119 | 0.474 | 0.19 | 0.73 |
+| alternation 60 ms | 0.103 | 0.226 | 0.19 | 0.39 |
+| continuous roll | 0.119 | 0.290 | 0.19 | 0.50 |
 
 ## The measuring rig — the part that makes progress possible
 
@@ -155,38 +155,22 @@ one run each and both turned out to be in the *other* direction once replicated 
 
 ## Next, in order
 
-The drum is **done and kept**, and it did not do what it was expected to do. It halved the single
-crossing — headline 0.031 → 0.010 in both directions, with the extent error that had survived five
-fits of everything else going 0.037 → 0.015 — and it left the alternation band at 1.409 against the
-reference's 0.760. What it bought instead is a much sharper question, which is (1) below.
+The drum is **done and kept** and did not do what it was expected to do: it halved the single
+crossing, headline 0.031 → 0.010 in both directions, and left the alternation band untouched. The
+band was then solved by a separate mechanism — an apothem that widens while the column is chased —
+and the pair's ink imbalance halved by the same signal levelling its opacity and its shrink together.
+All three are zero at rest, which is why the single crossing has not moved since.
 
-1. **The pair changes hands.** The largest remaining difference and the one visible by eye: through
-   a crowd this engine shows one glyph at a time and it slides, where the reference holds two
-   together and its ink barely moves. `balance.py`, and nothing in `compare.py` sees any of it:
+1. **The pair still changes hands.** Halved and not closed: balance 0.39 and 0.50 against the
+   reference's flat 0.19, travel 0.226 and 0.290 against 0.103 and 0.119. The imbalance is a
+   PRODUCT and the ground truth has the arithmetic — opacity 4.8 times area 2.1 gives the 9.9 that
+   is exactly the worst frame measured. Two of the three terms are now levelled by the chase. The
+   third, the alpha exponent at 1.33, was tried and reverted: it does improve the balance and it
+   costs the travel, 0.29 out to 0.43. What remains after that is the drum's own `cos`, worth 1.13.
 
-   | | reference travel | android | reference balance | android |
-   |---|---|---|---|---|
-   | single crossing | 0.163 | 0.165 | 0.18 | 0.17 |
-   | alternation 60 ms | 0.103 | 0.341 | 0.19 | 0.55 |
-   | continuous roll | 0.119 | 0.474 | 0.19 | 0.73 |
-
-   The reference does not vary the balance AT ALL across the three. **Three** attempts are closed in
-   the ground truth with their numbers — clamping the leaver by `settle`, levelling both onto one
-   opacity, subtracting the pair's ink-weighted midpoint — and each bought about a fifth of the
-   travel and paid for it on the band or the roll tail. Do not spend a fourth round patching how the
-   pair is DRAWN.
-
-   What they point at together is the model: **through a crowd the reference does not roll.** Its
-   ink moves less than in a single change, 0.103 and 0.119 against 0.163, where ours moves three to
-   four times more. So test the POSITION next — whether a chased column should travel less, the
-   digits swapping largely by cross-fade — rather than the drawing. Two things to know before
-   starting: the pair's geometric centre is ALREADY still (0.000 / -0.004 / 0.000 across a step), so
-   nothing is to be gained by recentring it; and the exponent cannot carry this alone, because at
-   0.8 against 0.2 presence the ratio is 4.8 weighted, 3.3 flattened and still 4.0 with no exponent
-   at all.
-
-   **Measure the roll tail every time.** All three closed attempts broke it — 619 ms out to 686, 752
-   and 186 against the reference's 615 — and `compare.py` sees none of it. Only `burst.py` does.
+   So the cheap terms are spent. Before reaching for a fourth mechanism, check whether the RESIDUAL
+   is the same shape as the reference's — the reference's 0.19 is not zero either, and nobody has
+   compared the two residuals frame by frame rather than as a peak-to-peak.
 
 2. **The alternation's opacity**, ~15% too bright at every cadence, 0.341 / 0.360 / 0.401 against
    0.294 / 0.307 / 0.334, and the chase moved it by 0.002. Flat across cadence, unlike the spacing,

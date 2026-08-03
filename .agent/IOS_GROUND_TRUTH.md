@@ -276,20 +276,53 @@ in `compare.py` sees any of it. `balance.py` measures both halves of it:
 - **balance** — the ink's share of the upper half of the pair, peak to peak. Small means two glyphs
   held together; large means one glyph at a time.
 
-| | reference travel | android | reference balance | android |
-|---|---|---|---|---|
-| single crossing | 0.163 | 0.165 | 0.18 | 0.17 |
-| alternation 60 ms | 0.103 | 0.341 | 0.19 | 0.55 |
-| continuous roll | 0.119 | 0.474 | 0.19 | 0.73 |
+| | reference travel | before | after | reference balance | before | after |
+|---|---|---|---|---|---|---|
+| single crossing | 0.163 | 0.165 | 0.165 | 0.18 | 0.17 | 0.17 |
+| alternation 60 ms | 0.103 | 0.341 | **0.226** | 0.19 | 0.55 | **0.39** |
+| continuous roll | 0.119 | 0.474 | **0.290** | 0.19 | 0.73 | **0.50** |
 
 **The reference does not vary the balance at all** — 0.19 in all three regimes — and barely varies
-the travel, moving its ink LESS through a crowd than through a single change. This engine matches it
-exactly where it was fitted and nowhere else: through a roll our share runs from 0.14 to 0.91, which
-is one glyph at a time, and the survivor slides with the roll.
+the travel, moving its ink LESS through a crowd than through a single change. This engine matched it
+exactly where it was fitted and nowhere else: through a roll our share ran from 0.14 to 0.91, one
+glyph at a time, and the survivor slid with the roll.
 
 Note the chase makes the travel worse, 0.258 to 0.341 on the alternation and 0.227 to 0.474 on the
 roll, because a wider drum swings its faces further. That is the same knob paying twice, and it is
-the reason the balance has to be solved rather than traded against.
+the reason the balance had to be solved rather than traded against.
+
+### It is a PRODUCT, which is why one fix at a time bought a fifth
+
+Three separate attempts each moved this about a fifth and paid for it elsewhere, and the arithmetic
+says why before any of them needed running. With the two glyphs at 0.8 and 0.2 presence:
+
+| term | near / far | ratio |
+|---|---|---|
+| opacity | 0.864 / 0.181 | 4.8 |
+| area — the shrink, SQUARED | 0.840 / 0.406 | 2.1 |
+| **ink** | | **9.9** → share 0.91 |
+
+0.91 is exactly the worst frame measured. Levelling the opacity alone leaves 2.1 standing;
+flattening the shrink alone leaves 4.8. **They multiply, so they only work together** — which is why
+`CROWD_EVEN` drives both from one signal, levelling the pair onto one opacity and flattening the
+shrink as the chase rises. Zero at rest, so `SCALE_AMOUNT` keeps Apple's value and the single
+crossing cannot move: 0.010 both directions before and after, controls at 1.000.
+
+**The evenness runs off the RAW chase signal, not the lagged one the apothem uses.** The lag adds
+~150 ms on top of the bleed, and the last crossing of a burst takes ~400 ms — so it was still being
+drawn evenly for most of its length, never dipped, and read as finished at 236 ms against the
+reference's 615, floor 0.637 against 0.409. Off the raw signal the tail is 636 ms. The lag exists to
+stop a sawtooth on the apothem, and the evenness does not need it: through a fast alternation the
+raw signal saws between 0.6 and 1.0, and twice either of those clamps to 1.
+
+The band moves with it and mostly for the better: 60 ms 0.730 → 0.820 against 0.760, but 120 ms
+1.369 → **1.474** against 1.460, which was the worst cadence and is now the best.
+
+| attempt | result |
+|---|---|
+| flattening the alpha exponent too — the product's third term, worth 1.33 | balance 0.50 → 0.43 as predicted, and travel 0.29 → 0.43 against the reference's 0.119, on both runs. The two exponents are what give the arriver and the leaver different curves; removing that makes the pair hand over faster rather than more evenly. Reverted |
+
+What is left is the drum's own `cos`, worth 1.13, which is the foreshortening itself.
 
 ### Closed brackets on the balance — do not re-walk these
 
@@ -300,7 +333,8 @@ the reason the balance has to be solved rather than traded against.
 | ...at 2.2, fully levelled | travel 0.216 / 0.276, swing 0.45 / 0.67, band 0.679, roll tail 752 ms |
 | subtracting the pair's INK-weighted midpoint under the chase | travel 0.280 / 0.356, swing 0.57 / 0.79, band 0.840, **roll tail 619 → 186 ms** |
 
-All three were reverted, and read together they say more than any of them does alone.
+All three were reverted. Read together they say what the section above records: each was one term of
+a product, so each could only ever buy a fifth.
 
 **The pair's geometric centre is already still.** Weighted by presence it reads 0.000 at a stop,
 -0.004 a quarter of the way between two and 0.000 half way — so subtracting it would be a no-op, and
@@ -313,9 +347,5 @@ the exponent to the midpoint and it is 3.3. Remove the exponent entirely and it 
 because the asymmetry is in `presence` itself. Flattening is worth about a fifth of the gap; buying
 more means LOWERING the exponent, which brightens a pair already 15% too bright.
 
-So patching how the pair is drawn keeps buying a fifth of the travel and paying for it somewhere
-else. What all three point at is the model rather than a coefficient: **through a crowd the
-reference does not roll.** Its ink moves LESS than in a single change, 0.103 and 0.119 against
-0.163, while ours moves three to four times more. The next thing to test is therefore the POSITION —
-whether a chased column should travel less rather than being drawn differently — and the measurement
-that catches the damage is the roll tail, which all three of these broke and `compare.py` never saw.
+The measurement that catches the damage is the roll tail: all three of these broke it, and
+`compare.py` never sees it. Only `burst.py` does.
