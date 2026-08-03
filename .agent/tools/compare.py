@@ -89,14 +89,19 @@ def median_of(pattern):
 
 
 def main():
-    if len(sys.argv) < 2:
+    args = [a for a in sys.argv[1:] if not a.startswith("--")]
+    if not args:
         print(__doc__)
         return 1
     here = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    reference = json.load(open(os.path.join(here, "artifacts/gt_ios_ref/reference.json")))
+    # --up compares against the increment 1,160 -> 1,242; the default is the decrement. They are
+    # not interchangeable: every metric is normalised against the column's own settled glyph, so a
+    # crossing of 2 -> 1 measured against a settled "1" is a different quantity from 1 -> 2.
+    which = "gt_ios_up5" if "--up" in sys.argv else "gt_ios_ref"
+    reference = json.load(open(os.path.join(here, f"artifacts/{which}/reference.json")))
     reference = {int(k): v for k, v in reference.items()}
 
-    got = median_of(os.path.join(sys.argv[1], "*.json"))
+    got = median_of(os.path.join(args[0], "*.json"))
     if not got:
         print("no usable runs in", sys.argv[1])
         return 1
