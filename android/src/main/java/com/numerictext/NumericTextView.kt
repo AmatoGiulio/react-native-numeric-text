@@ -254,9 +254,10 @@ class NumericTextView(context: Context) : View(context), Choreographer.FrameCall
       if (sample.stable || sample.blurLengthPx < BLUR_MIN_PX) {
         null
       } else {
-        val bucket = (sample.blurLengthPx * BLUR_RADIUS_FACTOR * 2f).roundToInt().coerceIn(1, 120)
+        val bucket =
+          (sample.blurLengthPx * BLUR_RADIUS_FACTOR * BLUR_STEPS_PER_PX).roundToInt().coerceIn(1, 480)
         softwareBlurCache.getOrPut(bucket) {
-          BlurMaskFilter(bucket / 2f, BlurMaskFilter.Blur.NORMAL)
+          BlurMaskFilter(bucket / BLUR_STEPS_PER_PX, BlurMaskFilter.Blur.NORMAL)
         }
       }
 
@@ -321,9 +322,9 @@ class NumericTextView(context: Context) : View(context), Choreographer.FrameCall
   private fun effectFor(lengthPx: Float, @Suppress("UNUSED_PARAMETER") direction: Float): RenderEffect? {
     if (lengthPx < BLUR_MIN_PX) return null
     if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return null
-    val bucket = (lengthPx * BLUR_RADIUS_FACTOR * 2f).roundToInt().coerceIn(1, 120)
+    val bucket = (lengthPx * BLUR_RADIUS_FACTOR * BLUR_STEPS_PER_PX).roundToInt().coerceIn(1, 480)
     return gaussianEffectCache.getOrPut(bucket) {
-      val radius = bucket / 2f
+      val radius = bucket / BLUR_STEPS_PER_PX
       RenderEffect.createBlurEffect(radius, radius, Shader.TileMode.DECAL)
     }
   }
@@ -642,5 +643,15 @@ class NumericTextView(context: Context) : View(context), Choreographer.FrameCall
 
     /** Gaussian radius per unit of the engine's blur length. */
     private const val BLUR_RADIUS_FACTOR = 0.5f
+
+    /**
+     * Quantisation of the blur radius, in steps per pixel.
+     *
+     * The radius has to be bucketed because a RenderEffect allocates and this runs per glyph per
+     * frame, but at half-pixel steps the decaying blur walks down its buckets one visible notch at
+     * a time and the glyph reads as vibrating while it settles. Eight steps per pixel keeps the
+     * cache bounded and puts each notch under the threshold of a visible change.
+     */
+    private const val BLUR_STEPS_PER_PX = 8f
   }
 }
