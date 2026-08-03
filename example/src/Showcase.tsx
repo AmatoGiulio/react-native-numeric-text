@@ -157,6 +157,13 @@ const CONTROLLED_ROLL_TICKS = CONTROLLED_ROLL_TO - CONTROLLED_ROLL_FROM;
 const ALTERNATE_TICKS = 20;
 const ALTERNATE_FAST_MS = 60;
 const ALTERNATE_SLOW_MS = 120;
+/**
+ * A third cadence, to test whether the reference's alternation blend is a stack of overlapping
+ * transitions. At 60 ms roughly six of a ~350 ms transition are alive at once, at 120 ms three, at
+ * 240 ms about one and a half — so the hypothesis predicts the blend climbs back toward what a
+ * single crossing measures, while a model holding one persistent state per column stays flat.
+ */
+const ALTERNATE_SLOWEST_MS = 240;
 
 const TAP_STEP_MS = 220;
 const TAP_TICKS = 8;
@@ -375,6 +382,10 @@ export function Showcase({ onOpenLab }: Props) {
     () => runAlternate(ALTERNATE_SLOW_MS),
     [runAlternate]
   );
+  const runAlternateSlowest = useCallback(
+    () => runAlternate(ALTERNATE_SLOWEST_MS),
+    [runAlternate]
+  );
 
   const runTaps = useCallback(
     () => runTicks(TAP_STEP_MS, TAP_TICKS),
@@ -563,6 +574,18 @@ export function Showcase({ onOpenLab }: Props) {
           >
             <Text style={styles.presetText}>
               alterna ×{ALTERNATE_TICKS} · {ALTERNATE_SLOW_MS}ms
+            </Text>
+          </Pressable>
+
+          <Pressable
+            style={({ pressed }) => [styles.preset, pressed && styles.pressed]}
+            onPress={runAlternateSlowest}
+            disabled={playing}
+            accessibilityRole="button"
+            accessibilityLabel="Slowest alternation"
+          >
+            <Text style={styles.presetText}>
+              alterna ×{ALTERNATE_TICKS} · {ALTERNATE_SLOWEST_MS}ms
             </Text>
           </Pressable>
 

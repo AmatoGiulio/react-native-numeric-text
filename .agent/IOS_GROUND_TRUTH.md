@@ -785,3 +785,41 @@ while ours still pulses by 0.194 after the exponent fix.
 
 No hypothesis recorded here on purpose. What is established: it is not the balance between the two
 glyphs, and it is not a small offset in one direction — the sign of the effect differs.
+
+## The overlap test — 2026-08-03
+
+The hypothesis: the reference composites one fading transition per value change, while this engine
+holds one persistent state per column. Under a single change the two are equivalent, which is why a
+day of fitting worked; under interruption they diverge.
+
+It predicts that slowing an alternation, so fewer transitions are alive at once, brings the
+reference back up toward what a single crossing measures — and that an engine with one persistent
+state shows no such dependence on overlap.
+
+Three cadences, peak opacity in the alternation's steady state:
+
+| cadence | iOS ink | iOS peak | android ink | android peak |
+|---|---|---|---|---|
+| ~63 ms | 0.322 | 0.317 | 0.470 | 0.581 |
+| ~117 ms | 0.382 | 0.489 | 0.491 | 0.659 |
+| ~240 ms | 0.520 | 0.727 | 0.586 | 0.790 |
+
+Read each against its OWN single crossing — iOS 0.478, android 0.525:
+
+| cadence | iOS ratio | android ratio |
+|---|---|---|
+| ~63 ms | **0.66** | **1.11** |
+| ~117 ms | 1.02 | 1.26 |
+| ~240 ms | **1.50** | **1.50** |
+
+**At the slowest cadence the two agree exactly, 1.50 against 1.50.** As overlap increases they
+separate, and at the fastest the reference has dropped to 0.66 of its own single crossing while we
+have risen to 1.11 of ours. The reference goes below what one crossing ever reaches; we never do.
+
+That is what the hypothesis predicted, and it localises the missing mechanism: it does not exist at
+all without overlap, and it grows with it. Both engines brighten as the cadence slows — that part
+is just having more time — but only the reference darkens when its transitions pile up.
+
+**Supported, not proven.** An opacity capped by how long the target has been stable would fit the
+same three points. What is ruled out is any explanation that does not depend on overlap, since
+without overlap the two agree to two decimals.
