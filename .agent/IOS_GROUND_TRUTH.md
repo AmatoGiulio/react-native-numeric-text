@@ -983,3 +983,33 @@ is what the SETTLE_KNOCK bracket showed from the other side.
 Correction to the previous entry: the gap and the glyph-size difference are NOT one group. The gap
 is cadence-dependent (0.756 at 60 ms, 1.362 at 240) and belongs with the overlap signatures; the
 size difference is flat at 1.14 across every cadence and does not.
+
+## Overlapping transitions, implemented — two signatures of three, 2026-08-03
+
+A handover landing while the column is still moving now hands the glyph it supersedes to a
+traveller that keeps its velocity, coasts, and fades on its own clock. A handover from REST spawns
+nothing, so the single crossing is untouched — it measured 0.031 before and after, every step of
+the way.
+
+Two attempts were needed, and the first is the instructive one:
+
+| | peak | ink | middle/ends | single |
+|---|---|---|---|---|
+| before | 0.581 | 0.470 | 1.513 | 0.031 |
+| travellers | **0.816** | — | 1.371 | 0.031 |
+| travellers + normalised | **0.333** | **0.310** | 1.347 | 0.031 |
+| **reference** | **0.317** | **0.322** | **0.756** | — |
+
+Travellers alone spread the ink and made it BRIGHTER — 0.581 to 0.816 — because adding layers adds
+opacity while the reference loses it. Dividing the whole composition by what else is alive in it
+lands the opacity almost exactly: 0.333 against 0.317, and 0.310 against 0.322.
+
+That is the piece the SETTLE_KNOCK route could not reach. It saturated at 0.498 no matter how hard
+it was pushed; conservation gets there in one step, because the mechanism is not a cap but a
+division.
+
+**The gap is not closed.** 1.513 to 1.347, against 0.756. Letting the travellers run further —
+0.45 s at drag 1.5 instead of 0.30 at 4.0 — buys 1.347 to 1.228 and overshoots the opacity to 0.260,
+so it was not kept. Our two main lobes are one step apart and together they fill the centre; the
+reference's are 0.876 glyph heights apart. Something still has to separate the PAIR, not just trail
+copies behind it.
