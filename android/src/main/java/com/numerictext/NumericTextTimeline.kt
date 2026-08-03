@@ -96,6 +96,63 @@ internal class NumericRollEngine {
     const val FACE_ANGLE = (2.0 * Math.PI / FACES).toFloat()
 
     /**
+     * Draw a column as a STACK of independent transitions instead of one position on a strip.
+     *
+     * Off by default and switched on by a marker file, like the recorder, so one build measures
+     * both engines and a round does not have to be paid twice:
+     *
+     *     adb shell touch /sdcard/Android/data/<pkg>/files/numerictext-stack.on
+     *
+     * Why it exists. The roll model's two visible glyphs are `floor(position)` and the stop above
+     * it, and everything about them derives from `distance = |stop - position|` — so the ink
+     * centroid IS the column's position, and when the column slides the ink slides. That is the
+     * one defect left on this engine: measured travel 0.517 through a continuous roll against the
+     * reference's 0.119, while matching it exactly (0.165 against 0.163) on a single change. The
+     * reference moves its ink LESS when changes pile up, which no setting of one shared position
+     * can produce.
+     *
+     * Predicted off-line in `.agent/tools/sim.py`, which renders a model into the recorder's own
+     * format and is scored by the same tools. With the drum placement at [STACK_APOTHEM] it said:
+     *
+     *     model                headline   band 60   travel single / alt / roll
+     *     reference               —         0.760   0.163 / 0.103 / 0.119
+     *     roll (this engine)     0.010      0.814   0.165 / 0.259 / 0.517
+     *     stack                  0.027      1.406   0.190 / 0.207 / 0.190
+     *
+     * So the simulator expects the travel to come good and the alternation's band to get worse,
+     * and the chase does NOT rescue the band here — on a stack it widens the dim outer entries and
+     * leaves the bright mass in the middle, taking the band from 1.406 to 1.777. This port exists
+     * to find out whether that prediction survives the real renderer and the real frame clock,
+     * which the simulator does not have. Do not delete the roll model until it does.
+     */
+    var stackMode = false
+
+    /**
+     * The drum's radius in STACK mode. Larger than the roll model's [APOTHEM] because a stack does
+     * not pay for width the way a strip does: a strip's crossing depth is set by the spacing of
+     * two adjacent stops, so opening that spacing costs the crossing, while a stack's crossing is
+     * set by one transition's own curve. Swept in the simulator against the single crossing —
+     * 0.40 gives headline 0.158, 0.555 gives 0.102, 0.75 gives 0.027, 1.00 gives 0.110.
+     *
+     * The DEVICE disagreed with that sweep and the device wins: at 0.75 the crossing measured
+     * 0.116 against the simulator's predicted 0.027, with the extent 1.376 against the reference's
+     * 1.181 — the pair simply drawn too far apart. The simulator's absolute calibration is off
+     * (its blur is a plain gaussian, it has no `settle`, and its glyph rasters are iOS's rather
+     * than this renderer's), so it ranks models well and cannot set a constant. 0.555 is the value
+     * the roll model already fits the crossing's extent at.
+     */
+    const val STACK_APOTHEM = 0.555f
+
+    /**
+     * The departing glyph's alpha exponent in STACK mode, replacing [EXIT_ALPHA_EXPONENT].
+     *
+     * A stack fades its pair more slowly than a strip does, because several transitions overlap
+     * rather than two. At the roll model's 1.20 the crossing's ink floor reads 0.663 against the
+     * reference's 0.515; 2.40 puts it within 0.024 and costs nothing on the travel.
+     */
+    const val STACK_EXIT_ALPHA_EXPONENT = 2.40f
+
+    /**
      * Radius of the drum from the axis to a face, in line heights. MEASURED.
      *
      * At 0.509 — the value that makes the drum agree for small angles with the flat 0.32 strip it
@@ -329,6 +386,22 @@ internal class NumericRollEngine {
   /** A stop this column will move to once [remaining] seconds have passed. */
   private class PendingStop(val stop: Int, var remaining: Float)
 
+  /**
+   * One transition, with its own clock — the unit of the STACK model.
+   *
+   * `p` is the same quantity the roll model calls `stop - position`: 0 is rest, and a glyph one
+   * step out sits at ±1 depending on which way the value moved. An entry is born at `-direction`
+   * and springs to 0; when a later change supersedes it, its target becomes `+direction` and STAYS
+   * there however many further changes arrive. That bound is the whole point: a removal in a
+   * content transition runs to its removal state and is then gone, it does not keep travelling,
+   * and because arrivals and departures sit either side of rest their masses balance — the ink
+   * centroid stays put however many are alive.
+   */
+  private class Entry(val ch: String, var p: Float) {
+    var velocity = 0f
+    var target = 0f
+  }
+
   private class Column(
     val key: String,
     var kind: TokenKind,
@@ -362,6 +435,9 @@ internal class NumericRollEngine {
      * where it is, so a glyph on screen is still never restarted.
      */
     val pending = ArrayDeque<PendingStop>()
+
+    /** The live transitions, oldest first. STACK mode only; the roll model leaves this empty. */
+    val entries = ArrayList<Entry>()
 
     var settle = 1f
     var settleVelocity = 0f
@@ -411,6 +487,7 @@ internal class NumericRollEngine {
       column.target = 0
       column.charAt[0] = slot.char
       column.position = 0f
+      column.entries.add(Entry(slot.char, 0f))
       column.x = xRel(slot)
       column.targetX = column.x
       columns[slot.key] = column
@@ -451,6 +528,7 @@ internal class NumericRollEngine {
         born.target = 0
         born.charAt[0] = slot.char
         born.position = -lastDirection.toFloat()
+        born.entries.add(Entry(slot.char, -lastDirection.toFloat()))
         born.settle = 0f
         born.alive = 0f
         born.x = xRel(slot)
@@ -511,6 +589,10 @@ internal class NumericRollEngine {
       column.literal = literalOf(slot)
       column.charAt.keys.retainAll(setOf(column.target))
       column.charAt[column.target] = slot.char
+      // Collapse the stack to the one glyph the column rests on, or `samples()` would keep drawing
+      // departures that the snap has already resolved past.
+      column.entries.clear()
+      column.entries.add(Entry(slot.char, 0f))
       column.x = xRel(slot)
       column.targetX = column.x
       column.xVelocity = 0f
@@ -550,7 +632,20 @@ internal class NumericRollEngine {
         var arrived = false
         for (entry in column.pending) entry.remaining -= dt
         while (column.pending.isNotEmpty() && column.pending.first().remaining <= 0f) {
-          column.target = column.pending.removeFirst().stop
+          val stop = column.pending.removeFirst().stop
+          column.target = stop
+          // In STACK mode the commit does not move a position: it supersedes every live transition
+          // and starts a new one. The hold above still belongs to the CHANGE and not to the
+          // arriving glyph — holding only the newcomer lets the outgoing one leave immediately and
+          // the column goes dark in the gap, measured in the simulator as an ink floor of 0.000
+          // against the reference's 0.515.
+          if (stackMode) {
+            val ch = column.charAt[stop]
+            if (ch != null) {
+              for (live in column.entries) live.target = lastDirection.toFloat()
+              column.entries.add(Entry(ch, -lastDirection.toFloat()))
+            }
+          }
           arrived = true
         }
         // A change that lands on a column already in flight is the whole chase signal. One that
@@ -571,7 +666,11 @@ internal class NumericRollEngine {
       }
 
       if (stepCrowd(column, dt)) active = true
-      if (stepPosition(column, response, dt)) active = true
+      if (stackMode) {
+        if (stepEntries(column, response, dt)) active = true
+      } else {
+        if (stepPosition(column, response, dt)) active = true
+      }
       if (stepSettle(column, dt)) active = true
       if (stepX(column, response, dt)) active = true
     }
@@ -591,6 +690,11 @@ internal class NumericRollEngine {
         val alpha = column.alive
         if (alpha <= 0.01f) continue
         out.add(sample(column, literal, stop = column.target, distance = 0f, alpha = alpha))
+        continue
+      }
+
+      if (stackMode) {
+        emitStack(column, out)
         continue
       }
 
@@ -642,6 +746,66 @@ internal class NumericRollEngine {
   }
 
   // ── Internals ───────────────────────────────────────────────────────────────────────────────
+
+  /**
+   * Draw a column as a stack of overlapping transitions.
+   *
+   * The alphas are CAPPED to sum to one, never boosted to it, and that distinction is the whole
+   * reason a previous attempt at overlapping transitions was reverted eleven minutes after it was
+   * written. A crossfade is a CONVEX combination, so summing N independent alphas brightens the
+   * ink as transitions pile up — measured then at 0.581 rising to 0.816. But the reference's total
+   * ink DIPS through a crossing, to 0.515 of a settled glyph, so normalising the sum UP to one
+   * would destroy the primary metric. Cap, never boost.
+   */
+  private fun emitStack(column: Column, out: MutableList<GlyphSample>) {
+    val count = column.entries.size
+    if (count == 0) return
+    var total = 0f
+    val raw = FloatArray(count)
+    for (i in 0 until count) {
+      val presence = max(0f, 1f - abs(column.entries[i].p))
+      if (presence <= 0f) continue
+      // Weighted by how close a glyph is to ITS OWN rest, not by which entry is newest — a binary
+      // role makes two glyphs swap curves the instant a change lands, which under an alternation
+      // was the whole behaviour on the roll model (swing 0.307 against the reference's 0.103).
+      val exponent = STACK_EXIT_ALPHA_EXPONENT +
+        (ENTER_ALPHA_EXPONENT - STACK_EXIT_ALPHA_EXPONENT) * presence
+      raw[i] = pow(presence, exponent)
+      total += raw[i]
+    }
+    val norm = if (total > 1f) 1f / total else 1f
+    for (i in 0 until count) {
+      val alpha = raw[i] * norm * column.alive
+      if (alpha <= 0.01f) continue
+      val entry = column.entries[i]
+      val distance = min(1f, abs(entry.p))
+      val settled = count == 1 &&
+        distance < POSITION_EPSILON &&
+        abs(entry.velocity) < VELOCITY_EPSILON &&
+        column.alive > 0.999f
+      val angle = entry.p * FACE_ANGLE
+      val shrink = 1f - SCALE_AMOUNT * distance
+      out.add(
+        GlyphSample(
+          key = column.key,
+          ch = entry.ch,
+          kind = column.kind,
+          role = when {
+            settled -> GlyphRole.ANCHOR
+            i == count - 1 -> GlyphRole.ENTER
+            else -> GlyphRole.EXIT
+          },
+          x = column.x,
+          offsetY = STACK_APOTHEM * lineHeightPx * sin(angle),
+          alpha = alpha.coerceIn(0f, 1f),
+          scaleX = shrink,
+          scaleY = shrink * cos(angle),
+          blurLengthPx = if (settled) 0f else lineHeightPx * BLUR_FRACTION * distance,
+          stable = settled,
+        )
+      )
+    }
+  }
 
   private fun sample(
     column: Column,
@@ -719,6 +883,35 @@ internal class NumericRollEngine {
     // DOWN by 0.070 glyph heights and 2,599 -> 2,476 moves it UP by 0.054. So the reference brings
     // an incrementing digit in from ABOVE. This engine had it the other way on both directions.
     return from - direction
+  }
+
+  /**
+   * Step every live transition, then drop the ones that have finished leaving.
+   *
+   * The newest is never culled — it is what the column shows at rest — and a departure is only
+   * dropped once it has both reached its removal state and stopped moving, so nothing pops.
+   * Without the cull a press-and-hold grows one entry per change forever.
+   */
+  private fun stepEntries(column: Column, response: Float, dt: Float): Boolean {
+    var moving = false
+    val omega = (2.0 * Math.PI / max(0.05f, response)).toFloat()
+    for (entry in column.entries) {
+      val error = entry.target - entry.p
+      if (abs(error) <= POSITION_EPSILON && abs(entry.velocity) <= VELOCITY_EPSILON) {
+        entry.p = entry.target
+        entry.velocity = 0f
+        continue
+      }
+      entry.velocity +=
+        ((omega * omega * error) - (2f * DAMPING_RATIO * omega * entry.velocity)) * dt
+      entry.p += entry.velocity * dt
+      moving = true
+    }
+    if (column.entries.size > 1) {
+      val newest = column.entries.last()
+      column.entries.retainAll { it === newest || 1f - abs(it.p) > 0.004f }
+    }
+    return moving
   }
 
   private fun stepPosition(column: Column, response: Float, dt: Float): Boolean {

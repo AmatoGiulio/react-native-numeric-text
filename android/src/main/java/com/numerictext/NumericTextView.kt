@@ -135,6 +135,7 @@ class NumericTextView(context: Context) : View(context), Choreographer.FrameCall
 
   override fun onAttachedToWindow() {
     super.onAttachedToWindow()
+    NumericTextFrameRecorder.configure(this)
     recalcFormatter()
     recalcTextPaint()
     if (engine.isRunning) postFrame()
