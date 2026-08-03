@@ -298,10 +298,24 @@ the reason the balance has to be solved rather than traded against.
 | clamping the DEPARTING glyph by `settle` as the chase rises | swing 0.55 → 0.56, nothing. The gate only bites when a glyph's presence exceeds it, and the far glyph is already below it |
 | levelling both glyphs onto one opacity, `CROWD_EVEN` 1.0 | travel 0.341 → 0.241 and 0.474 → 0.343, but swing only 0.55 → 0.48; band 0.730 → 0.639 and roll tail 619 → 686 ms |
 | ...at 2.2, fully levelled | travel 0.216 / 0.276, swing 0.45 / 0.67, band 0.679, roll tail 752 ms |
+| subtracting the pair's INK-weighted midpoint under the chase | travel 0.280 / 0.356, swing 0.57 / 0.79, band 0.840, **roll tail 619 → 186 ms** |
 
-Both were reverted. Levelling buys travel and pays band and tail, and it barely touches the thing it
-was aimed at, which says the imbalance is not mostly in the opacity CLAMP. What is left as the
-suspect is the alpha exponent: it is weighted by presence, so the glyph nearer its own stop is
-handed the brighter curve, and that AMPLIFIES an asymmetry that `presence` already has. Levelling
-the opacities leaves that amplifier untouched. Try flattening the exponent weighting with the chase
-before trying anything else — and measure the roll tail, which is what both of these broke.
+All three were reverted, and read together they say more than any of them does alone.
+
+**The pair's geometric centre is already still.** Weighted by presence it reads 0.000 at a stop,
+-0.004 a quarter of the way between two and 0.000 half way — so subtracting it would be a no-op, and
+it is worth knowing that before writing it. What moves is the WEIGHT: a quarter of the way along,
+the near glyph carries 0.66 of the ink and the far one 0.11, and the near one is off centre.
+
+**The exponent cannot be the answer on its own either**, and that is arithmetic rather than a round.
+With the two glyphs at 0.8 and 0.2 presence their alphas are 0.864 and 0.181, a ratio of 4.8. Flatten
+the exponent to the midpoint and it is 3.3. Remove the exponent entirely and it is still **4.0**,
+because the asymmetry is in `presence` itself. Flattening is worth about a fifth of the gap; buying
+more means LOWERING the exponent, which brightens a pair already 15% too bright.
+
+So patching how the pair is drawn keeps buying a fifth of the travel and paying for it somewhere
+else. What all three point at is the model rather than a coefficient: **through a crowd the
+reference does not roll.** Its ink moves LESS than in a single change, 0.103 and 0.119 against
+0.163, while ours moves three to four times more. The next thing to test is therefore the POSITION —
+whether a chased column should travel less rather than being drawn differently — and the measurement
+that catches the damage is the roll tail, which all three of these broke and `compare.py` never saw.

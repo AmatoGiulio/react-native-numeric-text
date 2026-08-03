@@ -170,13 +170,23 @@ reference's 0.760. What it bought instead is a much sharper question, which is (
    | alternation 60 ms | 0.103 | 0.341 | 0.19 | 0.55 |
    | continuous roll | 0.119 | 0.474 | 0.19 | 0.73 |
 
-   The reference does not vary the balance AT ALL across the three. Two attempts are already closed
-   in the ground truth — clamping the leaver by `settle`, and levelling both onto one opacity — and
-   between them they say the imbalance is not in the opacity clamp. The remaining suspect is named
-   there: the alpha exponent is weighted by presence, so it hands the nearer glyph the brighter
-   curve and amplifies an asymmetry `presence` already has. Flatten that weighting with the chase.
-   **Measure the roll tail** — both closed attempts broke it, 619 ms out to 686 and 752 against the
-   reference's 615, and only `burst.py` would have caught it.
+   The reference does not vary the balance AT ALL across the three. **Three** attempts are closed in
+   the ground truth with their numbers — clamping the leaver by `settle`, levelling both onto one
+   opacity, subtracting the pair's ink-weighted midpoint — and each bought about a fifth of the
+   travel and paid for it on the band or the roll tail. Do not spend a fourth round patching how the
+   pair is DRAWN.
+
+   What they point at together is the model: **through a crowd the reference does not roll.** Its
+   ink moves less than in a single change, 0.103 and 0.119 against 0.163, where ours moves three to
+   four times more. So test the POSITION next — whether a chased column should travel less, the
+   digits swapping largely by cross-fade — rather than the drawing. Two things to know before
+   starting: the pair's geometric centre is ALREADY still (0.000 / -0.004 / 0.000 across a step), so
+   nothing is to be gained by recentring it; and the exponent cannot carry this alone, because at
+   0.8 against 0.2 presence the ratio is 4.8 weighted, 3.3 flattened and still 4.0 with no exponent
+   at all.
+
+   **Measure the roll tail every time.** All three closed attempts broke it — 619 ms out to 686, 752
+   and 186 against the reference's 615 — and `compare.py` sees none of it. Only `burst.py` does.
 
 2. **The alternation's opacity**, ~15% too bright at every cadence, 0.341 / 0.360 / 0.401 against
    0.294 / 0.307 / 0.334, and the chase moved it by 0.002. Flat across cadence, unlike the spacing,
