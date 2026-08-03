@@ -671,17 +671,32 @@ class NumericTextView(context: Context) : View(context), Choreographer.FrameCall
   }
 
   companion object {
-    /** Offset, weight — the same nine taps the shader uses, for the software path. */
+    /**
+     * Offset, weight — the blur kernel, shared by the shader and the software path.
+     *
+     * Seventeen rather than nine. Nine is enough for a short trail and visibly banded on a long
+     * one: the frame grid showed the individual copies as stripes across the glyph while the
+     * reference's smear was smooth, which reads as a crossing that is somehow both blurrier and
+     * more mechanical than iOS's.
+     */
     private val BLUR_TAPS = floatArrayOf(
-      -0.5000f, 0.0350f,
-      -0.3750f, 0.0600f,
-      -0.2500f, 0.1050f,
-      -0.1250f, 0.1800f,
-      0.0000f, 0.2400f,
-      0.1250f, 0.1800f,
-      0.2500f, 0.1050f,
-      0.3750f, 0.0600f,
-      0.5000f, 0.0350f,
+      -0.5000f, 0.0029f,
+      -0.4375f, 0.0072f,
+      -0.3750f, 0.0159f,
+      -0.3125f, 0.0308f,
+      -0.2500f, 0.0530f,
+      -0.1875f, 0.0808f,
+      -0.1250f, 0.1092f,
+      -0.0625f, 0.1308f,
+      +0.0000f, 0.1389f,
+      +0.0625f, 0.1308f,
+      +0.1250f, 0.1092f,
+      +0.1875f, 0.0808f,
+      +0.2500f, 0.0530f,
+      +0.3125f, 0.0308f,
+      +0.3750f, 0.0159f,
+      +0.4375f, 0.0072f,
+      +0.5000f, 0.0029f,
     )
 
     private const val DIRECTIONAL_BLUR_SHADER = """
@@ -692,15 +707,23 @@ class NumericTextView(context: Context) : View(context), Choreographer.FrameCall
       half4 main(float2 p) {
         float2 axis = float2(0.0, direction * trail);
         half4 c = half4(0.0);
-        c += content.eval(p + axis * -0.5000) * 0.0350;
-        c += content.eval(p + axis * -0.3750) * 0.0600;
-        c += content.eval(p + axis * -0.2500) * 0.1050;
-        c += content.eval(p + axis * -0.1250) * 0.1800;
-        c += content.eval(p)                  * 0.2400;
-        c += content.eval(p + axis *  0.1250) * 0.1800;
-        c += content.eval(p + axis *  0.2500) * 0.1050;
-        c += content.eval(p + axis *  0.3750) * 0.0600;
-        c += content.eval(p + axis *  0.5000) * 0.0350;
+        c += content.eval(p + axis * -0.5000) * 0.0029;
+        c += content.eval(p + axis * -0.4375) * 0.0072;
+        c += content.eval(p + axis * -0.3750) * 0.0159;
+        c += content.eval(p + axis * -0.3125) * 0.0308;
+        c += content.eval(p + axis * -0.2500) * 0.0530;
+        c += content.eval(p + axis * -0.1875) * 0.0808;
+        c += content.eval(p + axis * -0.1250) * 0.1092;
+        c += content.eval(p + axis * -0.0625) * 0.1308;
+        c += content.eval(p + axis * +0.0000) * 0.1389;
+        c += content.eval(p + axis * +0.0625) * 0.1308;
+        c += content.eval(p + axis * +0.1250) * 0.1092;
+        c += content.eval(p + axis * +0.1875) * 0.0808;
+        c += content.eval(p + axis * +0.2500) * 0.0530;
+        c += content.eval(p + axis * +0.3125) * 0.0308;
+        c += content.eval(p + axis * +0.3750) * 0.0159;
+        c += content.eval(p + axis * +0.4375) * 0.0072;
+        c += content.eval(p + axis * +0.5000) * 0.0029;
         return c;
       }
     """
