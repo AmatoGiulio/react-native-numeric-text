@@ -955,3 +955,31 @@ the sharpness measurement suggested.
 
 Reverted. What the attempt bought: the opacity route is bracketed and closed, and the gap is now
 known to be geometric.
+
+## The geometry of the gap — the reference SPREADS, 2026-08-03
+
+Splitting the vertical ink profile at its valley and taking each half's centroid, in settled-glyph
+heights:
+
+| | separation of centres | mean lobe height | space between |
+|---|---|---|---|
+| iOS 60 ms | **0.876** | 0.579 | **+0.297** |
+| android 60 ms | **0.612** | 0.491 | +0.121 |
+| iOS 240 ms | 0.644 | 0.495 | +0.149 |
+| android 240 ms | 0.713 | 0.469 | +0.244 |
+
+The reference holds its pair 43% further apart under a fast alternation. And the directions are
+opposite: against its own 240 ms the reference WIDENS, 0.644 to 0.876, while we NARROW, 0.713 to
+0.612.
+
+**That is what a two-glyph strip cannot do.** Our ink lives on two adjacent stops, so it can never
+span more than one step however the target moves; the reference's spans more. In the zoomed grid
+its glyphs run past the crop taken from the settled glyph, which is the same fact seen directly.
+
+So the geometric signature of overlap is that the ink spreads over MORE than one step. An
+implementation of overlapping transitions has to produce that, and no amount of opacity can — which
+is what the SETTLE_KNOCK bracket showed from the other side.
+
+Correction to the previous entry: the gap and the glyph-size difference are NOT one group. The gap
+is cadence-dependent (0.756 at 60 ms, 1.362 at 240) and belongs with the overlap signatures; the
+size difference is flat at 1.14 across every cadence and does not.
