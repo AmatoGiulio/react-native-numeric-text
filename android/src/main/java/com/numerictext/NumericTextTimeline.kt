@@ -147,6 +147,9 @@ internal class NumericRollEngine {
     private const val VELOCITY_EPSILON = 0.005f
   }
 
+  /** A stop this column will move to once [remaining] seconds have passed. */
+  private class PendingStop(val stop: Int, var remaining: Float)
+
   private class Column(
     val key: String,
     var kind: TokenKind,
@@ -166,8 +169,20 @@ internal class NumericRollEngine {
     var position = 0f
     var velocity = 0f
     var target = 0
-    var pendingTarget: Int? = null
-    var hold = 0f
+
+    /**
+     * Stops waiting for their turn in the wave, each with its own countdown.
+     *
+     * A queue and not one pending stop, because the wave's delay belongs to a CHANGE, not to a
+     * column. With a single slot, a burst piled every change that arrived during one hold into one
+     * commit: traced on a 33 ms roll, the rightmost column stood still for 187 ms and then jumped
+     * eight stops at once, then six — two launches instead of fourteen steps. The reference steps
+     * evenly, and this engine finished the whole burst 64 ms early because of it.
+     *
+     * The merge property is unaffected: entries only ever move where the column is going, never
+     * where it is, so a glyph on screen is still never restarted.
+     */
+    val pending = ArrayDeque<PendingStop>()
 
     var settle = 1f
     var settleVelocity = 0f
@@ -180,7 +195,7 @@ internal class NumericRollEngine {
     var alive = 1f
     var retiring = false
 
-    fun goalStop(): Int = pendingTarget ?: target
+    fun goalStop(): Int = pending.lastOrNull()?.stop ?: target
   }
 
   private val columns = LinkedHashMap<String, Column>()
@@ -264,22 +279,12 @@ internal class NumericRollEngine {
       if (next != existing.goalStop()) {
         existing.literal = literalOf(slot)
         existing.charAt[next] = slot.char
-        val alreadyWaiting = existing.pendingTarget != null
-        existing.pendingTarget = next
         // Half a gap on the leader: it does not leave the instant the value changes, but it does
         // not wait a whole step either. The reference's columns start at 70 / 137 / 220 ms; at
         // zero this engine read 35 / 102 / 186 and at a full gap 101 / 176 / 243, which brackets
         // it — there is ~35 ms of latency before the first frame either way, so the leader's own
         // share is about half.
-        //
-        // A column already waiting its turn keeps the hold it is counting down; only its
-        // destination is updated. Reassigning it starves the far columns during a burst: changes
-        // arriving every 33 ms kept resetting a 75 ms hold, so the rightmost column never left at
-        // all while the reference rolled through seven digits beside it. Same invariant as the
-        // position — a change moves where a column is going, never when it is going.
-        if (!alreadyWaiting) {
-          existing.hold = gap * (waveIndex + 0.5f)
-        }
+        existing.pending.addLast(PendingStop(next, gap * (waveIndex + 0.5f)))
         waveIndex += 1
       }
     }
@@ -297,9 +302,8 @@ internal class NumericRollEngine {
         continue
       }
       val column = entry.value
-      column.pendingTarget?.let { column.target = it }
-      column.pendingTarget = null
-      column.hold = 0f
+      column.pending.lastOrNull()?.let { column.target = it.stop }
+      column.pending.clear()
       column.position = column.target.toFloat()
       column.velocity = 0f
       column.settle = 1f
@@ -343,11 +347,14 @@ internal class NumericRollEngine {
         active = true
       }
 
-      if (column.pendingTarget != null) {
-        column.hold -= dt
-        if (column.hold <= 0f) {
-          column.target = column.pendingTarget!!
-          column.pendingTarget = null
+      if (column.pending.isNotEmpty()) {
+        var arrived = false
+        for (entry in column.pending) entry.remaining -= dt
+        while (column.pending.isNotEmpty() && column.pending.first().remaining <= 0f) {
+          column.target = column.pending.removeFirst().stop
+          arrived = true
+        }
+        if (arrived) {
           // The follower starts its own run here rather than springing down from the previous
           // handover's 1, which reads as a dip.
           column.settle = 0f
