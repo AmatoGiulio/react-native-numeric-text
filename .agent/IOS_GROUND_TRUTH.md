@@ -265,3 +265,43 @@ binary. Rebuilt and reinstalled, three runs each, against the reference's 0.600 
 What the chase does NOT fix is the second signature. The alternation's ink floor is 0.341 / 0.360 /
 0.401 against the reference's 0.294 / 0.307 / 0.334 — about 15% too bright at every cadence, and
 the chase moved it by 0.002. The spacing and the opacity really are two mechanisms.
+
+## The pair changes hands — the open defect
+
+Reported by eye off a side-by-side GIF, "our movement is wider, ours looks like a whole step and
+theirs like half of one", and then measured. It is the largest remaining difference and no metric
+in `compare.py` sees any of it. `balance.py` measures both halves of it:
+
+- **travel** — peak-to-peak excursion of the column's ink centroid, in glyph heights.
+- **balance** — the ink's share of the upper half of the pair, peak to peak. Small means two glyphs
+  held together; large means one glyph at a time.
+
+| | reference travel | android | reference balance | android |
+|---|---|---|---|---|
+| single crossing | 0.163 | 0.165 | 0.18 | 0.17 |
+| alternation 60 ms | 0.103 | 0.341 | 0.19 | 0.55 |
+| continuous roll | 0.119 | 0.474 | 0.19 | 0.73 |
+
+**The reference does not vary the balance at all** — 0.19 in all three regimes — and barely varies
+the travel, moving its ink LESS through a crowd than through a single change. This engine matches it
+exactly where it was fitted and nowhere else: through a roll our share runs from 0.14 to 0.91, which
+is one glyph at a time, and the survivor slides with the roll.
+
+Note the chase makes the travel worse, 0.258 to 0.341 on the alternation and 0.227 to 0.474 on the
+roll, because a wider drum swings its faces further. That is the same knob paying twice, and it is
+the reason the balance has to be solved rather than traded against.
+
+### Closed brackets on the balance — do not re-walk these
+
+| attempt | result |
+|---|---|
+| clamping the DEPARTING glyph by `settle` as the chase rises | swing 0.55 → 0.56, nothing. The gate only bites when a glyph's presence exceeds it, and the far glyph is already below it |
+| levelling both glyphs onto one opacity, `CROWD_EVEN` 1.0 | travel 0.341 → 0.241 and 0.474 → 0.343, but swing only 0.55 → 0.48; band 0.730 → 0.639 and roll tail 619 → 686 ms |
+| ...at 2.2, fully levelled | travel 0.216 / 0.276, swing 0.45 / 0.67, band 0.679, roll tail 752 ms |
+
+Both were reverted. Levelling buys travel and pays band and tail, and it barely touches the thing it
+was aimed at, which says the imbalance is not mostly in the opacity CLAMP. What is left as the
+suspect is the alpha exponent: it is weighted by presence, so the glyph nearer its own stop is
+handed the brighter curve, and that AMPLIFIES an asymmetry that `presence` already has. Levelling
+the opacities leaves that amplifier untouched. Try flattening the exponent weighting with the chase
+before trying anything else — and measure the roll tail, which is what both of these broke.

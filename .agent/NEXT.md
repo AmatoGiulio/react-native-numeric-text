@@ -33,10 +33,18 @@ And the continuous roll, 14 changes 30 ms apart: sharpness 0.603 against 0.600, 
 615.
 
 The timings match to a frame, the single crossing to within three times the noise floor, and the
-alternation's SPACING is solved — the drum's apothem widens while the column is being chased. What
-is left is the alternation's opacity: the ink floor there is 0.341 / 0.360 / 0.401 against the
-reference's 0.294 / 0.307 / 0.334, about 15% too bright at every cadence and untouched by the
-spacing work.
+alternation's SPACING is solved — the drum's apothem widens while the column is being chased.
+
+What is left is that **the pair changes hands**: through a crowd this engine shows one glyph at a
+time and it slides, where the reference holds two together and its ink barely moves. It is visible
+by eye on a side-by-side GIF and no number in `compare.py` sees any of it, which is why `balance.py`
+exists.
+
+| | reference travel | android | reference balance | android |
+|---|---|---|---|---|
+| single crossing | 0.163 | 0.165 | 0.18 | 0.17 |
+| alternation 60 ms | 0.103 | 0.341 | 0.19 | 0.55 |
+| continuous roll | 0.119 | 0.474 | 0.19 | 0.73 |
 
 ## The measuring rig — the part that makes progress possible
 
@@ -51,6 +59,7 @@ sync flash.
 python3 .agent/tools/compare.py artifacts/<dir> [--up]
 python3 .agent/tools/band.py artifacts/<dir>    # the alternation's middle band, iOS beside it
 python3 .agent/tools/burst.py artifacts/<dir>   # the continuous roll: sharpness and tail
+python3 .agent/tools/balance.py artifacts/<single> <alt> <roll>   # does the ink sit still, is the pair even
 python3 .agent/tools/grid.py artifacts/<dir> out.png --title="..." --verdict=kept|rejected|open \
         --col=2 --step=33 [--mark=burst] [--ios=<prefix>]
 python3 .agent/tools/gif.py  artifacts/<dir> out.gif --title="..." --verdict=... --slow=5
@@ -151,17 +160,33 @@ crossing — headline 0.031 → 0.010 in both directions, with the extent error 
 fits of everything else going 0.037 → 0.015 — and it left the alternation band at 1.409 against the
 reference's 0.760. What it bought instead is a much sharper question, which is (1) below.
 
-1. **The alternation's opacity.** The spacing is done and this is what is left of the overlapped
-   regime: the ink floor under alternation is ~15% too bright at every cadence, 0.341 / 0.360 /
-   0.401 against 0.294 / 0.307 / 0.334, and the chase moved it by 0.002 — the two really are
-   separate mechanisms. It is flat across cadence, which argues for something that is not
-   cadence-dependent at all, unlike the spacing. The closed brackets in the ground truth cover
-   `SETTLE_KNOCK`, travelling superseded glyphs and crowd normalisation, so none of those again.
-2. **120 ms is now the worst cadence**, 1.369 against 1.460, and it got 0.018 worse rather than
-   better. It is small and it is the only place the chase costs anything, so it is worth one look at
-   whether `CROWD_RELAX` can be moved without waking the cutoff — but do not spend a round on it
-   before (1).
-3. **The glyph-size gap**, 12% at the bottom of a crossing and flat across cadence. The standing
+1. **The pair changes hands.** The largest remaining difference and the one visible by eye: through
+   a crowd this engine shows one glyph at a time and it slides, where the reference holds two
+   together and its ink barely moves. `balance.py`, and nothing in `compare.py` sees any of it:
+
+   | | reference travel | android | reference balance | android |
+   |---|---|---|---|---|
+   | single crossing | 0.163 | 0.165 | 0.18 | 0.17 |
+   | alternation 60 ms | 0.103 | 0.341 | 0.19 | 0.55 |
+   | continuous roll | 0.119 | 0.474 | 0.19 | 0.73 |
+
+   The reference does not vary the balance AT ALL across the three. Two attempts are already closed
+   in the ground truth — clamping the leaver by `settle`, and levelling both onto one opacity — and
+   between them they say the imbalance is not in the opacity clamp. The remaining suspect is named
+   there: the alpha exponent is weighted by presence, so it hands the nearer glyph the brighter
+   curve and amplifies an asymmetry `presence` already has. Flatten that weighting with the chase.
+   **Measure the roll tail** — both closed attempts broke it, 619 ms out to 686 and 752 against the
+   reference's 615, and only `burst.py` would have caught it.
+
+2. **The alternation's opacity**, ~15% too bright at every cadence, 0.341 / 0.360 / 0.401 against
+   0.294 / 0.307 / 0.334, and the chase moved it by 0.002. Flat across cadence, unlike the spacing,
+   which argues for something not cadence-dependent at all. May well be the same fix as (1) — a
+   pair that changes hands is also a pair whose brighter half is too bright.
+
+3. **120 ms is now the worst cadence** for the band, 1.369 against 1.460, 0.018 worse than before
+   the chase. Small, and the only place the chase costs anything. One look at whether `CROWD_RELAX`
+   moves without waking the cutoff — but not before (1).
+4. **The glyph-size gap**, 12% at the bottom of a crossing and flat across cadence. The standing
    guess was that the drum's foreshortening was it; that can now be bounded rather than guessed —
    `cos` at the crossing's separation is worth 5%, so at most half of it — but the gap has NOT been
    re-measured since the drum went in. Measure it before deciding whether anything is left to
