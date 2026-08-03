@@ -1,12 +1,18 @@
 #!/usr/bin/env python3
 """Side-by-side frame grid: the iOS reference above, an Android run below, same clock.
 
-    python3 .agent/tools/grid.py artifacts/<android-run-dir> [out.png] [--col N] [--step MS]
+    python3 .agent/tools/grid.py artifacts/<android-run-dir> [out.png] --title="..."
+                                 [--verdict=kept|rejected] [--col N] [--step MS]
 
 Both rows are re-zeroed on their own transition mark and cropped to their own ink box, then
 scaled to a common glyph height so the shapes are comparable rather than the pixel sizes. With
 ``--col`` the grid zooms into one column, which is the only way to see what a single crossing
 actually does.
+
+``--title`` is REQUIRED, and ``--verdict`` marks whether the grid shows the engine as it stands or
+an attempt that was thrown away. A round produces several grids and they look alike; handing over an
+untitled pair got a discarded experiment read as the current state, which is the worst way to be
+wrong — it makes a fixed defect look live. Say what the grid is ON the grid.
 """
 
 import glob
@@ -14,7 +20,7 @@ import os
 import sys
 
 import numpy as np
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageFont
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from ground_truth import load, ink_box, columns_of  # noqa: E402
@@ -23,6 +29,39 @@ from ground_truth import load, ink_box, columns_of  # noqa: E402
 IOS = "artifacts/gt_ios_ref/run-1785683986267"
 MARK = 1
 ROW_HEIGHT = 150
+
+VERDICTS = {
+    "kept": ("TENUTA — questo e' il motore com'e' adesso", 20),
+    "rejected": ("SCARTATA — tentativo buttato, NON e' lo stato attuale", 20),
+    "open": ("APERTA — difetto ancora presente", 20),
+}
+
+
+def font(size):
+    """A real font for the header. Falls back to PIL's bitmap one rather than failing."""
+    for path in (
+        "/System/Library/Fonts/Supplemental/Arial Bold.ttf",
+        "/System/Library/Fonts/Helvetica.ttc",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+    ):
+        if os.path.exists(path):
+            try:
+                return ImageFont.truetype(path, size)
+            except OSError:
+                pass
+    return ImageFont.load_default()
+
+
+def header(width, title, verdict):
+    """The band that says what the sheet is. Never optional — see the module docstring."""
+    band = Image.new("L", (width, 62), 255)
+    draw = ImageDraw.Draw(band)
+    draw.text((8, 8), title, fill=0, font=font(22))
+    if verdict:
+        text, shade = VERDICTS.get(verdict, (verdict.upper(), 20))
+        draw.text((8, 38), text, fill=shade, font=font(15))
+    draw.line([(0, 61), (width, 61)], fill=180)
+    return band
 
 
 def burst_mark(meta, gap=250.0):
@@ -81,6 +120,11 @@ def main():
 
     android_dir = args[0]
     out = args[1] if len(args) > 1 else os.path.join(android_dir, "grid.png")
+    title = flags.get("--title")
+    if not title:
+        print("--title=\"...\" is required. Say what the grid shows; see the module docstring.")
+        return 1
+    verdict = flags.get("--verdict")
     column = int(flags["--col"]) if "--col" in flags else None
     step = int(flags.get("--step", 50))
     ios = flags.get("--ios", IOS)
@@ -106,19 +150,26 @@ def main():
     # runs past the sheet without saying so, and the blurriest row is the tallest — so a fixed
     # height silently cut the top and bottom off exactly the row being examined.
     row_h = max(t.height for t in top + bottom) + 26
-    sheet = Image.new("L", (gutter + cell_w * len(times), row_h * 2 + 24), 255)
+    width = gutter + cell_w * len(times)
+    band = header(width, title, verdict)
+    sheet = Image.new("L", (width, band.height + row_h * 2 + 24), 255)
+    sheet.paste(band, (0, 0))
+    top_y = band.height
     draw = ImageDraw.Draw(sheet)
 
     for row, (tiles, label) in enumerate(((top, "iOS"), (bottom, "android"))):
-        y = 18 + row * row_h
+        y = top_y + 18 + row * row_h
         for n, tile in enumerate(tiles):
             x = gutter + n * cell_w + (cell_w - tile.width) // 2
             sheet.paste(tile, (x, y + (row_h - 26 - tile.height) // 2))
         draw.text((6, y + row_h // 2 - 6), label, fill=60)
 
     for n, t in enumerate(times):
-        draw.text((gutter + n * cell_w + 4, 4), f"{t}", fill=140)
-        draw.line([(gutter + n * cell_w, 16), (gutter + n * cell_w, row_h * 2 + 18)], fill=225)
+        draw.text((gutter + n * cell_w + 4, top_y + 4), f"{t}", fill=140)
+        draw.line(
+            [(gutter + n * cell_w, top_y + 16), (gutter + n * cell_w, top_y + row_h * 2 + 18)],
+            fill=225,
+        )
 
     sheet.save(out)
     print("scritto", out, sheet.size)

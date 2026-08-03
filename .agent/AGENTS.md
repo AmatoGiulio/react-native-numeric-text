@@ -10,9 +10,16 @@ the genuine SwiftUI view; Android reimplements it and is measured against iOS fr
 **Measure, then claim.** Every number in the documents traces to a recording in `artifacts/`. If
 you assert something without one, say so in the same sentence.
 
-**Produce a grid for anything visual.** `.agent/tools/grid.py`. Every defect found in this project
-came from looking at frames side by side, not from the headline metric — the metric ranks
-candidates, it does not find defects.
+**Produce a grid for anything visual, and SHOW IT.** `.agent/tools/grid.py` for a frame,
+`.agent/tools/gif.py` for the motion. Every defect found in this project came from looking at frames
+side by side, not from the headline metric — the metric ranks candidates, it does not find defects.
+That cuts both ways: a round reported as a table of error terms is not evidence a reader can check.
+Attach the sheets every round, not a description of them.
+
+**Title every sheet, and say whether it was kept.** `--title` is required on both tools and
+`--verdict=kept|rejected|open` marks which of a round's sheets is the engine as it stands. They look
+alike; an untitled pair once got a discarded experiment read as the current state, which makes a
+fixed defect look live.
 
 **One knob at a time, and keep the control.** The two unchanging columns must read 1.000. A
 constant that moves them is wrong however good it makes the rest look.
@@ -33,7 +40,7 @@ android/src/main/java/com/numerictext/
   NumericTextFrameRecorder  ground-truth capture, DEBUG only, off unless armed
 ios/NumericTextSwiftUIHost.swift   the real SwiftUI view, plus the same recorder
 example/src/Showcase.tsx    the scripted presets both platforms are driven through
-.agent/tools/               ground_truth.py, compare.py, grid.py, fit.sh
+.agent/tools/               ground_truth.py, compare.py, band.py, grid.py, gif.py, round.sh, fit.sh
 ```
 
 The example's presets are the test harness, not decoration. Anything with a cadence goes through

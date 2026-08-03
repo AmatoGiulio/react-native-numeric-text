@@ -39,8 +39,20 @@ sync flash.
 .agent/tools/fit.sh <name>      # build, install, drive the decrement preset, pull, compare
 python3 .agent/tools/compare.py artifacts/<dir> [--up]
 python3 .agent/tools/band.py artifacts/<dir>    # the alternation's middle band, iOS beside it
-python3 .agent/tools/grid.py artifacts/<dir> out.png --col=2 --step=33 [--mark=burst] [--ios=<prefix>]
+python3 .agent/tools/grid.py artifacts/<dir> out.png --title="..." --verdict=kept|rejected|open \
+        --col=2 --step=33 [--mark=burst] [--ios=<prefix>]
+python3 .agent/tools/gif.py  artifacts/<dir> out.gif --title="..." --verdict=... --slow=5
 ```
+
+**Show the grids. Every round, as images, not as a description of them.** This is an animation; a
+table of error terms is not evidence anyone can check, and the numbers rank candidates rather than
+finding defects — every defect fixed on this branch was found by looking. `gif.py` is the stronger
+of the two for anything about motion, `grid.py` for anything about a particular frame.
+
+`--title` is required on both and `--verdict` says which of the round's sheets is the engine as it
+stands and which is an experiment that was thrown away. A round makes several and they look alike:
+handing over an untitled pair got a discarded attempt read as the current state, which makes a fixed
+defect look live.
 
 `round.sh` is the one to reach for — a round costs one build instead of three, and it prints the two
 directions and the alternation together, which is what stops a knob being called good on the
