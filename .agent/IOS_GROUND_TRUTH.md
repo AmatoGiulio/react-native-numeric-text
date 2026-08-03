@@ -915,3 +915,43 @@ outside it:
 
 The glyph-size finding is a fourth difference but NOT part of this group: it is flat across cadence,
 1.14 at every one, so it is present with or without overlap.
+
+## Trying to build it — the opacity route is bracketed and it is not enough, 2026-08-03
+
+Before implementing overlapping transitions, one precursor measurement, because a mechanism that
+does not predict the DIRECTION of the effect cannot be built without guessing at an architecture.
+
+The blur candidate is refuted. Under a 60 ms alternation the reference is SHARPER than in a single
+crossing, not blurrier:
+
+| | single crossing | alternation |
+|---|---|---|
+| iOS sharpness | 0.436 | **0.647** |
+| android sharpness | 0.562 | 0.716 |
+
+So it holds its glyphs crisp AND very faint at once — 0.317 peak against 0.478 in one crossing. The
+cap is on opacity alone, which suggested a small change rather than an architecture: knock the
+opacity follower down on every handover that lands while the column is still moving. A single
+change is untouched, since the follower starts from zero there anyway; a train of them keeps it
+pressed.
+
+Measured, and it is not the mechanism:
+
+| SETTLE_KNOCK | peak | ink | middle/ends | single transition |
+|---|---|---|---|---|
+| none | 0.581 | 0.470 | 1.513 | 0.031 |
+| 0.60 | 0.534 | 0.420 | 1.510 | 0.031 |
+| 0.25 | 0.498 | 0.384 | 1.533 | 0.031 |
+| **iOS** | **0.317** | **0.322** | **0.756** | — |
+
+Two things kill it. It **saturates**: a knock from 0.60 to 0.25 is a huge change and moves the peak
+only 0.534 to 0.498, nowhere near 0.317. And it does **nothing at all to the gap** — the middle
+band is 1.51 whatever the knock, against the reference's 0.756.
+
+So the gap is geometric, and opacity cannot reach it. That puts it with the glyph-size difference,
+which is also geometric and also unexplained. Any implementation of overlapping transitions has to
+move the GEOMETRY, not just the opacity — which makes it architectural after all, contrary to what
+the sharpness measurement suggested.
+
+Reverted. What the attempt bought: the opacity route is bracketed and closed, and the gap is now
+known to be geometric.
