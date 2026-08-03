@@ -575,3 +575,44 @@ Open: the increment has no numeric reference — `compare.py` knows only the dec
 increment is still judged by eye. And no continuous roll has been compared at all, because every
 multi-change recording on the simulator has a zero-byte plane file: the recorder silently writes
 nothing above some run length, and that needs fixing before a burst can be measured.
+
+---
+
+# The burst, replicated — 2026-08-03
+
+Both burst defects had been seen in one run per direction and flagged as needing replication.
+Three runs each side, driven at 33/34 ms through `scheduleOnFrames`:
+
+| | iOS | android | difference | real? |
+|---|---|---|---|---|
+| sharpness, up | 0.600 ±0.000 | 0.603 ±0.000 | +0.003 | no |
+| **sharpness, down** | 1.661 ±0.000 | 1.524 ±0.021 | **−0.137** | **yes** |
+| **tail, up** | 545 ±11 ms | 586 ±1 ms | **+41 ms** | **yes** |
+| tail, down | 581 ±21 ms | 585 ±0 ms | +4 ms | no |
+
+Sharpness is the median edge energy of the rightmost column over the burst, normalised on its own
+settled glyph; the tail is how long that column keeps moving after the last value change. Only
+compare within a direction — the two settle on different glyphs, so the normalisation differs.
+
+**Neither defect was where the single runs put them.** They were reported as "11% less sharp and a
+37 ms tail" in the decrement. The sharpness deficit is the decrement's alone and the long tail is
+the increment's alone, and each direction is clean on the other measure. One run per direction
+mixed them; two would have shown it.
+
+The spreads are the useful part: on a burst this recorder repeats to 0.000–0.021 on sharpness and
+0–21 ms on the tail, so both surviving differences clear the floor by a wide margin.
+
+Consistent with the single transition, where the increment measures 0.014 against the decrement's
+0.024 — the decrement is the weaker direction in both regimes.
+
+## Reference sets on disk
+
+| set | what | use |
+|---|---|---|
+| `artifacts/gt_ios_ref/` | decrement 1,242 → 1,160, one run | `compare.py <dir>` |
+| `artifacts/gt_ios_up5/` | increment 1,160 → 1,242, five runs | `compare.py <dir> --up` |
+| `artifacts/gt_ios_bursts/` | three bursts each direction | the table above |
+
+The increment reference carries its own noise floor: amplitudes identical to three decimals across
+five runs, timings spread by 13 ms. Anything above 0.001 on an amplitude, or 13 ms on a time, is
+real.
