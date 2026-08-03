@@ -102,21 +102,23 @@ def main():
     # row's tiles, and every label but the last is lost — which makes a multi-row sheet unreadable.
     gutter = 74
     cell_w = max(max(t.width for t in top), max(t.width for t in bottom)) + 8
-    sheet = Image.new("L", (gutter + cell_w * len(times), ROW_HEIGHT * 2 + 34), 255)
+    # The row height comes from the TALLEST tile, never a fixed constant. PIL crops a paste that
+    # runs past the sheet without saying so, and the blurriest row is the tallest — so a fixed
+    # height silently cut the top and bottom off exactly the row being examined.
+    row_h = max(t.height for t in top + bottom) + 26
+    sheet = Image.new("L", (gutter + cell_w * len(times), row_h * 2 + 24), 255)
     draw = ImageDraw.Draw(sheet)
 
     for row, (tiles, label) in enumerate(((top, "iOS"), (bottom, "android"))):
-        y = 20 + row * ROW_HEIGHT
+        y = 18 + row * row_h
         for n, tile in enumerate(tiles):
             x = gutter + n * cell_w + (cell_w - tile.width) // 2
-            sheet.paste(tile, (x, y + (ROW_HEIGHT - 30 - tile.height) // 2))
-        draw.text((6, y + ROW_HEIGHT // 2 - 6), label, fill=60)
+            sheet.paste(tile, (x, y + (row_h - 26 - tile.height) // 2))
+        draw.text((6, y + row_h // 2 - 6), label, fill=60)
 
     for n, t in enumerate(times):
         draw.text((gutter + n * cell_w + 4, 4), f"{t}", fill=140)
-        draw.line(
-            [(gutter + n * cell_w, 18), (gutter + n * cell_w, ROW_HEIGHT * 2 + 20)], fill=225
-        )
+        draw.line([(gutter + n * cell_w, 16), (gutter + n * cell_w, row_h * 2 + 18)], fill=225)
 
     sheet.save(out)
     print("scritto", out, sheet.size)
