@@ -1,3 +1,51 @@
+# START HERE — 2026-08-03
+
+**The engine was rewritten from scratch today. Everything below the 2026-08-02 header describes the
+one it replaced; read it as history, not as state.**
+
+Where it stands, decrement `1,242 -> 1,160`, `.agent/tools/fit.sh <name>`:
+
+| | android | iOS | error |
+|---|---|---|---|
+| wave starts | 68.3 / 134.8 / 218.4 | 70.2 / 136.8 / 220.1 | 2 ms |
+| back to full | 418 / 502 / 585 | 420 / 504 / 587 | |
+| ink floor | 0.494 / 0.461 / 0.448 | 0.515 / 0.435 / 0.428 | 0.022 |
+| extent | 1.173 / 1.094 / 1.214 | 1.181 / 1.147 / 1.196 | 0.026 |
+| headline | | | **0.024** |
+
+## The tools, all new today
+
+- `.agent/tools/fit.sh <name>` — one whole round: build, install, drive the decrement preset, pull,
+  compare. Always cds to the repo root; running it elsewhere silently writes the captures where the
+  comparison cannot see them.
+- `.agent/tools/compare.py <dir>` — a run against `artifacts/gt_ios_ref/reference.json`.
+- `.agent/tools/grid.py <dir> [out] --col=N --step=MS [--ios=<prefix>] [--mark=burst]` — the
+  side-by-side frame grid. **Use `--mark=burst` for anything with more than one change**: a preset
+  resets the value before it runs and that reset takes a mark of its own, so aligning on mark 0
+  compares one platform's roll against the other's idle second. That mistake had me report a defect
+  the engine did not have.
+
+## What to know before touching a constant
+
+- **The metric ranks candidates; it does not find defects.** Every one of the six defects fixed
+  today came from looking at the app or at a frame grid, and two were artefacts of the measurement
+  path rather than of the engine. See the end of `.agent/IOS_GROUND_TRUTH.md`.
+- **Of Apple's five stored constants, `delay` and `scale` transfer and `offset` and `blur` do not.**
+  `scale` only transferred once the crossing's two glyphs had separate opacity curves — a constant
+  that does not transfer may be right with the model around it wrong.
+- **The recorder draws through a SOFTWARE canvas.** It sees whatever `drawGlyphSoftware` does, not
+  the RenderEffect a device runs. Keep the two in step or the measurements are of the wrong thing.
+
+## Open
+
+- The increment has no numeric reference; `compare.py` knows only the decrement, so it is still
+  judged by eye.
+- In a burst we are 11% less sharp than the reference and our tail runs 37 ms long. One run per
+  direction — replicate before chasing either.
+- `MAX_DURATION_MULTIPLE` is Apple's 1.25 and has never been tested.
+
+---
+
 # START HERE — 2026-08-02
 
 **Stop measuring the reference from screen recordings. Read `.agent/IOS_GROUND_TRUTH.md` first.**
