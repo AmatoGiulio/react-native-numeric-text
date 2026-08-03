@@ -1,7 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { NumericText } from 'react-native-numeric-text';
-import { SEQUENCE, SEQUENCE_DURATION, useSequencePlayer } from './sequence';
+import {
+  SEQUENCE,
+  SEQUENCE_DURATION,
+  scheduleOnFrames,
+  useSequencePlayer,
+} from './sequence';
 
 /**
  * The demo screen, kept to what a camera should see: the number, the two buttons that change it,
@@ -156,6 +161,8 @@ export function Showcase({ onOpenLab }: Props) {
   const [playing, setPlaying] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const timers = useRef<ReturnType<typeof setTimeout>[]>([]);
+  /** Cancels the in-flight frame-clock run, if any. See scheduleOnFrames. */
+  const cancelFrames = useRef<(() => void) | null>(null);
 
   useEffect(
     () => () => {
@@ -208,6 +215,7 @@ export function Showcase({ onOpenLab }: Props) {
     ) => {
       timers.current.forEach(clearTimeout);
       timers.current = [];
+      cancelFrames.current?.();
       setSyncing(false);
       setValue(from);
       timers.current.push(
@@ -219,14 +227,16 @@ export function Showcase({ onOpenLab }: Props) {
           timers.current.push(
             setTimeout(() => setSyncing(false), SYNC_FLASH_MS)
           );
+          // On the frame clock, not on timers. A batch of near-simultaneous setTimeouts is
+          // coalesced by the JS timer queue, and differently per platform: this preset was
+          // measured firing every 31 ms on iOS and every 113 ms on Android, which made the two
+          // platforms' rolls impossible to compare.
+          const entries = [];
           for (let i = 2; i <= ticks; i += 1) {
-            timers.current.push(
-              setTimeout(
-                () => setValue(from + sign * i * delta),
-                (i - 1) * stepMs
-              )
-            );
+            const to = from + sign * i * delta;
+            entries.push({ at: (i - 1) * stepMs, run: () => setValue(to) });
           }
+          cancelFrames.current = scheduleOnFrames(entries);
         }, PRESET_SETTLE_MS)
       );
     },
@@ -274,6 +284,7 @@ export function Showcase({ onOpenLab }: Props) {
   const runHuman = useCallback(() => {
     timers.current.forEach(clearTimeout);
     timers.current = [];
+    cancelFrames.current?.();
     setSyncing(false);
     setValue(HOLD_FROM);
     timers.current.push(
@@ -282,12 +293,12 @@ export function Showcase({ onOpenLab }: Props) {
         setSyncing(true);
         timers.current.push(setTimeout(() => setSyncing(false), SYNC_FLASH_MS));
         let at = 0;
-        HUMAN_GAPS.forEach((gap, i) => {
+        const entries = HUMAN_GAPS.map((gap, i) => {
           at += gap;
-          timers.current.push(
-            setTimeout(() => setValue(HOLD_FROM + (i + 2) * STEP), at)
-          );
+          const to = HOLD_FROM + (i + 2) * STEP;
+          return { at, run: () => setValue(to) };
         });
+        cancelFrames.current = scheduleOnFrames(entries);
       }, PRESET_SETTLE_MS)
     );
   }, []);

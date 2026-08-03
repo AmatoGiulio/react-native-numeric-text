@@ -107,9 +107,59 @@ export const SEQUENCE_START = SEQUENCE[0]!.value;
 export const SEQUENCE_DURATION = SEQUENCE.reduce((sum, s) => sum + s.hold, 0);
 
 /**
- * Drives `onValue` / `onPhase` through the scripted [SEQUENCE] with real timers. Deterministic:
- * pressing Play on iOS and on Android produces the same value-vs-time curve, so the two
- * recordings are directly comparable.
+ * Fires each entry on the first frame at or after its offset, and returns a cancel function.
+ *
+ * Everything that needs a cadence goes through here rather than through `setTimeout`. Measured
+ * with the ground-truth recorder, a batch of near-simultaneous timers is coalesced by the JS timer
+ * queue, and differently on each platform: the 30 ms roll preset fired every 31 ms on iOS and
+ * every 113 ms on Android. Rolls could not be compared at all until this changed, because the two
+ * platforms were running the same script at speeds 3.6x apart.
+ *
+ * The frame clock is not finer than a frame — a 30 ms cadence lands on 33 ms at 60 Hz — but it is
+ * the SAME on both platforms, which is what a comparison needs.
+ */
+export function scheduleOnFrames(
+  entries: { at: number; run: () => void }[]
+): () => void {
+  const sorted = [...entries].sort((a, b) => a.at - b.at);
+  const total = sorted.length > 0 ? sorted[sorted.length - 1]!.at : 0;
+  const start = Date.now();
+  let next = 0;
+  let frame: number | null = null;
+
+  const tick = () => {
+    const elapsed = Date.now() - start;
+    // A while loop, not an if: if a frame is late, every entry it passed still fires, in order.
+    // Dropping them would quietly shorten the run instead of showing the jank.
+    while (next < sorted.length && sorted[next]!.at <= elapsed) {
+      sorted[next]!.run();
+      next += 1;
+    }
+    frame =
+      next < sorted.length || elapsed < total
+        ? requestAnimationFrame(tick)
+        : null;
+  };
+
+  frame = requestAnimationFrame(tick);
+  return () => {
+    if (frame !== null) cancelAnimationFrame(frame);
+    frame = null;
+  };
+}
+
+/**
+ * Drives `onValue` / `onPhase` through the scripted [SEQUENCE] on the frame clock.
+ *
+ * Every step is scheduled against one start time and fired on the first frame at or after it, so
+ * the resolution is one frame on both platforms and a slow step cannot push the ones behind it.
+ *
+ * This used to schedule the whole sequence up front with `setTimeout` at absolute offsets, and the
+ * comment above it claimed the two platforms therefore produced the same value-vs-time curve. They
+ * did not. Measured with the ground-truth recorder, the 30 ms roll preset fired every 31 ms on iOS
+ * and every 113 ms on Android: the JS timer queue coalesces a batch of near-simultaneous timers,
+ * and it does so differently on each platform. Rolls could not be compared at all until this
+ * changed, because the two were running at speeds 3.6x apart.
  */
 export function useSequencePlayer(
   onValue: (v: number) => void,
@@ -117,27 +167,29 @@ export function useSequencePlayer(
   onDone?: () => void,
   steps: Step[] = SEQUENCE
 ) {
-  const timers = useRef<ReturnType<typeof setTimeout>[]>([]);
+  const cancel = useRef<(() => void) | null>(null);
 
   const stop = useCallback(() => {
-    timers.current.forEach(clearTimeout);
-    timers.current = [];
+    cancel.current?.();
+    cancel.current = null;
   }, []);
 
   const play = useCallback(() => {
     stop();
-    let t = 0;
-    for (const step of steps) {
-      const at = t;
-      timers.current.push(
-        setTimeout(() => {
+    let at = 0;
+    const entries = steps.map((step) => {
+      const when = at;
+      at += step.hold;
+      return {
+        at: when,
+        run: () => {
           onValue(step.value);
           onPhase?.(step.phase);
-        }, at)
-      );
-      t += step.hold;
-    }
-    timers.current.push(setTimeout(() => onDone?.(), t));
+        },
+      };
+    });
+    entries.push({ at, run: () => onDone?.() });
+    cancel.current = scheduleOnFrames(entries);
   }, [onValue, onPhase, onDone, steps, stop]);
 
   useEffect(() => stop, [stop]);

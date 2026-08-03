@@ -265,13 +265,22 @@ internal class NumericRollEngine {
       if (next != existing.goalStop()) {
         existing.literal = literalOf(slot)
         existing.charAt[next] = slot.char
+        val alreadyWaiting = existing.pendingTarget != null
         existing.pendingTarget = next
         // Half a gap on the leader: it does not leave the instant the value changes, but it does
         // not wait a whole step either. The reference's columns start at 70 / 137 / 220 ms; at
         // zero this engine read 35 / 102 / 186 and at a full gap 101 / 176 / 243, which brackets
         // it — there is ~35 ms of latency before the first frame either way, so the leader's own
         // share is about half.
-        existing.hold = gap * (waveIndex + 0.5f)
+        //
+        // A column already waiting its turn keeps the hold it is counting down; only its
+        // destination is updated. Reassigning it starves the far columns during a burst: changes
+        // arriving every 33 ms kept resetting a 75 ms hold, so the rightmost column never left at
+        // all while the reference rolled through seven digits beside it. Same invariant as the
+        // position — a change moves where a column is going, never when it is going.
+        if (!alreadyWaiting) {
+          existing.hold = gap * (waveIndex + 0.5f)
+        }
         waveIndex += 1
       }
     }
