@@ -2,7 +2,7 @@ package com.numerictext
 
 import android.annotation.SuppressLint
 import android.content.Context
-import android.graphics.BlurMaskFilter
+import android.graphics.BlendMode
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.LinearGradient
@@ -27,6 +27,7 @@ import java.text.NumberFormat
 import java.util.Locale
 import kotlin.math.ceil
 import kotlin.math.floor
+import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
@@ -141,7 +142,6 @@ class NumericTextView(context: Context) : View(context), Choreographer.FrameCall
   }
   private var edgeFadeGradient: LinearGradient? = null
   private var edgeFadeMaskPaint: Paint? = null
-  private val softwareBlurCache = HashMap<Int, BlurMaskFilter>()
   private var lastFadeWidth = -1
   private var lastFadeHeight = -1
 
@@ -221,18 +221,7 @@ class NumericTextView(context: Context) : View(context), Choreographer.FrameCall
       if (hardwareNodes) {
         drawGlyphNode(canvas, sample, x, baseline, alpha)
       } else {
-        textPaint.alpha = alpha
-        // The software path blurs too. It used to draw plain text, so every device without a
-        // hardware canvas lost the blur silently — and so did the ground-truth recorder, which
-        // draws the view into a Bitmap. Measurements taken through it could not see the blur at
-        // all: setting the amplitude to 8 and to 0 produced identical numbers, which read as
-        // "the blur is too small" when it was in fact absent.
-        textPaint.maskFilter = softwareBlurFor(sample.blurLengthPx)
-        canvas.save()
-        canvas.scale(sample.scale, sample.scale, x, baseline + sample.offsetY)
-        canvas.drawText(sample.ch, x - advanceOf(sample.ch) / 2f, baseline + sample.offsetY, textPaint)
-        canvas.restore()
-        textPaint.maskFilter = null
+        drawGlyphSoftware(canvas, sample, x, baseline, alpha)
       }
     }
     textPaint.alpha = 255
@@ -240,16 +229,62 @@ class NumericTextView(context: Context) : View(context), Choreographer.FrameCall
   }
 
   /**
-   * Isotropic stand-in for the directional shader, for canvases that cannot run one.
+   * The directional blur, for canvases that cannot run the shader.
    *
-   * Bucketed because BlurMaskFilter allocates, and this is called per glyph per frame.
+   * Drawn as the shader's own nine taps along the vertical axis rather than with a BlurMaskFilter,
+   * which is isotropic and therefore smears sideways as well. That difference is not academic: the
+   * ground-truth recorder draws through a software canvas, so every comparison against iOS was
+   * putting a round blur next to the reference's vertical one and reading the result as "our
+   * crossing is mushier". It is the same reason a device without a hardware canvas looked wrong.
    */
-  private fun softwareBlurFor(lengthPx: Float): BlurMaskFilter? {
-    if (lengthPx < 0.5f) return null
-    val bucket = (lengthPx * 0.5f).roundToInt().coerceIn(1, 64)
-    return softwareBlurCache.getOrPut(bucket) {
-      BlurMaskFilter(bucket.toFloat(), BlurMaskFilter.Blur.NORMAL)
+  private fun drawGlyphSoftware(
+    canvas: Canvas,
+    sample: NumericRollEngine.GlyphSample,
+    x: Float,
+    baseline: Float,
+    alpha: Int,
+  ) {
+    val left = x - advanceOf(sample.ch) / 2f
+    val y = baseline + sample.offsetY
+    val trail = sample.blurLengthPx * 1.5f * sample.direction
+
+    canvas.save()
+    canvas.scale(sample.scale, sample.scale, x, y)
+    // Below half a pixel of trail, draw sharp — the same threshold the hardware path uses. Nine
+    // taps perfectly overlapped composite to about 64% of full opacity, not 100%, so taking the
+    // blur path for a glyph that has all but stopped left it permanently dim and back-to-full
+    // never arrived: it read 600 ms against the reference's 420.
+    if (abs(trail) < 0.75f || sample.stable) {
+      textPaint.alpha = alpha
+      canvas.drawText(sample.ch, left, y, textPaint)
+    } else {
+      // Through a layer, so the taps blend with each other once and the glyph's own alpha is
+      // applied to the result. Drawing them straight onto the canvas composites nine times over,
+      // which reads as a glyph that will not finish resolving — it pushed back-to-full from 420 ms
+      // to 600.
+      // Through a layer, with the taps ADDED rather than drawn over each other. Over-drawing is
+      // not what a blur does: nine taps perfectly overlapped composite to about 64% of full
+      // opacity, so the crossing came out a fifth too faint — floor 0.365 against the reference's
+      // 0.428. Added, the weights sum to 1.0 and a still glyph is exactly itself, which is what
+      // the shader computes.
+      // Tight around this glyph plus its trail. A loose rect reaches over the neighbouring columns,
+      // and the layer's own compositing then shows up on digits that are not moving at all — the
+      // unchanging column read 0.799 of its settled ink instead of 1.000.
+      val w = advanceOf(sample.ch)
+      val pad = abs(trail) + textHeightPx * 0.5f
+      canvas.saveLayerAlpha(left - pad, y - textHeightPx - pad, left + w + pad, y + pad, alpha)
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) textPaint.blendMode = BlendMode.PLUS
+      for (i in BLUR_TAPS.indices step 2) {
+        textPaint.alpha = (255f * BLUR_TAPS[i + 1]).roundToInt().coerceIn(0, 255)
+        if (textPaint.alpha > 0) {
+          canvas.drawText(sample.ch, left, y + BLUR_TAPS[i] * trail, textPaint)
+        }
+      }
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) textPaint.blendMode = null
+      canvas.restore()
     }
+    canvas.restore()
+    textPaint.alpha = 255
   }
 
   @SuppressLint("NewApi")
@@ -636,6 +671,19 @@ class NumericTextView(context: Context) : View(context), Choreographer.FrameCall
   }
 
   companion object {
+    /** Offset, weight — the same nine taps the shader uses, for the software path. */
+    private val BLUR_TAPS = floatArrayOf(
+      -0.5000f, 0.0350f,
+      -0.3750f, 0.0600f,
+      -0.2500f, 0.1050f,
+      -0.1250f, 0.1800f,
+      0.0000f, 0.2400f,
+      0.1250f, 0.1800f,
+      0.2500f, 0.1050f,
+      0.3750f, 0.0600f,
+      0.5000f, 0.0350f,
+    )
+
     private const val DIRECTIONAL_BLUR_SHADER = """
       uniform shader content;
       uniform float trail;

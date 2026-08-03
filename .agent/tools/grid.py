@@ -19,22 +19,23 @@ from PIL import Image, ImageDraw
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from ground_truth import load, ink_box, columns_of  # noqa: E402
 
+# Decrement 1,242 -> 1,160 by default; --ios= and --mark= point at another reference run.
 IOS = "artifacts/gt_ios_ref/run-1785683986267"
 MARK = 1
 ROW_HEIGHT = 150
 
 
-def strip(prefix, times, column=None):
+def strip(prefix, times, column=None, mark=MARK):
     meta, frames = load(prefix)
     y0, y1, x0, x1 = ink_box(frames)
     w = frames[:, y0:y1, x0:x1]
-    rel = np.array(meta["times"]) - meta["marks"][MARK]["t"]
+    rel = np.array(meta["times"]) - meta["marks"][mark]["t"]
 
     if column is not None:
         groups = columns_of(w[-1].astype(np.float64))
         if column < len(groups):
             a, b = groups[column]
-            pad = (b - a) // 2
+            pad = (b - a) // 6
             w = w[:, :, max(0, a - pad) : min(w.shape[2], b + pad)]
 
     # Normalise the vertical scale on the settled glyph so both platforms are drawn at one size.
@@ -64,6 +65,9 @@ def main():
     out = args[1] if len(args) > 1 else os.path.join(android_dir, "grid.png")
     column = int(flags["--col"]) if "--col" in flags else None
     step = int(flags.get("--step", 50))
+    ios = flags.get("--ios", IOS)
+    ios_mark = int(flags.get("--ios-mark", MARK))
+    and_mark = int(flags.get("--mark", MARK))
     times = list(range(0, 701, step))
 
     runs = sorted(glob.glob(os.path.join(android_dir, "*.json")))
@@ -71,8 +75,8 @@ def main():
         print("no runs in", android_dir)
         return 1
 
-    top = strip(IOS, times, column)
-    bottom = strip(runs[-1][:-5], times, column)
+    top = strip(ios, times, column, ios_mark)
+    bottom = strip(runs[-1][:-5], times, column, and_mark)
 
     cell_w = max(max(t.width for t in top), max(t.width for t in bottom)) + 8
     sheet = Image.new("L", (cell_w * len(times), ROW_HEIGHT * 2 + 34), 255)
