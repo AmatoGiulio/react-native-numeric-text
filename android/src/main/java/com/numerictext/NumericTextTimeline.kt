@@ -125,6 +125,52 @@ internal class NumericRollEngine {
      */
     const val APOTHEM = 0.555f
 
+    /**
+     * How much wider the drum turns while it is being CHASED. MEASURED, and the one knob here.
+     *
+     * The apothem above is pinned by the single crossing and the alternation wants roughly twice
+     * it, so the two can only be reconciled by something that tells them apart — and the thing
+     * that tells them apart is not the separation, which is the same in both, but whether changes
+     * are still arriving. `crowd` below is that signal, and it is exactly zero for any change that
+     * starts from rest, so the single crossing cannot move however this is set.
+     *
+     * The reference is not monotonic in cadence, which is what makes this fittable at all:
+     *
+     *     middle band     60 ms   120 ms   240 ms
+     *     reference       0.760    1.460    1.292
+     *     flat apothem    1.401    1.387    1.191
+     *
+     * Only 60 ms is wrong. At 120 and 240 this engine is already slightly WIDER than the reference,
+     * so the widening has to be off there — which is what sets `CROWD_STEP` against `CROWD_RELAX`
+     * rather than leaving them free.
+     *
+     * At 1.07 the 60 ms band came to 1.009 and 120 ms did not move, 1.387 to 1.384, which is the
+     * cutoff behaving. Reading 1.009 back through the fixed-apothem sweep puts the effective
+     * apothem at ~0.853, so `crowd` averages 0.50 over a run rather than saturating, and the
+     * apothem the 60 ms band wants is ~1.05: 1.77 is that, at the same average.
+     */
+    const val CROWD_SPREAD = 1.77f
+
+    /**
+     * The chase signal, and why it is a threshold rather than a decay.
+     *
+     * `crowd` takes CROWD_STEP whenever a change commits onto a column that was NOT at rest, and
+     * bleeds off at a constant rate — one full unit per CROWD_RELAX seconds. A constant rate, not
+     * an exponential, because what is wanted is a CUTOFF: at a cadence `T` the signal gains
+     * `CROWD_STEP` and loses `T / CROWD_RELAX` per cycle, so it saturates below a critical cadence
+     * and sits at zero above it, sharply. An exponential decay only ever gives a ratio, and the
+     * ratio between 60 ms and 120 ms is 2, which is nowhere near sharp enough to leave 120 ms alone.
+     *
+     * At 0.15 s the loss is 0.40 per cycle at 60 ms and 0.80 at 120 ms, so 0.60 saturates the first
+     * within two cycles and never lifts the second off zero.
+     *
+     * The value used is lagged toward that raw signal over the same time constant. Without it the
+     * raw signal saws between 0.6 and 1.0 every cycle, and a sawtooth on the apothem is a geometry
+     * that visibly wobbles — the same failure the blur's radius had before it was quantised finely.
+     */
+    private const val CROWD_STEP = 0.60f
+    private const val CROWD_RELAX = 0.15f
+
     /** APPLE — `NumericTextConfiguration.delay`, 18/120. TOTAL spread of the wave, not the gap. */
     const val WAVE_TOTAL_SECONDS = 0.15f
 
@@ -272,6 +318,14 @@ internal class NumericRollEngine {
     var settle = 1f
     var settleVelocity = 0f
 
+    /**
+     * How hard this column is being chased: 0 for anything that started from rest, rising towards 1
+     * while changes keep landing on it before it has resolved. [crowdRaw] is the impulse-and-bleed
+     * signal, [crowd] the lagged one the geometry reads.
+     */
+    var crowdRaw = 0f
+    var crowd = 0f
+
     var x = 0f
     var xVelocity = 0f
     var targetX = 0f
@@ -402,6 +456,8 @@ internal class NumericRollEngine {
       column.velocity = 0f
       column.settle = 1f
       column.settleVelocity = 0f
+      column.crowdRaw = 0f
+      column.crowd = 0f
       column.alive = 1f
       column.retiring = false
       column.literal = literalOf(slot)
@@ -449,6 +505,11 @@ internal class NumericRollEngine {
           column.target = column.pending.removeFirst().stop
           arrived = true
         }
+        // A change that lands on a column already in flight is the whole chase signal. One that
+        // lands on a column at rest is a single crossing and must leave the geometry alone.
+        if (arrived && !wasAtRest) {
+          column.crowdRaw = min(1f, column.crowdRaw + CROWD_STEP)
+        }
         if (arrived && wasAtRest) {
           // The follower starts a fresh run only when the column was actually at rest. Springing
           // down from the previous handover's 1 reads as a dip, which is why this reset exists —
@@ -461,6 +522,7 @@ internal class NumericRollEngine {
         active = true
       }
 
+      if (stepCrowd(column, dt)) active = true
       if (stepPosition(column, response, dt)) active = true
       if (stepSettle(column, dt)) active = true
       if (stepX(column, response, dt)) active = true
@@ -543,13 +605,16 @@ internal class NumericRollEngine {
     // are foreshortened alike but offset opposite ways.
     val angle = (stop - column.position) * FACE_ANGLE
     val shrink = 1f - SCALE_AMOUNT * distance
+    // Only the OFFSET widens with the chase. The foreshortening is the face's own angle and has
+    // nothing to do with how big the drum is, which is the whole reason the two are separate.
+    val apothem = APOTHEM * (1f + CROWD_SPREAD * column.crowd)
     return GlyphSample(
       key = column.key,
       ch = ch,
       kind = column.kind,
       role = role,
       x = column.x,
-      offsetY = APOTHEM * lineHeightPx * sin(angle),
+      offsetY = apothem * lineHeightPx * sin(angle),
       alpha = alpha.coerceIn(0f, 1f),
       scaleX = shrink,
       scaleY = shrink * cos(angle),
@@ -589,6 +654,23 @@ internal class NumericRollEngine {
     column.velocity +=
       ((omega * omega * error) - (2f * DAMPING_RATIO * omega * column.velocity)) * dt
     column.position += column.velocity * dt
+    return true
+  }
+
+  /**
+   * Bleed the chase signal and lag the value the geometry reads behind it.
+   *
+   * Returns true while either is still moving, because the apothem is still changing and therefore
+   * so is where the glyphs are — a column that stopped asking for frames here would freeze part way
+   * through relaxing back to its resting width.
+   */
+  private fun stepCrowd(column: Column, dt: Float): Boolean {
+    if (column.crowdRaw <= 0f && column.crowd <= 0.001f) {
+      column.crowd = 0f
+      return false
+    }
+    column.crowdRaw = max(0f, column.crowdRaw - dt / CROWD_RELAX)
+    column.crowd += (column.crowdRaw - column.crowd) * min(1f, dt / CROWD_RELAX)
     return true
   }
 

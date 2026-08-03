@@ -22,10 +22,21 @@ Android against the iOS reference, single value change:
 | wave start | ±2 ms | ±0 ms |
 | back to full | 419/502/585 vs 420/504/587 | — |
 
-The timings match to a frame and the single crossing now matches to within three times the noise
-floor. What is left is the alternation, and it is no longer a shape problem: the drum reproduces the
-reference's overlapped profile exactly at an apothem the single crossing forbids. See the drum
-section of the ground truth.
+Under a fast alternation, the middle band between the two digits:
+
+| | 60 ms | 120 ms | 240 ms |
+|---|---|---|---|
+| reference | 0.760 | 1.460 | 1.292 |
+| android | **0.730** | 1.369 | 1.281 |
+
+And the continuous roll, 14 changes 30 ms apart: sharpness 0.603 against 0.600, tail 619 ms against
+615.
+
+The timings match to a frame, the single crossing to within three times the noise floor, and the
+alternation's SPACING is solved — the drum's apothem widens while the column is being chased. What
+is left is the alternation's opacity: the ink floor there is 0.341 / 0.360 / 0.401 against the
+reference's 0.294 / 0.307 / 0.334, about 15% too bright at every cadence and untouched by the
+spacing work.
 
 ## The measuring rig — the part that makes progress possible
 
@@ -39,6 +50,7 @@ sync flash.
 .agent/tools/fit.sh <name>      # build, install, drive the decrement preset, pull, compare
 python3 .agent/tools/compare.py artifacts/<dir> [--up]
 python3 .agent/tools/band.py artifacts/<dir>    # the alternation's middle band, iOS beside it
+python3 .agent/tools/burst.py artifacts/<dir>   # the continuous roll: sharpness and tail
 python3 .agent/tools/grid.py artifacts/<dir> out.png --title="..." --verdict=kept|rejected|open \
         --col=2 --step=33 [--mark=burst] [--ios=<prefix>]
 python3 .agent/tools/gif.py  artifacts/<dir> out.gif --title="..." --verdict=... --slow=5
@@ -71,6 +83,14 @@ Three traps, each of which has already cost real time:
 - **The recorder draws through a SOFTWARE canvas.** It sees `drawGlyphSoftware`, not the
   RenderEffect a device runs. Keep the two in step or you are measuring a renderer nobody sees;
   that hid an entirely absent blur for a day.
+- **`adb install` fails with an EMPTY error message when the emulator's `/data` fills**, and a round
+  driven after it measures the previous build under a new name. That produced a burst regression
+  that did not exist — two "different" builds, one binary. `round.sh` reclaims space on failure;
+  when driving by hand, grep the install for `Success` before believing anything after it.
+- **The dev client's menu opens by itself and its scrim swallows every tap underneath.** It ate the
+  240 ms alternation on two consecutive rounds in silence. Dismiss it with the Continue button and
+  then the panel's X — never with `keyevent 4`, which backs out of the app when no menu is up and
+  leaves the round driving the launcher.
 
 Reference recordings, ~2.5 GB on disk, never committed:
 
@@ -131,24 +151,18 @@ crossing — headline 0.031 → 0.010 in both directions, with the extent error 
 fits of everything else going 0.037 → 0.015 — and it left the alternation band at 1.409 against the
 reference's 0.760. What it bought instead is a much sharper question, which is (1) below.
 
-1. **What sets the spacing.** The drum's shape is the reference's: at an apothem of 1.15 the
-   alternation's mean profile lands on it bin for bin, band 0.715 against 0.760, closer than
-   anything else tried on the overlapped regime. The crossing forbids that apothem — it pins it at
-   0.555 — and the reason is now a measurement rather than a guess: the reference spans 1.527 glyph
-   heights under a 60 ms alternation and 1.181 at the widest frame of a single crossing, at the
-   same angular separation. **No function of the separation alone can produce both.** So look for
-   the thing with memory that widens the pair when changes pile up: an apothem that grows while the
-   column is being chased and relaxes when it is not. It is the same direction as the reference's
-   own cadence sweep, where it WIDENS towards fast and we narrow. Whatever the mechanism, the test
-   is `round.sh`: the apothem may not move the single crossing.
-2. **The overlap opacity**, unchanged by the drum and still open. Under a fast alternation the
-   reference goes *fainter* than it ever goes in one crossing — the grid shows it holding both
-   glyphs dim and apart where we swap between two solid ones. A crowd-normalised composition
-   reproduced the faintness almost exactly, peak 0.333 against 0.317, but not the gap. If (1) finds
-   the spacing, this is what has to land with it; the closed brackets are in the ground truth so
-   neither dead end is walked again.
+1. **The alternation's opacity.** The spacing is done and this is what is left of the overlapped
+   regime: the ink floor under alternation is ~15% too bright at every cadence, 0.341 / 0.360 /
+   0.401 against 0.294 / 0.307 / 0.334, and the chase moved it by 0.002 — the two really are
+   separate mechanisms. It is flat across cadence, which argues for something that is not
+   cadence-dependent at all, unlike the spacing. The closed brackets in the ground truth cover
+   `SETTLE_KNOCK`, travelling superseded glyphs and crowd normalisation, so none of those again.
+2. **120 ms is now the worst cadence**, 1.369 against 1.460, and it got 0.018 worse rather than
+   better. It is small and it is the only place the chase costs anything, so it is worth one look at
+   whether `CROWD_RELAX` can be moved without waking the cutoff — but do not spend a round on it
+   before (1).
 3. **The glyph-size gap**, 12% at the bottom of a crossing and flat across cadence. The standing
    guess was that the drum's foreshortening was it; that can now be bounded rather than guessed —
    `cos` at the crossing's separation is worth 5%, so at most half of it — but the gap has NOT been
    re-measured since the drum went in. Measure it before deciding whether anything is left to
-   explain.
+   explain. Cheap, and it may turn out to be the same thing as (1).

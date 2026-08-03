@@ -226,3 +226,42 @@ engine at the floor, against a gap a quarter of a glyph height wide. Fitted to t
 
 So the drum is the right FORM and something else has to set its spacing — something that widens the
 pair when changes pile up, which is the direction the reference moves and this engine does not.
+
+### What sets the spacing: the chase — FOUND
+
+It is whether changes are still arriving, and nothing else. A per-column signal takes a step every
+time a change commits onto a column that was NOT at rest and bleeds off at a constant rate; the
+apothem is multiplied by `1 + CROWD_SPREAD * chase`. It is exactly zero for anything starting from
+rest, so the single crossing cannot move however it is set — measured, not argued: 0.010 both
+directions before and after, controls at 1.000.
+
+The bleed is at a constant RATE and not exponential, because what the reference needs is a cutoff
+rather than a rolloff. At cadence `T` the signal gains `CROWD_STEP` and loses `T / CROWD_RELAX` per
+cycle, so it saturates below a critical cadence and sits at zero above it. That matters because the
+reference is **not monotonic** in cadence and only 60 ms is wrong:
+
+| middle band | 60 ms | 120 ms | 240 ms |
+|---|---|---|---|
+| reference | 0.760 | 1.460 | 1.292 |
+| flat apothem | 1.401 | 1.387 | 1.191 |
+| **chased apothem** | **0.730** | **1.369** | **1.281** |
+| error | 0.641 → **0.030** | 0.073 → 0.091 | 0.101 → **0.011** |
+
+The 60 ms error falls by 95% and is inside the run-to-run scatter of the measurement itself, which
+is ±0.023 on two runs. 240 ms improved as well and was not fitted for: at that cadence the raw
+signal is back to zero long before the next change, but the lag leaves a brief widening after each
+one, and that is apparently right. 120 ms is 0.018 worse and is now the worst of the three.
+
+**The burst is unaffected, and it was checked properly.** A first reading said the tail had gone
+from 637 ms to 394 and it was measurement noise on top of a failed install — the emulator's `/data`
+was full, `adb install` reported an empty error, and the two "different" builds were the same
+binary. Rebuilt and reinstalled, three runs each, against the reference's 0.600 / 615 ms:
+
+| | sharpness through the roll | tail |
+|---|---|---|
+| chase off | 0.603 | 637 ms |
+| chase on | 0.603 | 619 ms |
+
+What the chase does NOT fix is the second signature. The alternation's ink floor is 0.341 / 0.360 /
+0.401 against the reference's 0.294 / 0.307 / 0.334 — about 15% too bright at every cadence, and
+the chase moved it by 0.002. The spacing and the opacity really are two mechanisms.
