@@ -82,9 +82,21 @@ if adb -s "$SERIAL" shell uiautomator dump /sdcard/ui.xml >/dev/null 2>&1 &&
   sleep 3
 fi
 
-pull() { # <dir>
-  rm -rf "artifacts/$1" artifacts/_pull
+open_group() { # <dir> — start a group empty; drain() only ever appends to it
+  rm -rf "artifacts/$1"
   mkdir -p "artifacts/$1"
+}
+
+# Drain after EVERY run, not once per group.
+#
+# A run is 90-240 MB of uncompressed alpha planes and a group is six of them — ~940 MB, against
+# 611 MB free on a 6 G data partition. The fifth run then writes its .bin and never gets to write
+# its .json, and since every glob here keys off the .json the file is silently skipped: `band.py`
+# prints "(2 run)" for 60 and 120 ms, nothing at all for 240, and the round looks complete. That
+# ate the 240 ms alternation on three consecutive rounds while the notes blamed the dev-client
+# scrim. Draining per run caps what the device ever holds at ONE recording.
+drain() { # <dir>
+  rm -rf artifacts/_pull
   # `|| true`, and it matters: an empty record dir makes adb pull exit non-zero, and under
   # `set -e` that killed the whole round silently after the last drive — the analysis never ran and
   # the round looked like it had simply stopped.
@@ -92,9 +104,51 @@ pull() { # <dir>
   mv artifacts/_pull/* "artifacts/$1/" 2>/dev/null || true
   rmdir artifacts/_pull 2>/dev/null || true
   adb -s "$SERIAL" shell rm -rf "$FILES/numerictext-record"
-  local n
+}
+
+# A .bin with no .json is a run that ran out of disk half way. Say so — it is the one failure here
+# that produces a NUMBER rather than an error, because the analysis just measures what is left.
+report_group() { # <dir>
+  local n orphans
   n=$(ls "artifacts/$1"/*.json 2>/dev/null | wc -l | tr -d ' ')
-  echo "   $1: $n run"
+  orphans=0
+  for b in "artifacts/$1"/*.bin; do
+    [ -e "$b" ] || continue
+    [ -e "${b%.bin}.json" ] || orphans=$((orphans + 1))
+  done
+  if [ "$orphans" -gt 0 ]; then
+    echo "   $1: $n run  ⚠ $orphans registrazione/i TRONCATA/E (disco pieno) — non fidarsi di questo gruppo"
+  else
+    echo "   $1: $n run"
+  fi
+}
+
+# Refuse to drive on a disk that cannot hold one recording. Silence here is what produces numbers
+# from a build that was never installed, or from a run that was never written.
+guard_disk() {
+  local free
+  free=$(adb -s "$SERIAL" shell df /data | tail -1 | awk '{print int($4/1024)}')
+  if [ "${free:-0}" -lt 400 ]; then
+    adb -s "$SERIAL" shell pm trim-caches 999G >/dev/null 2>&1 || true
+    free=$(adb -s "$SERIAL" shell df /data | tail -1 | awk '{print int($4/1024)}')
+    if [ "${free:-0}" -lt 400 ]; then
+      echo "   /data ha $free MB liberi, una registrazione ne vuole fino a 240 — mi fermo"
+      echo "   allarga la partizione: disk.dataPartition.size in ~/.android/avd/<AVD>.avd/config.ini"
+      exit 1
+    fi
+  fi
+}
+
+# <dir> <x> <y> <sleep> <times>
+drive() {
+  local dir=$1 x=$2 y=$3 nap=$4 times=$5 i
+  for i in $(seq 1 "$times"); do
+    guard_disk
+    wake
+    adb -s "$SERIAL" shell input tap "$x" "$y"
+    sleep "$nap"
+    drain "$dir"
+  done
 }
 
 # The app does not survive a whole round reliably — it was found sitting on the launcher after the
@@ -118,30 +172,35 @@ wake() {
 }
 
 echo "── drive: single crossing"
-wake
-for _ in 1 2 3; do adb -s "$SERIAL" shell input tap $SINGLE_X $SINGLE_Y; sleep 7; done
-pull "$NAME"
+open_group "$NAME"
+drive "$NAME" $SINGLE_X $SINGLE_Y 7 3
+report_group "$NAME"
 
 echo "── drive: single crossing, the other way"
-wake
-for _ in 1 2 3; do adb -s "$SERIAL" shell input tap $UP_X $UP_Y; sleep 7; done
-pull "${NAME}_up"
+open_group "${NAME}_up"
+drive "${NAME}_up" $UP_X $UP_Y 7 3
+report_group "${NAME}_up"
 
+# FIVE runs at 60 ms, two at the others. Not symmetry for its own sake: at 60 ms two runs of one
+# build read 0.926 and 0.754 on the band, a spread of 0.172, while 120 and 240 ms repeat to 0.006.
+# A round was chosen over its neighbour on 0.03 with two runs behind each — below the scatter, so
+# the choice carried no information. Five runs bring the standard error of the median to about
+# 0.02, which is the smallest difference worth acting on at that cadence.
 echo "── drive: alternation, 60 / 120 / 240 ms"
-wake
-for _ in 1 2; do adb -s "$SERIAL" shell input tap $ALT60_X $ALT60_Y; sleep 8; done
-for _ in 1 2; do adb -s "$SERIAL" shell input tap $ALT120_X $ALT120_Y; sleep 9; done
+open_group "${NAME}_alt"
+drive "${NAME}_alt" $ALT60_X  $ALT60_Y   8 5
+drive "${NAME}_alt" $ALT120_X $ALT120_Y  9 2
 # 16 s, not 12: the 240 ms preset runs 1.2 s of settle plus 19 steps, and at 12 s one of the two
 # taps went missing on every round — the recorder had not closed the previous file yet.
-for _ in 1 2; do adb -s "$SERIAL" shell input tap $ALT240_X $ALT240_Y; sleep 16; done
-pull "${NAME}_alt"
+drive "${NAME}_alt" $ALT240_X $ALT240_Y 16 2
+report_group "${NAME}_alt"
 
 # The burst is the case a single crossing cannot stand in for, and any knob that reads how far apart
 # two glyphs are is answering a different question here. "roll + x14 30ms", centre (0.714, 0.6815).
 echo "── drive: continuous roll"
-wake
-for _ in 1 2 3; do adb -s "$SERIAL" shell input tap 771 1636; sleep 9; done
-pull "${NAME}_roll"
+open_group "${NAME}_roll"
+drive "${NAME}_roll" 771 1636 9 3
+report_group "${NAME}_roll"
 
 echo
 echo "── single crossing (decrement)"

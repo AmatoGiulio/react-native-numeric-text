@@ -11,46 +11,44 @@ a guess. A claim without a number behind it should be distrusted.
 
 ## Where it stands
 
-Android against the iOS reference, single value change:
+Rebuilt from HEAD and re-measured on 2026-08-03 evening (`artifacts/verify1*`), because the engine
+file had been edited after the last capture and no round had been driven since. Everything below is
+that round, not a carried-over number.
+
+Single value change:
 
 | | decrement 1,242→1,160 | increment 1,160→1,242 |
 |---|---|---|
 | ink floor error | 0.005 | 0.009 |
 | crossing extent error | 0.015 | 0.011 |
-| edge at the floor | 0.885/0.389/0.733 vs 0.873/0.400/0.728 | — |
 | **headline** | **0.010** | **0.010** |
-| wave start | ±2 ms | ±0 ms |
-| back to full | 419/502/585 vs 420/504/587 | — |
+| wave start | ±2 ms | ±1 ms |
+| the two unchanging columns | 1.000 | 1.000 |
 
-Under a fast alternation, the middle band between the two digits:
+The continuous roll, 14 changes 30 ms apart: sharpness 0.603 against 0.600, tail 635 ms against 615.
 
-| | 60 ms | 120 ms | 240 ms |
-|---|---|---|---|
-| reference | 0.760 | 1.460 | 1.292 |
-| android | **0.776** | 1.334 | — |
+The alternation, **cadence against the same cadence** — which is new, and it is most of the story:
 
-And the continuous roll, 14 changes 30 ms apart: sharpness 0.603 against 0.600, tail 636 ms against
-615.
+| | band iOS / and | travel iOS / and | balance iOS / and | width iOS / and |
+|---|---|---|---|---|
+| 60 ms | 0.760 / 0.814 | 0.103 / **0.259** | 0.058 / 0.061 | 0.779 / 0.786 |
+| 120 ms | 1.460 / 1.335 | 0.139 / **0.261** | 0.115 / 0.122 | 0.786 / 0.823 |
+| 240 ms | 1.292 / 1.275 | 0.161 / **0.279** | 0.118 / 0.116 | 0.814 / 0.815 |
+| roll | — | 0.119 / **0.517** | 0.052 / 0.118 | 0.969 / 0.856 |
 
-The timings match to a frame and the single crossing to within three times the noise floor. Under a
-crowd the drum's apothem widens and its pair is drawn evenly, both off the same chase signal.
+**The balance and the width are at parity at every cadence, and only the travel is not.** They read
+as the largest defect left until `balance.py` was fixed: it took the iOS side from one file and the
+Android side from a directory holding two runs at 60 ms and two at 120, so every Android
+"alternation" figure it printed was the mean of two cadences. Separated, the balance at 60 ms is
+0.061 against 0.058 and the width 0.786 against 0.779. The claim this file used to carry —
+"the width is the real gap, 1.18x too wide, and it is what a viewer actually reports seeing" — was
+that artefact plus a stale number, and it is retracted.
 
-What is left is that **the pair still changes hands more than the reference's** — through a crowd
-this engine leans on one glyph and it slides, where the reference holds two together and its ink
-barely moves. Halved, not closed. It is visible by eye on a side-by-side GIF and no number in
-`compare.py` sees any of it, which is why `balance.py` exists.
-
-| | travel iOS / android | balance iOS / android | width iOS / android |
-|---|---|---|---|
-| single crossing | 0.163 / 0.165 | 0.072 / 0.061 | 0.900 / 0.912 |
-| alternation 60 ms | 0.103 / 0.247 | 0.058 / 0.083 | 0.779 / **0.806** |
-| continuous roll | 0.119 / **0.462** | 0.052 / 0.118 | 0.969 / 0.860 |
-
-Balance is a standard deviation, not a peak-to-peak: the peak-to-peak on these same captures said
-0.19 against 0.39 and was set by a handful of extreme frames. Frame by frame the reference sits at
-0.37 and oscillates 0.27–0.47; this engine sits at 0.40 and oscillates 0.25–0.58. The residual has
-roughly the reference's shape. **The width is the real gap** — 1.18x too wide under a fast
-alternation, and it is what a viewer actually reports seeing.
+So there is **one** defect left, and it is the travel: this engine's ink centroid moves 1.7x to 4.3x
+further than the reference's under a crowd, while matching it exactly (0.165 against 0.163) on a
+single change. The reference moves its ink LESS through a crowd than through one change; this engine
+moves it monotonically more, the more the changes pile up. That is a shape no constant reaches — see
+the last section.
 
 ## The measuring rig — the part that makes progress possible
 
@@ -60,6 +58,9 @@ timestamps and a mark at every value change. No screen recording, no resampling,
 sync flash.
 
 ```bash
+python3 .agent/tools/sim.py artifacts/<dir> --preset=single|up|alt60|alt120|alt240|roll
+                                # a MODEL, rendered off-line into the recorder's format. ~1 s.
+                                # Every tool below works on its output unchanged.
 .agent/tools/round.sh <name>    # one build: both crossings and the alternation, all three compared
 .agent/tools/fit.sh <name>      # build, install, drive the decrement preset, pull, compare
 python3 .agent/tools/compare.py artifacts/<dir> [--up]
@@ -81,11 +82,33 @@ stands and which is an experiment that was thrown away. A round makes several an
 handing over an untitled pair got a discarded attempt read as the current state, which makes a fixed
 defect look live.
 
-`round.sh` is the one to reach for — a round costs one build instead of three, and it prints the two
-directions and the alternation together, which is what stops a knob being called good on the
-evidence of the one measurement it was fitted against.
+**`sim.py` first, `round.sh` second.** A model that cannot reach the reference off-line will not
+reach it on a device either, and finding that out costs a second rather than twenty minutes. When
+it is time for the device, `round.sh` is the one to reach for: a round costs one build instead of
+three, and it prints both directions and all three cadences together, which is what stops a knob
+being called good on the evidence of the one measurement it was fitted against.
 
-Three traps, each of which has already cost real time:
+**Know the scatter before believing a difference.** `band.py` and `balance.py` now print a `±`
+spread beside every median, and `band.py` flags a cadence whose runs disagree by more than 0.03.
+Measured, two runs of one unchanged build:
+
+| | 60 ms band | 120 / 240 ms band | roll travel |
+|---|---|---|---|
+| spread within one build | 0.041–0.172 | ~0.006 | up to 0.244 |
+
+The four-round square that chose the current `EVEN_SHRINK_AT`/`CROWD_SPREAD` corner was decided on
+differences of 0.03–0.04 at 60 ms, and HEAD re-measured moves 0.038 on that same number. **That
+round carried no information.** 60 ms now gets five runs; 120 and 240 are the cadences to fit on.
+
+Traps, each of which has already cost real time:
+
+- **A recording that ran out of disk leaves a `.bin` with no `.json`, and every glob here keys off
+  the `.json`** — so it is skipped in silence and the analysis measures what survived. A run is
+  90–240 MB and the alternation group is six of them, ~940 MB, against 611 MB free on a 6 G data
+  partition. That ate the **240 ms alternation on three consecutive rounds** while these notes
+  blamed the dev-client scrim. `round.sh` now drains after every run rather than every group,
+  refuses to drive below 400 MB free, and says so when a group holds an orphaned `.bin`. Give the
+  AVD more room as well: `disk.dataPartition.size` in `~/.android/avd/<AVD>.avd/config.ini`.
 
 - **`fit.sh` taps a fixed screen coordinate, so adding a preset button moves it.** That once put
   two rounds of measurements on the wrong transition, and only a "restored" baseline reading 0.242
@@ -167,41 +190,87 @@ band was then solved by a separate mechanism — an apothem that widens while th
 and the pair's ink imbalance halved by the same signal levelling its opacity and its shrink together.
 All three are zero at rest, which is why the single crossing has not moved since.
 
-1. **The pair still changes hands.** Halved and not closed: balance 0.39 and 0.50 against the
-   reference's flat 0.19, travel 0.226 and 0.290 against 0.103 and 0.119. The imbalance is a
-   PRODUCT and the ground truth has the arithmetic — opacity 4.8 times area 2.1 gives the 9.9 that
-   is exactly the worst frame measured. Two of the three terms are now levelled by the chase. The
-   third, the alpha exponent at 1.33, was tried and reverted: it does improve the balance and it
-   costs the travel, 0.29 out to 0.43. What remains after that is the drum's own `cos`, worth 1.13.
+**Stop turning constants.** The four-round square that set the current corner decided differences
+smaller than the 60 ms band's own run-to-run scatter, and this file's own table says no corner
+satisfies both the alternation and the roll. Both of those are reasons the same shape of round
+cannot converge, and a fifth one will not either.
 
-   The alternation is now essentially the reference on both the band, 0.776 against 0.760, and the
-   glyph width, 0.806 against 0.779 — and the CONTINUOUS ROLL is what pays for it, travel 0.462
-   against 0.119. The two regimes want opposite corners of the same two knobs; the square of four
-   rounds is in the ground truth, and no corner is both.
+1. **The travel, and it is structural rather than a constant.** `samples()` emits exactly two
+   glyphs, `floor(position)` and the stop above it, and every one of offset, alpha and shrink is a
+   function of `distance = |stop - position|`. The ink centroid therefore IS the column's position:
+   if the column slides, the ink slides. The only memory in the system is one scalar per column,
+   `evenness = CROWD_EVEN * crowdRaw`.
 
-   The lead out of that is one measurement: the reference's ink is 0.779 of a settled glyph wide
-   under an alternation and 0.969 through a roll. It shrinks hard when a column oscillates in place
-   and barely at all when it travels, and `crowd` cannot tell those apart — it only counts changes
-   arriving. **Find a signal that distinguishes oscillating from travelling** and both corners are
-   reachable at once.
+   The reference does the opposite of sliding — 0.163 on a single change and 0.103 / 0.139 / 0.161
+   / 0.119 under every crowd, i.e. it moves its ink LESS when changes pile up. This engine matches
+   the single change exactly (0.165) and then grows monotonically with crowding, to 0.517. No
+   setting of a signal that scales one shared position produces "moves less when busier".
 
-   The residual HAS been compared frame by frame now, and it is roughly the reference's shape —
-   see the ground truth. So the balance is closer than the old metric said, and what is actually
-   left is the **width**: our glyphs are 1.18x too wide under a crowd. Levelling the shrink onto the
-   pair's own mid-distance instead of onto 1 reaches the reference on the roll — balance 0.056
-   against 0.052 — and costs the roll tail, 920 ms against 615. That fork is written up in the
-   ground truth and is where the next round should start, on the RELEASE rather than the level.
+   What the reference's behaviour looks like instead is a STACK: one transition per change, each
+   with its own clock, entering from `+offset` and leaving towards `-offset`. Their masses sit
+   either side of the rest position, so the centroid stays put however many are alive — travel
+   falls out for free rather than being fitted. It also explains why Apple's `offset` 0.59375 never
+   transferred: it is a per-transition entry amplitude, not the spacing between two stops, and it
+   was fitted here as spacing at ~0.32.
 
-2. **The alternation's opacity**, ~15% too bright at every cadence, 0.341 / 0.360 / 0.401 against
-   0.294 / 0.307 / 0.334, and the chase moved it by 0.002. Flat across cadence, unlike the spacing,
-   which argues for something not cadence-dependent at all. May well be the same fix as (1) — a
-   pair that changes hands is also a pair whose brighter half is too bright.
+   `f981795` tried this and was reverted eleven minutes later for brightening the ink, 0.581 → 0.816
+   — which is what summing N independent alphas does. A crossfade is a CONVEX combination, so the
+   stack's alphas have to be normalised to sum to one, not dimmed individually. The one round that
+   did normalise got the opacity nearly exact (0.333 against 0.317) and was then judged on the gap,
+   which the drum and the chase have since solved by other means. **It was closed on a criterion
+   that no longer applies.**
 
-3. **120 ms is now the worst cadence** for the band, 1.369 against 1.460, 0.018 worse than before
-   the chase. Small, and the only place the chase costs anything. One look at whether `CROWD_RELAX`
-   moves without waking the cutoff — but not before (1).
-4. **The glyph-size gap**, 12% at the bottom of a crossing and flat across cadence. The standing
-   guess was that the drum's foreshortening was it; that can now be bounded rather than guessed —
-   `cos` at the crossing's separation is worth 5%, so at most half of it — but the gap has NOT been
-   re-measured since the drum went in. Measure it before deciding whether anything is left to
-   explain. Cheap, and it may turn out to be the same thing as (1).
+2. **The off-line simulator exists — `.agent/tools/sim.py`, and it has already run.** It cuts the
+   settled glyphs out of the iOS recordings and renders a model into the recorder's own format, so
+   `compare.py`, `band.py`, `burst.py`, `balance.py`, `grid.py` and `gif.py` all work on its output
+   unchanged. A candidate costs **one second** instead of twenty minutes; sixteen model variants
+   were swept in ten.
+
+   **The stack model was built and measured there, and the result is split.** Apple's constants,
+   no chase, no crowd signal, nothing fitted except two knobs swept against the single crossing:
+
+   | | headline | travel single / alt60 / roll | band 60 ms | roll sharpness |
+   |---|---|---|---|---|
+   | reference | — | 0.163 / 0.103 / 0.119 | 0.760 | 0.600 |
+   | device, drum + chase | **0.010** | 0.165 / 0.259 / **0.517** | **0.814** | 0.603 |
+   | simulator, stack | 0.018 | 0.166 / **0.190** / **0.180** | **1.429** | 0.600 |
+
+   The travel is fixed structurally, which nothing on the device has managed: the roll goes 0.517 →
+   0.180 and the single crossing stays put, so for the first time in this branch a crowded regime
+   and the isolated one improved TOGETHER. Balance follows it — 0.032 against the reference's 0.052
+   through a roll, against the device's 0.118.
+
+   **And the stack loses the band badly**, 1.429 against 0.760 where the chased drum reaches 0.814.
+   A faster spring was the obvious suspect and it is not the cause: swept 0.30 → 0.09 the band
+   never gets below 1.065, and by then the crossing has broken (headline 0.246). So the split is no
+   longer two corners of one knob square — it is **two models, each winning a different regime**,
+   which is a better problem to have and a different one to solve.
+
+   Do NOT port the stack to Kotlin yet. That is the simulator earning its keep: it says this model
+   is not ready, in ten seconds, instead of a day of Kotlin and a round.
+
+3. **The synthesis worth trying next, and it is cheap now.** Keep the stack's per-transition
+   identity — which is what produces the travel and the balance — and give each entry the DRUM's
+   placement, `APOTHEM * sin(angle)` with the `cos` foreshortening, plus the chase's widening. The
+   ground truth already records that the drum's SIZE is what produces the band (apothem 1.15 gives
+   0.715 against 0.760) and that it cost the crossing, which is precisely what a stack does not
+   have to pay: its crossing is set by one transition's own curve, not by the spacing of two stops.
+   Both halves are already written, in `sim.py` and in `NumericTextTimeline.kt`.
+
+   Second, unrelated and also cheap: the entry amplitude fits at 0.44 where Apple's `relativeOffset`
+   is 0.59375. In this parameterisation `p` runs 1 → 0 → -1, so an arrival at `+OFFSET` and a
+   departure at `-OFFSET` span `2*OFFSET`; Apple's number may be the transition's total travel
+   rather than its one-sided amplitude. Half of it is 0.297 and the fit says 0.44, so neither
+   reading is confirmed — one sweep settles it.
+
+3. **Then re-measure, and only then.** The single crossing at 0.010 with the controls at 1.000 is
+   the thing not to break; the roll's tail at 635 ms against 615 is the measurement that caught
+   every previous attempt at this (all three balance experiments broke it, and `compare.py` never
+   sees it).
+
+4. **What is genuinely unknown, and cheap to find out.** `.numericText()` is animated by whatever
+   animation is in the transaction. Driving the reference under an explicit
+   `withAnimation(.linear(duration: 1))` would read every curve — offset, scale, alpha, blur —
+   directly against a known clock, instead of fitting them through a spring that is being solved at
+   the same time. Nothing in these notes has tried it, and it separates two unknowns that have so
+   far only been measured multiplied together.

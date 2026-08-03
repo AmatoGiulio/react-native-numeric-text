@@ -187,6 +187,42 @@ private final class NumericTextModel: ObservableObject {
 private struct NumericTextRoot: View {
   @ObservedObject fileprivate var model: NumericTextModel
 
+  /// The animation the transition runs on — and it is OURS, not Apple's.
+  ///
+  /// `.numericText()` has no clock of its own: it is driven by whatever animation is in the
+  /// transaction. Everything measured about the reference so far has therefore been the
+  /// transition's curves multiplied by this spring, solved together.
+  ///
+  /// `NUMERICTEXT_LINEAR=<seconds>` swaps the spring for a linear ramp, which separates them. Two
+  /// things become readable that are not readable otherwise:
+  ///
+  ///  - every curve — offset, scale, alpha, blur — sampled directly against a known time base,
+  ///    instead of being fitted through an unknown one;
+  ///  - what the transition IS. At a long duration under a fast alternation, a STACK of
+  ///    overlapping transitions puts many distinct glyph forms on screen at once, while a single
+  ///    position on a strip can only ever show the two stops around it. Counting them settles the
+  ///    question that the layer tree and the `TextRenderer` both refused to answer.
+  ///
+  /// DEBUG-only and off unless set, exactly like the recorder and the probes.
+  /// `NUMERICTEXT_LINEAR=none` removes the animation entirely. That is the CONTROL: with no
+  /// animation the value must snap, so if it snaps the branch below is reached and whatever the
+  /// transition does with a `.linear` is a real finding rather than a switch that never fired.
+  private var transitionAnimation: Animation? {
+    #if DEBUG
+      let raw = ProcessInfo.processInfo.environment["NUMERICTEXT_LINEAR"]
+      if raw == "none" {
+        print("[numerictext] transition animation: NONE")
+        return nil
+      }
+      if let seconds = raw.flatMap(Double.init), seconds > 0 {
+        print("[numerictext] transition animation: linear \(seconds)s")
+        return .linear(duration: seconds)
+      }
+      print("[numerictext] transition animation: spring (default)")
+    #endif
+    return .spring()
+  }
+
   var body: some View {
     Text(model.text)
       .font(font)
@@ -194,7 +230,7 @@ private struct NumericTextRoot: View {
       .foregroundStyle(model.color)
       .numericTextTransition(countsDown: model.countsDown)
       .debugSliceProbe()
-      .animation(model.animates ? .spring() : nil, value: model.value)
+      .animation(model.animates ? transitionAnimation : nil, value: model.value)
       .frame(maxWidth: .infinity, maxHeight: .infinity)
       .mask(edgeFadeMask)
   }

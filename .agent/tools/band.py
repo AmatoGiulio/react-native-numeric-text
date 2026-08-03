@@ -84,7 +84,16 @@ def report(pattern, label):
         by_cadence.setdefault(round(cadence / 30) * 30, []).append(value)
     for cadence in sorted(by_cadence):
         values = by_cadence[cadence]
-        print(f"   {label:9} ~{cadence:3.0f} ms   banda {np.median(values):.3f}   ({len(values)} run)")
+        # The spread, not just the median. At 60 ms two runs of ONE build read 0.926 and 0.754,
+        # and rounds were being decided on differences of 0.03 — a median printed alone is what
+        # made that look like a result. 120 and 240 ms repeat to ~0.005 and are safe to fit on;
+        # 60 ms needs five runs before a difference under 0.05 means anything.
+        spread = float(np.ptp(values)) if len(values) > 1 else float("nan")
+        flag = "  ⚠ sotto il rumore" if len(values) > 1 and spread > 0.03 else ""
+        print(
+            f"   {label:9} ~{cadence:3.0f} ms   banda {np.median(values):.3f}   "
+            f"±{spread:.3f}   ({len(values)} run){flag}"
+        )
     return by_cadence
 
 

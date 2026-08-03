@@ -293,10 +293,41 @@ roughly the reference's shape, which a peak-to-peak threw away.
 `width` is the ink's horizontal span in settled glyph widths — the one number here that vertical
 separation cannot confound, and the largest gap left: **1.18x too wide under a 60 ms alternation**.
 
-**The reference does not vary the balance at all** — 0.19 in all three regimes — and barely varies
-the travel, moving its ink LESS through a crowd than through a single change. This engine matched it
-exactly where it was fitted and nowhere else: through a roll our share ran from 0.14 to 0.91, one
-glyph at a time, and the survivor slid with the roll.
+### What these three numbers can and cannot say — measured 2026-08-03 evening
+
+Two of the three were being read wrong, and correcting them removed two of the four open defects.
+
+**Compare a cadence against the same cadence.** `balance.py` took its iOS side from one file and its
+Android side from every json in the directory — which holds two runs at 60 ms and two at 120 — so
+every Android figure it printed for "alternation" was the mean of two cadences. Split, against HEAD
+rebuilt (`artifacts/verify1*`):
+
+| | travel iOS / and | balance iOS / and | width iOS / and |
+|---|---|---|---|
+| 60 ms | 0.103 / **0.259** | 0.058 / 0.061 | 0.779 / 0.786 |
+| 120 ms | 0.139 / **0.261** | 0.115 / 0.122 | 0.786 / 0.823 |
+| 240 ms | 0.161 / **0.279** | 0.118 / 0.116 | 0.814 / 0.815 |
+
+The balance and the width are at parity at every cadence. Only the travel is not.
+
+**`width` has a regime-dependent zero, so it cannot be compared across regimes.** A settled glyph's
+ink runs 85 px for a "1" to 147 px for a "4" — 1.73x — and the divisor is whichever digit the run
+ended on. Two settled digits blended with NO shrink at all measure **0.91** on this metric, not
+1.00. So "the reference's ink is 0.779 wide under an alternation and 0.969 through a roll, therefore
+it shrinks when a column oscillates and not when it travels" compares two different zeros: the
+alternation shows digits 0 and 1, the roll shows all ten. The reference's width across a 4x cadence
+sweep — the one control where the digits are held constant — barely moves at all: 0.779 / 0.786 /
+0.814, and at 240 ms its distribution is bimodal at the two digit shapes rather than shifted. The
+"find a signal that distinguishes oscillating from travelling" lead rested on that comparison and
+does not survive it.
+
+**The reference DOES vary its balance with cadence** — 0.058 / 0.115 / 0.118 — and this engine
+follows it, 0.061 / 0.122 / 0.116. The old claim of "0.19 flat in all three regimes" was the
+peak-to-peak metric that has since been replaced.
+
+What remains true: the reference barely varies the travel and moves its ink LESS through a crowd
+than through a single change, 0.163 falling to 0.103–0.161. This engine matches the single change
+exactly, 0.165, and then grows monotonically with crowding to 0.517 through a roll.
 
 Note the chase makes the travel worse, 0.258 to 0.341 on the alternation and 0.227 to 0.474 on the
 roll, because a wider drum swings its faces further. That is the same knob paying twice, and it is
