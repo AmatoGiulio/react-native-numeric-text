@@ -27,7 +27,19 @@ def load(prefix):
     with open(f"{prefix}.json") as handle:
         meta = json.load(handle)
     count, height, width = meta["frames"], meta["height"], meta["width"]
+    if meta.get("truncated"):
+        raise ValueError(
+            f"{prefix} was cut short while recording — {meta['frames']} frames, "
+            f"{meta.get('bytes', 0)} bytes. Its numbers are not comparable to a whole run."
+        )
     planes = np.fromfile(f"{prefix}.bin", dtype=np.uint8)
+    expected = meta["frames"] * meta["width"] * meta["height"]
+    if planes.size != expected:
+        raise ValueError(
+            f"{prefix}.bin holds {planes.size} bytes, expected {expected} — the run did not "
+            f"finish writing. Recordings before 2026-08-03 buffered every frame in memory and "
+            f"a long one silently wrote nothing."
+        )
     expected = count * height * width
     if planes.size != expected:
         raise SystemExit(f"{prefix}.bin holds {planes.size} bytes, expected {expected}")

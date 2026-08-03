@@ -523,7 +523,21 @@ final class NumericTextFrameRecorder {
   private var times: [Double] = []
   private var drawBounds: [[Double]] = []
   private var marks: [[String: Any]] = []
-  private var planes = Data()
+
+  /// Frames are streamed to disk as they are captured, never accumulated.
+  ///
+  /// They used to be appended to one in-memory `Data` and written at `stop`. A short run survives
+  /// that; a burst does not. 691 frames of 1382x643 is 614 MB, the write failed, `try?` swallowed
+  /// it, and what landed on disk was a valid .json beside a zero-byte .bin — which is how every
+  /// multi-change recording on this simulator turned out to be unreadable, silently.
+  private var planeHandle: FileHandle?
+  private var stamp = 0
+  private var bytesWritten = 0
+  private var truncated = false
+
+  /// A ceiling on one run. At 888 KB a frame this is about 22 minutes, and it exists so a recorder
+  /// left armed cannot fill the disk — which has happened to the host and to the emulator today.
+  private let byteCap = 1_200_000_000
 
   func arm(root: UIView, label: String, countsDown: Bool) {
     guard Self.enabled else { return }
@@ -542,8 +556,10 @@ final class NumericTextFrameRecorder {
     startedAt = now
     times.removeAll()
     drawBounds.removeAll()
-    planes.removeAll(keepingCapacity: true)
     marks = [["t": 0.0, "label": label]]
+    bytesWritten = 0
+    truncated = false
+    guard openPlaneFile() else { return }
 
     let displayLink = CADisplayLink(target: self, selector: #selector(tick))
     displayLink.add(to: .main, forMode: .common)
@@ -584,10 +600,26 @@ final class NumericTextFrameRecorder {
     (view.layer.presentation() ?? view.layer).render(in: context)
     context.restoreGState()
 
-    planes.append(Data(bytes: data, count: pixelWidth * pixelHeight))
+    let count = pixelWidth * pixelHeight
+    guard let handle = planeHandle else { return stop() }
+    do {
+      try handle.write(contentsOf: Data(bytes: data, count: count))
+    } catch {
+      NSLog("[numerictext-record] FRAME WRITE FAILED at %d frames: %@",
+            times.count, String(describing: error))
+      truncated = true
+      return stop()
+    }
+    bytesWritten += count
     times.append((now - startedAt) * 1000)
     drawBounds.append(drawingBounds(of: view.layer))
 
+    if bytesWritten >= byteCap {
+      NSLog("[numerictext-record] hit the %d byte cap after %d frames, stopping",
+            byteCap, times.count)
+      truncated = true
+      return stop()
+    }
     if now >= deadline { stop() }
   }
 
@@ -611,7 +643,11 @@ final class NumericTextFrameRecorder {
     link?.invalidate()
     link = nil
     context = nil
-    guard !times.isEmpty else { return }
+    guard !times.isEmpty else {
+      try? planeHandle?.close()
+      planeHandle = nil
+      return
+    }
 
     let meta: [String: Any] = [
       "label": label,
@@ -628,8 +664,12 @@ final class NumericTextFrameRecorder {
       "times": times,
       "drawBounds": drawBounds,
       "marks": marks,
+      // Set when the run was cut short by the byte cap or by a failed write. The reader must not
+      // treat a truncated run as a complete one.
+      "truncated": truncated,
+      "bytes": bytesWritten,
     ]
-    write(meta: meta, planes: planes)
+    writeMeta(meta)
     NSLog(
       "[numerictext-record] %@ frames=%d %dx%d marks=%d",
       label,
@@ -638,21 +678,62 @@ final class NumericTextFrameRecorder {
       pixelHeight,
       marks.count
     )
-    planes.removeAll(keepingCapacity: false)
   }
 
-  private func write(meta: [String: Any], planes: Data) {
+  private func recordingDirectory() -> URL? {
     guard
       let dir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first?
         .appendingPathComponent("numerictext-record", isDirectory: true)
-    else { return }
-    try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-    let stamp = Int(Date().timeIntervalSince1970 * 1000)
-    try? planes.write(to: dir.appendingPathComponent("run-\(stamp).bin"))
-    if let json = try? JSONSerialization.data(withJSONObject: meta, options: []) {
-      try? json.write(to: dir.appendingPathComponent("run-\(stamp).json"))
+    else { return nil }
+    do {
+      try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    } catch {
+      NSLog("[numerictext-record] cannot make the directory: %@", String(describing: error))
+      return nil
     }
-    NSLog("[numerictext-record] wrote run-%d.{bin,json}", stamp)
+    return dir
+  }
+
+  /// Opens the run's plane file up front, so `tick` only ever appends.
+  private func openPlaneFile() -> Bool {
+    guard let dir = recordingDirectory() else { return false }
+    stamp = Int(Date().timeIntervalSince1970 * 1000)
+    let url = dir.appendingPathComponent("run-\(stamp).bin")
+    guard FileManager.default.createFile(atPath: url.path, contents: nil) else {
+      NSLog("[numerictext-record] cannot create %@", url.lastPathComponent)
+      return false
+    }
+    do {
+      planeHandle = try FileHandle(forWritingTo: url)
+    } catch {
+      NSLog("[numerictext-record] cannot open %@: %@", url.lastPathComponent,
+            String(describing: error))
+      return false
+    }
+    return true
+  }
+
+  private func writeMeta(_ meta: [String: Any]) {
+    // The planes are already on disk; closing the handle is what makes the last of them durable,
+    // so it has to happen before the .json that claims they are there.
+    try? planeHandle?.close()
+    planeHandle = nil
+    guard let dir = recordingDirectory() else { return }
+    guard let json = try? JSONSerialization.data(withJSONObject: meta, options: []) else {
+      NSLog("[numerictext-record] cannot encode the metadata for run-%@", String(stamp))
+      return
+    }
+    do {
+      try json.write(to: dir.appendingPathComponent("run-\(stamp).json"))
+    } catch {
+      NSLog("[numerictext-record] cannot write run-%@.json: %@", String(stamp),
+            String(describing: error))
+      return
+    }
+    // %@ with a String, not %d: the stamp is a 64-bit Int and NSLog's %d truncated it to a
+    // negative number, so the log named a file that does not exist.
+    NSLog("[numerictext-record] wrote run-%@.{bin,json} — %@ bytes%@",
+          String(stamp), String(bytesWritten), truncated ? " (TRUNCATED)" : "")
   }
 }
 
