@@ -848,3 +848,38 @@ SCALE_AMOUNT is already Apple's own 0.3984 and was approved by eye at a single c
 residual is not the constant. Two candidates, untested: the scale is applied to a different box
 than the one SwiftUI applies it to, or its scale depends on something beyond the distance to the
 stop — sustained motion doubles the gap, from 6.6% to 14%.
+
+### Which of the two candidates it is
+
+The "different box" candidate is ruled out on first principles, not measurement: a scale applied
+about a pivot multiplies a glyph's width by that scale whatever the box is. The box moves a glyph;
+it does not resize it. So if we are wider at the same phase, our scale factor is simply larger.
+
+That leaves one question, and the width-versus-time curve answers it. Units column, single crossing:
+
+| t | iOS | android | ratio |
+|---|---|---|---|
+| 160 | 1.149 | 1.153 | 1.003 |
+| 240 | 1.044 | 1.031 | 0.987 |
+| **320** | **0.807** | **0.908** | **1.125** |
+| 400 | 0.930 | 0.980 | 1.054 |
+| 480 | 0.982 | 0.990 | 1.007 |
+
+**Not a constant factor.** The two agree at the start and the end of the crossing and diverge only
+at the bottom of the shrink: the reference reaches 0.807 of its settled width, we only reach 0.908.
+It is the DEPTH that differs, not a uniform offset.
+
+Deepening it costs more than it buys, measured:
+
+| | headline | width ratio at the bottom |
+|---|---|---|
+| SCALE_AMOUNT 0.3984 | **0.024** | 1.125 |
+| 0.58 | 0.114 | 1.062 |
+| 0.58 + ENTER 0.34 | 0.097 | — |
+
+Smaller glyphs carry less ink and cover less span, so the floor and the extent both collapse and
+buying them back takes the exponent AND the step: three knobs, which is a refit and not a fix. Left
+at 0.3984, which is Apple's own number and the size approved by eye at a single crossing.
+
+The finding stands on its own: at the bottom of a crossing the reference's glyph is 12% smaller
+than ours, and no single constant closes that without opening two others.
