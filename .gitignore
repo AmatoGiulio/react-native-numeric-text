@@ -87,3 +87,9 @@ nitrogen/
 
 # local analysis media (screen recordings)
 docs/tune/
+
+# Ground-truth recordings. The iOS reference sets are kept on disk but never committed —
+# they are hundreds of MB of raw alpha planes. Only their extracted reference.json is tracked.
+artifacts/**/*.bin
+artifacts/**/*.png
+artifacts/**/*.mp4

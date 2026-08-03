@@ -110,7 +110,7 @@ internal class NumericRollEngine {
      * the reference's mid-crossing glyphs are unreadable clouds. `NumericTextConfiguration` storing
      * its blur as a single number with no axis fits that reading.
      */
-    const val BLUR_FRACTION = 0.25f
+    const val BLUR_FRACTION = 0.42f
 
     /**
      * How far `animationDuration` may stretch or compress the spring. NOT a parity constant.
