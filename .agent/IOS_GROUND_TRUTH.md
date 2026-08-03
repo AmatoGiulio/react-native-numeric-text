@@ -984,32 +984,46 @@ Correction to the previous entry: the gap and the glyph-size difference are NOT 
 is cadence-dependent (0.756 at 60 ms, 1.362 at 240) and belongs with the overlap signatures; the
 size difference is flat at 1.14 across every cadence and does not.
 
-## Overlapping transitions, implemented — two signatures of three, 2026-08-03
+## The roll is a DRUM, not a sliding strip — 2026-08-03
 
-A handover landing while the column is still moving now hands the glyph it supersedes to a
-traveller that keeps its velocity, coasts, and fades on its own clock. A handover from REST spawns
-nothing, so the single crossing is untouched — it measured 0.031 before and after, every step of
-the way.
+Told, not measured: think of the roll as a regular decagon, ten digits on ten faces, turning. Two
+adjacent faces are visible at once because a solid turns; it is not a question of blur or fade.
 
-Two attempts were needed, and the first is the instructive one:
+That single idea accounts for three things this engine could not produce and hours went into
+chasing separately:
 
-| | peak | ink | middle/ends | single |
+- **the gap** — adjacent faces meet at an edge and tilt away from each other, so the digits are
+  separated by real geometry;
+- **the shrink** — a tilted face is foreshortened by cos(angle), a VERTICAL squash rather than the
+  uniform scale we apply, which is why the reference's glyphs measure 12% shorter at the bottom of
+  a crossing and no uniform SCALE_AMOUNT closed it;
+- **both digits present at once**, which a turning solid does and a cross-fade only imitates.
+
+The arithmetic supports it. For a decagon whose face is one glyph high the apothem is
+1/(2 tan 18°) = 1.539 glyph heights, and at mid-turn the two visible faces sit
+2 x 1.539 x sin(18°) = 0.951 apart. The reference measures **0.876**.
+
+### Implemented, measured, and reverted
+
+`offsetY = APOTHEM x sin(turn)`, `squash = cos(turn)` applied to the vertical scale only, four
+stops considered instead of two.
+
+| | separation | middle/ends | peak | single crossing |
 |---|---|---|---|---|
-| before | 0.581 | 0.470 | 1.513 | 0.031 |
-| travellers | **0.816** | — | 1.371 | 0.031 |
-| travellers + normalised | **0.333** | **0.310** | 1.347 | 0.031 |
-| **reference** | **0.317** | **0.322** | **0.756** | — |
+| strip (current) | 0.612 | 1.513 | 0.581 | **0.031** |
+| drum, apothem 1.539 | 1.445 | 0.258 | 0.504 | 0.421 |
+| drum, apothem 0.93 | 0.986 | **0.849** | 0.501 | 0.181 |
+| **reference** | **0.876** | **0.756** | **0.317** | — |
 
-Travellers alone spread the ink and made it BRIGHTER — 0.581 to 0.816 — because adding layers adds
-opacity while the reference loses it. Dividing the whole composition by what else is alive in it
-lands the opacity almost exactly: 0.333 against 0.317, and 0.310 against 0.322.
+**It produces the gap, which nothing else has.** From 1.513 to 0.849 against the reference's 0.756,
+and a separation within 0.11 of it — the first time either has moved at all.
 
-That is the piece the SETTLE_KNOCK route could not reach. It saturated at 0.498 no matter how hard
-it was pushed; conservation gets there in one step, because the mechanism is not a cap but a
-division.
+And it costs the single crossing: extent error 0.037 to 0.338, headline 0.031 to 0.181. The drum
+separates the pair far more than a 0.32 step even in one change, and the reference's single crossing
+is narrow. Both are set by the same geometry, so the crossing's opacity and blur have to be refitted
+around the new offsets rather than kept — a session's work, not a patch, so it was reverted rather
+than left as a 6x regression.
 
-**The gap is not closed.** 1.513 to 1.347, against 0.756. Letting the travellers run further —
-0.45 s at drag 1.5 instead of 0.30 at 4.0 — buys 1.347 to 1.228 and overshoots the opacity to 0.260,
-so it was not kept. Our two main lobes are one step apart and together they fill the centre; the
-reference's are 0.876 glyph heights apart. Something still has to separate the PAIR, not just trail
-copies behind it.
+**Do not fit APOTHEM alone next time.** The order that follows from the above: fix the drum
+geometry, then re-fit the alpha curves and the blur against the single crossing, then check the
+alternation. The strip's STEP_FRACTION disappears — it is replaced by the apothem.

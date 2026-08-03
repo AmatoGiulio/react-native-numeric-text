@@ -159,33 +159,6 @@ internal class NumericRollEngine {
     private const val SETTLE_RESPONSE_SECONDS = 0.22f
 
 
-    /**
-     * How long a superseded glyph keeps living once it has been handed to [Departed], in seconds,
-     * and how fast it coasts to a stop.
-     *
-     * Fitted against the alternation, where longer travellers spread the ink further but thin the
-     * whole composition, since everything is divided by what else is alive:
-     *
-     *   0.30 s, drag 4.0   peak 0.333  ink 0.310  middle/ends 1.347
-     *   0.45 s, drag 1.5   peak 0.260  ink 0.265  middle/ends 1.228
-     *   reference          peak 0.317  ink 0.322  middle/ends 0.756
-     *
-     * The first lands the opacity almost exactly and the second overshoots it to buy a little of
-     * the gap, so the first is kept. The gap is not closed by either.
-     */
-    private const val DEPART_SECONDS = 0.30f
-    private const val DEPART_DRAG = 4.0f
-
-    /**
-     * The composition is normalised by how much is alive in it.
-     *
-     * Handing superseded glyphs to travellers spreads the ink, which is what the reference does,
-     * but adding layers ADDS opacity while the reference LOSES it: measured, the peak went 0.581 to
-     * 0.816 where the reference sits at 0.317. So the total has to be conserved rather than summed
-     * — every glyph is divided by what else is on screen.
-     */
-    private const val CROWD_WEIGHT = 1.0f
-
     /** Rest thresholds. Not tuning — they decide when to stop asking for frames. */
     private const val POSITION_EPSILON = 0.001f
     private const val VELOCITY_EPSILON = 0.005f
@@ -193,32 +166,6 @@ internal class NumericRollEngine {
 
   /** A stop this column will move to once [remaining] seconds have passed. */
   private class PendingStop(val stop: Int, var remaining: Float)
-
-  /**
-   * A glyph that has been superseded while the column was still moving, and now travels on its own.
-   *
-   * The strip carries exactly two glyphs, one per adjacent stop, so the ink it can produce never
-   * spans more than one step however the target moves. Measured under a 60 ms alternation, the
-   * reference spreads its pair 0.876 glyph heights apart against our 0.612, and the direction is
-   * opposite — against its own slow cadence it WIDENS and we narrow. That is the shape of several
-   * transitions alive at once, each at its own point along the roll, and a two-stop strip cannot
-   * make it at any setting.
-   *
-   * So a handover that lands while the column is already moving hands the glyph it supersedes to
-   * this list, where it keeps the velocity it had and coasts, fading on its own clock instead of
-   * being culled the moment the strip moves on. A handover from REST spawns nothing: there the
-   * strip's own two stops are the whole picture, which is the single-crossing behaviour that is
-   * already fitted.
-   */
-  private class Departed(
-    val ch: String,
-    /** Offset from the column's rest line, in stops. */
-    var offset: Float,
-    /** Stops per second. */
-    var velocity: Float,
-    /** 1 at birth, 0 when it should be dropped. */
-    var life: Float,
-  )
 
   private class Column(
     val key: String,
@@ -253,9 +200,6 @@ internal class NumericRollEngine {
      * where it is, so a glyph on screen is still never restarted.
      */
     val pending = ArrayDeque<PendingStop>()
-
-    /** Glyphs superseded mid-flight, travelling and fading on their own. See [Departed]. */
-    val departed = ArrayDeque<Departed>()
 
     var settle = 1f
     var settleVelocity = 0f
@@ -386,7 +330,6 @@ internal class NumericRollEngine {
       val column = entry.value
       column.pending.lastOrNull()?.let { column.target = it.stop }
       column.pending.clear()
-      column.departed.clear()
       column.position = column.target.toFloat()
       column.velocity = 0f
       column.settle = 1f
@@ -435,17 +378,8 @@ internal class NumericRollEngine {
         var arrived = false
         for (entry in column.pending) entry.remaining -= dt
         while (column.pending.isNotEmpty() && column.pending.first().remaining <= 0f) {
-          val leaving = column.target
           column.target = column.pending.removeFirst().stop
           arrived = true
-          if (!wasAtRest) {
-            // Superseded mid-flight: hand it over rather than let the strip cull it.
-            column.charAt[leaving]?.let {
-              column.departed.addLast(
-                Departed(it, leaving - column.position, column.velocity, 1f)
-              )
-            }
-          }
         }
         if (arrived && wasAtRest) {
           // The follower starts a fresh run only when the column was actually at rest. Springing
@@ -457,18 +391,6 @@ internal class NumericRollEngine {
           column.settleVelocity = 0f
         }
         active = true
-      }
-
-      if (column.departed.isNotEmpty()) {
-        val travellers = column.departed.iterator()
-        while (travellers.hasNext()) {
-          val d = travellers.next()
-          d.offset += d.velocity * dt
-          d.velocity -= d.velocity * min(1f, DEPART_DRAG * dt)
-          d.life -= dt / DEPART_SECONDS
-          if (d.life <= 0f) travellers.remove()
-        }
-        if (column.departed.isNotEmpty()) active = true
       }
 
       if (stepPosition(column, response, dt)) active = true
@@ -497,10 +419,6 @@ internal class NumericRollEngine {
         continue
       }
 
-      // What else is on screen for this column, so the whole composition can be divided by it.
-      var crowd = 1f
-      for (d in column.departed) crowd += CROWD_WEIGHT * d.life
-
       val lowest = floor(column.position).toInt()
       for (stop in lowest..lowest + 1) {
         val distance = abs(stop - column.position)
@@ -528,31 +446,11 @@ internal class NumericRollEngine {
         // two stops gives both the same blend, with nothing left to swap.
         val exponent =
           EXIT_ALPHA_EXPONENT + (ENTER_ALPHA_EXPONENT - EXIT_ALPHA_EXPONENT) * presence
-        val alpha = pow(opacity, exponent) * column.alive / crowd
+        val alpha = pow(opacity, exponent) * column.alive
         if (alpha <= 0.01f) continue
 
         val ch = column.charAt[stop] ?: continue
         out.add(sample(column, ch, stop, distance, alpha, stepPx))
-      }
-
-      for (d in column.departed) {
-        val distance = min(1f, abs(d.offset))
-        val alpha = pow(d.life, EXIT_ALPHA_EXPONENT) * column.alive / crowd
-        if (alpha <= 0.01f) continue
-        out.add(
-          GlyphSample(
-            key = column.key,
-            ch = d.ch,
-            kind = column.kind,
-            role = GlyphRole.EXIT,
-            x = column.x,
-            offsetY = d.offset * stepPx,
-            alpha = alpha.coerceIn(0f, 1f),
-            scale = 1f - SCALE_AMOUNT * distance,
-            blurLengthPx = lineHeightPx * BLUR_FRACTION * distance,
-            stable = false,
-          )
-        )
       }
     }
     return out
