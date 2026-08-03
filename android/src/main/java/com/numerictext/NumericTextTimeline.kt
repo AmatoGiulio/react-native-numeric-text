@@ -112,7 +112,24 @@ internal class NumericRollEngine {
      */
     const val BLUR_FRACTION = 0.42f
 
-    /** APPLE — `NumericTextConfiguration.maxDurationMultiple`. Caps how far the spring may stretch. */
+    /**
+     * How far `animationDuration` may stretch or compress the spring. NOT a parity constant.
+     *
+     * The number is Apple's `NumericTextConfiguration.maxDurationMultiple`, but it is not being
+     * used for what Apple uses it for, and it cannot be measured against the reference: SwiftUI's
+     * `.numericText()` is a spring with no duration to set, so `animationDuration` does nothing on
+     * iOS and this library says so in NumericTextSwiftUIHost's header. The prop scales Android's
+     * springs alone.
+     *
+     * So this bounds a knob that only one platform has. 1.25 is a defensible bound and an
+     * arbitrary one; do not report it as measured, and do not fit it — there is nothing to fit it
+     * against.
+     *
+     * What Apple's own constant governs is untested and worth testing separately: whether the
+     * reference's total duration grows with the number of changing columns or saturates. The wave
+     * is already a fixed 0.15 s total however many columns move (`WAVE_TOTAL_SECONDS`), so the
+     * question is whether the spring underneath it stretches too.
+     */
     const val MAX_DURATION_MULTIPLE = 1.25f
 
     /**
