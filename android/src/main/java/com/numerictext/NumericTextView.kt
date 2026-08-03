@@ -3,6 +3,7 @@ package com.numerictext
 import android.annotation.SuppressLint
 import android.content.Context
 import android.graphics.BlendMode
+import android.graphics.BlurMaskFilter
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.LinearGradient
@@ -142,6 +143,7 @@ class NumericTextView(context: Context) : View(context), Choreographer.FrameCall
   }
   private var edgeFadeGradient: LinearGradient? = null
   private var edgeFadeMaskPaint: Paint? = null
+  private val softwareBlurCache = HashMap<Int, BlurMaskFilter>()
   private var lastFadeWidth = -1
   private var lastFadeHeight = -1
 
@@ -229,13 +231,13 @@ class NumericTextView(context: Context) : View(context), Choreographer.FrameCall
   }
 
   /**
-   * The directional blur, for canvases that cannot run the shader.
+   * The same isotropic blur for canvases that cannot take a RenderEffect.
    *
-   * Drawn as the shader's own nine taps along the vertical axis rather than with a BlurMaskFilter,
-   * which is isotropic and therefore smears sideways as well. That difference is not academic: the
-   * ground-truth recorder draws through a software canvas, so every comparison against iOS was
-   * putting a round blur next to the reference's vertical one and reading the result as "our
-   * crossing is mushier". It is the same reason a device without a hardware canvas looked wrong.
+   * BlurMaskFilter is exactly a 2D gaussian on the glyph's coverage, which is what is wanted here;
+   * the nine- and then seventeen-tap directional version this replaces was solving the wrong
+   * problem. The ground-truth recorder draws through a software canvas, so this is also the path
+   * every measurement is taken through — it has to match the RenderEffect above, not approximate
+   * something else.
    */
   private fun drawGlyphSoftware(
     canvas: Canvas,
@@ -246,44 +248,24 @@ class NumericTextView(context: Context) : View(context), Choreographer.FrameCall
   ) {
     val left = x - advanceOf(sample.ch) / 2f
     val y = baseline + sample.offsetY
-    val trail = sample.blurLengthPx * 1.5f * sample.direction
+
+    textPaint.alpha = alpha
+    textPaint.maskFilter =
+      if (sample.stable || sample.blurLengthPx < BLUR_MIN_PX) {
+        null
+      } else {
+        val bucket = (sample.blurLengthPx * BLUR_RADIUS_FACTOR * 2f).roundToInt().coerceIn(1, 120)
+        softwareBlurCache.getOrPut(bucket) {
+          BlurMaskFilter(bucket / 2f, BlurMaskFilter.Blur.NORMAL)
+        }
+      }
 
     canvas.save()
     canvas.scale(sample.scale, sample.scale, x, y)
-    // Below half a pixel of trail, draw sharp — the same threshold the hardware path uses. Nine
-    // taps perfectly overlapped composite to about 64% of full opacity, not 100%, so taking the
-    // blur path for a glyph that has all but stopped left it permanently dim and back-to-full
-    // never arrived: it read 600 ms against the reference's 420.
-    if (abs(trail) < 0.75f || sample.stable) {
-      textPaint.alpha = alpha
-      canvas.drawText(sample.ch, left, y, textPaint)
-    } else {
-      // Through a layer, so the taps blend with each other once and the glyph's own alpha is
-      // applied to the result. Drawing them straight onto the canvas composites nine times over,
-      // which reads as a glyph that will not finish resolving — it pushed back-to-full from 420 ms
-      // to 600.
-      // Through a layer, with the taps ADDED rather than drawn over each other. Over-drawing is
-      // not what a blur does: nine taps perfectly overlapped composite to about 64% of full
-      // opacity, so the crossing came out a fifth too faint — floor 0.365 against the reference's
-      // 0.428. Added, the weights sum to 1.0 and a still glyph is exactly itself, which is what
-      // the shader computes.
-      // Tight around this glyph plus its trail. A loose rect reaches over the neighbouring columns,
-      // and the layer's own compositing then shows up on digits that are not moving at all — the
-      // unchanging column read 0.799 of its settled ink instead of 1.000.
-      val w = advanceOf(sample.ch)
-      val pad = abs(trail) + textHeightPx * 0.5f
-      canvas.saveLayerAlpha(left - pad, y - textHeightPx - pad, left + w + pad, y + pad, alpha)
-      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) textPaint.blendMode = BlendMode.PLUS
-      for (i in BLUR_TAPS.indices step 2) {
-        textPaint.alpha = (255f * BLUR_TAPS[i + 1]).roundToInt().coerceIn(0, 255)
-        if (textPaint.alpha > 0) {
-          canvas.drawText(sample.ch, left, y + BLUR_TAPS[i] * trail, textPaint)
-        }
-      }
-      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) textPaint.blendMode = null
-      canvas.restore()
-    }
+    canvas.drawText(sample.ch, left, y, textPaint)
     canvas.restore()
+
+    textPaint.maskFilter = null
     textPaint.alpha = 255
   }
 
@@ -334,32 +316,16 @@ class NumericTextView(context: Context) : View(context), Choreographer.FrameCall
     canvas.drawRenderNode(node)
   }
 
-  @SuppressLint("NewApi")
-  private fun effectFor(lengthPx: Float, direction: Float): RenderEffect? {
-    if (lengthPx < 0.5f) return null
-    // The directional (shutter) blur needs a runtime shader, which is API 33. Restoring this file
-    // from 8cc89a5 brought back a WIP state where this guard had been deleted and its closing brace
-    // left behind, so the function ended early and the companion object below it never parsed.
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-      val lengthBucket = (lengthPx * 3f).roundToInt().coerceIn(1, 96)
-      val directionBucket = if (direction < 0f) -1 else 1
-      val key = lengthBucket * directionBucket
-      return directionalEffectCache.getOrPut(key) {
-        val shader = RuntimeShader(DIRECTIONAL_BLUR_SHADER)
-        shader.setFloatUniform("trail", lengthBucket / 2f)
-        shader.setFloatUniform("direction", directionBucket.toFloat())
-        RenderEffect.createRuntimeShaderEffect(shader, "content")
-      }
-    }
 
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-      val bucket = (lengthPx * 4f).roundToInt().coerceIn(1, 40)
-      return gaussianEffectCache.getOrPut(bucket) {
-        val ry = bucket / 4f
-        RenderEffect.createBlurEffect(ry * NumericRollEngine.BLUR_X_FACTOR, ry, Shader.TileMode.DECAL)
-      }
+  @SuppressLint("NewApi")
+  private fun effectFor(lengthPx: Float, @Suppress("UNUSED_PARAMETER") direction: Float): RenderEffect? {
+    if (lengthPx < BLUR_MIN_PX) return null
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return null
+    val bucket = (lengthPx * BLUR_RADIUS_FACTOR * 2f).roundToInt().coerceIn(1, 120)
+    return gaussianEffectCache.getOrPut(bucket) {
+      val radius = bucket / 2f
+      RenderEffect.createBlurEffect(radius, radius, Shader.TileMode.DECAL)
     }
-    return null
   }
 
   override fun doFrame(frameTimeNanos: Long) {
@@ -671,61 +637,10 @@ class NumericTextView(context: Context) : View(context), Choreographer.FrameCall
   }
 
   companion object {
-    /**
-     * Offset, weight — the blur kernel, shared by the shader and the software path.
-     *
-     * Seventeen rather than nine. Nine is enough for a short trail and visibly banded on a long
-     * one: the frame grid showed the individual copies as stripes across the glyph while the
-     * reference's smear was smooth, which reads as a crossing that is somehow both blurrier and
-     * more mechanical than iOS's.
-     */
-    private val BLUR_TAPS = floatArrayOf(
-      -0.5000f, 0.0029f,
-      -0.4375f, 0.0072f,
-      -0.3750f, 0.0159f,
-      -0.3125f, 0.0308f,
-      -0.2500f, 0.0530f,
-      -0.1875f, 0.0808f,
-      -0.1250f, 0.1092f,
-      -0.0625f, 0.1308f,
-      +0.0000f, 0.1389f,
-      +0.0625f, 0.1308f,
-      +0.1250f, 0.1092f,
-      +0.1875f, 0.0808f,
-      +0.2500f, 0.0530f,
-      +0.3125f, 0.0308f,
-      +0.3750f, 0.0159f,
-      +0.4375f, 0.0072f,
-      +0.5000f, 0.0029f,
-    )
+    /** Below this the glyph is drawn sharp — a sub-pixel blur is cost without an effect. */
+    private const val BLUR_MIN_PX = 0.75f
 
-    private const val DIRECTIONAL_BLUR_SHADER = """
-      uniform shader content;
-      uniform float trail;
-      uniform float direction;
-
-      half4 main(float2 p) {
-        float2 axis = float2(0.0, direction * trail);
-        half4 c = half4(0.0);
-        c += content.eval(p + axis * -0.5000) * 0.0029;
-        c += content.eval(p + axis * -0.4375) * 0.0072;
-        c += content.eval(p + axis * -0.3750) * 0.0159;
-        c += content.eval(p + axis * -0.3125) * 0.0308;
-        c += content.eval(p + axis * -0.2500) * 0.0530;
-        c += content.eval(p + axis * -0.1875) * 0.0808;
-        c += content.eval(p + axis * -0.1250) * 0.1092;
-        c += content.eval(p + axis * -0.0625) * 0.1308;
-        c += content.eval(p + axis * +0.0000) * 0.1389;
-        c += content.eval(p + axis * +0.0625) * 0.1308;
-        c += content.eval(p + axis * +0.1250) * 0.1092;
-        c += content.eval(p + axis * +0.1875) * 0.0808;
-        c += content.eval(p + axis * +0.2500) * 0.0530;
-        c += content.eval(p + axis * +0.3125) * 0.0308;
-        c += content.eval(p + axis * +0.3750) * 0.0159;
-        c += content.eval(p + axis * +0.4375) * 0.0072;
-        c += content.eval(p + axis * +0.5000) * 0.0029;
-        return c;
-      }
-    """
+    /** Gaussian radius per unit of the engine's blur length. */
+    private const val BLUR_RADIUS_FACTOR = 0.5f
   }
 }
