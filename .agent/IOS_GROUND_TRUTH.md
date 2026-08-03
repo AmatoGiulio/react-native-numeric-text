@@ -1027,3 +1027,50 @@ than left as a 6x regression.
 **Do not fit APOTHEM alone next time.** The order that follows from the above: fix the drum
 geometry, then re-fit the alpha curves and the blur against the single crossing, then check the
 alternation. The strip's STEP_FRACTION disappears — it is replaced by the apothem.
+
+## Correcting the constants: the public path is not the one I read — 2026-08-03
+
+The API surface is larger than the stored-property list I reported. The BUILDERS are:
+
+```
+axis(Axis)   blur(radius: CGFloat)   delay(Double)   relativeOffset(CGFloat)
+reversed(Bool)   scale(CGFloat)   static automatic(value: Double)   static fixed(downwards: Bool)
+```
+
+Three corrections, in order of how much they matter.
+
+**1. The blur default is 0.25 RELATIVE, not 8.0 absolute.** All day this file said `options` defaults
+to 0, so the `relativeBlur` flag is off, so byte 9 reads as 32/4 = 8.0 points. That came from
+`init(direction:axis:options:)`, whose `options` argument defaults to 0 — but that is not the path
+an app takes. `.numericText(value:)` and `.numericText(countsDown:)` are `automatic(value:)` and
+`fixed(downwards:)`, and both write their defaults from a DIFFERENT constant, at 0xbf5780:
+
+| byte | value | meaning |
+|---|---|---|
+| 5 | 2 | direction |
+| 6 | **2** | options — **relativeBlur SET** |
+| 7 | 18 | delay 0.15 s |
+| 8 | 51 | scale 0.3984 |
+| 9 | 32 | **blur = 32/128 = 0.25, relative** |
+| 10 | 19 | offset 0.59375 |
+
+**2. `relativeOffset` is a builder, not a second field.** `relativeOffset(x)` multiplies by 32,
+clamps to a SIGNED Int8 and writes byte 10 — the same byte `offset` reads with the same divisor.
+One field, two names. There is no hidden second offset that could grow under alternation, which is
+what the previous entry suggested looking for. It is worth knowing what the name says, though: the
+stored offset is RELATIVE, which had been an assumption.
+
+**3. `blur(radius:)` multiplies by 4 and CLEARS the relativeBlur bit**, which is the other half of
+the same byte-9 story: one byte, one flag, two readings.
+
+Measured with BLUR_FRACTION at Apple's 0.25 instead of the fitted 0.42:
+
+| | floor | extent | headline |
+|---|---|---|---|
+| decrement 0.42 | 0.025 | 0.037 | 0.031 |
+| decrement **0.25** | **0.015** | 0.050 | 0.033 |
+| increment 0.42 | 0.028 | 0.032 | 0.030 |
+| increment **0.25** | 0.022 | 0.036 | **0.029** |
+
+A wash on the headline and a clear gain on the floor. 0.42 was fitted when the blur was still
+directional and the software path drew it wrongly, so it was compensating for a different render.
