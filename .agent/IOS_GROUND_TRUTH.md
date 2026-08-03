@@ -823,3 +823,28 @@ is just having more time — but only the reference darkens when its transitions
 **Supported, not proven.** An opacity capped by how long the target has been stable would fit the
 same three points. What is ruled out is any explanation that does not depend on overlap, since
 without overlap the two agree to two decimals.
+
+## The glyphs are smaller in the reference — and it is not the overlap, 2026-08-03
+
+Reported from watching a fast 0→1: the reference seems to shrink its digits further than we do
+mid-crossing. It does. Width at half the frame's own peak, over the settled glyph's width:
+
+| | iOS | android | ratio |
+|---|---|---|---|
+| single crossing floor | 0.842 | 0.898 | **1.066** |
+| alternation ~63 ms | 0.582 | 0.665 | **1.143** |
+| alternation ~117 ms | 0.604 | 0.696 | **1.152** |
+| alternation ~240 ms | 0.687 | 0.783 | **1.140** |
+
+We are wider — shrinking less — everywhere. But the gap is FLAT across cadence, 1.14 at all three,
+including the 240 ms case where the opacity ratios agreed to two decimals. So this is not the
+overlap mechanism; it is a second, independent difference.
+
+The threshold works against this conclusion, which strengthens it: measuring width at half of each
+frame's own peak inflates the width of a fainter render, and the reference is the fainter one. It
+still measures narrower.
+
+SCALE_AMOUNT is already Apple's own 0.3984 and was approved by eye at a single crossing, so the
+residual is not the constant. Two candidates, untested: the scale is applied to a different box
+than the one SwiftUI applies it to, or its scale depends on something beyond the distance to the
+stop — sustained motion doubles the gap, from 6.6% to 14%.
