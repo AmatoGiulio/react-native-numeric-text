@@ -19,6 +19,7 @@ quantised to 10 ms, so real time is approximate and anything under 3x is hard to
 """
 
 import glob
+import json
 import os
 import sys
 
@@ -30,6 +31,26 @@ from ground_truth import load, ink_box, columns_of  # noqa: E402
 from grid import IOS, burst_mark, header  # noqa: E402
 
 ROW = 190
+
+
+def direction_of(meta):
+    """+1 if the run's value rises, -1 if it falls, 0 if it cannot be read.
+
+    From the MARK LABELS, not from the capture's `countsDown` field: that field reads True on runs
+    that plainly increment — 1,000 to 2,722 is stored with countsDown=True — so a check built on it
+    would never fire and would be a guard that only looks like one.
+    """
+    marks = meta.get("marks", [])
+    if len(marks) < 2:
+        return 0
+    try:
+        first = float(marks[0]["label"].replace(",", ""))
+        last = float(marks[-1]["label"].replace(",", ""))
+    except (KeyError, ValueError, AttributeError):
+        return 0
+    if last == first:
+        return 0
+    return 1 if last > first else -1
 
 
 def frames_at(prefix, stamps, column=None, mark=1):
@@ -89,6 +110,29 @@ def main():
     runs = sorted(glob.glob(os.path.join(android_dir, "*.json")))
     if not runs:
         print("no runs in", android_dir)
+        return 1
+
+    # The two rows must be the SAME transition, and nothing else here checks it.
+    #
+    # `--ios` defaults to the single crossing, so `--mark=burst` on a roll silently put the
+    # reference's ONE change beside fourteen of ours and the sheet read as a comparison. Two of
+    # those were handed over before anyone noticed. A change count that disagrees by more than a
+    # couple is not a defect in the engine, it is two different presets.
+    ios_meta = json.load(open(f"{ios}.json"))
+    and_meta = json.load(open(runs[-1]))
+    ios_marks, and_marks = len(ios_meta.get("marks", [])), len(and_meta.get("marks", []))
+    why = []
+    ios_dir, and_dir = direction_of(ios_meta), direction_of(and_meta)
+    if ios_dir and and_dir and ios_dir != and_dir:
+        name = {1: "incrementa", -1: "decrementa"}
+        why.append(f"vanno in DIREZIONI OPPOSTE — iOS {name[ios_dir]}, android {name[and_dir]}")
+    if abs(ios_marks - and_marks) > 2:
+        why.append(f"hanno un numero di cambi diverso — iOS {ios_marks}, android {and_marks}")
+    if why:
+        origin = "il default" if "--ios" not in flags else "quello che hai passato"
+        print("i due lati non sono la stessa transizione: " + "; ".join(why) + ".")
+        print(f"   il lato iOS e' {ios} ({origin}).")
+        print("   Passa --ios=<prefisso> della corsa iOS che fa la STESSA cosa dell'android.")
         return 1
 
     stamps = list(np.arange(start, end, step))
