@@ -334,6 +334,34 @@ The band moves with it and mostly for the better: 60 ms 0.730 → 0.820 against 
 | flattening the alpha exponent too — the product's third term, worth 1.33 | balance improves as predicted and travel goes 0.29 → 0.43 against the reference's 0.119, on both runs. The two exponents are what give the arriver and the leaver different curves; removing that makes the pair hand over faster rather than more evenly. Reverted |
 | levelling the shrink onto the pair's own mid-distance instead of onto 1 — "even AND small" | width 0.907 → 0.855, roll travel 0.305 → **0.190** and roll balance 0.101 → **0.056** against the reference's 0.052, nearly exact. And roll tail 636 → **920 ms** against 615, sharpness 0.603 → 0.649, band 0.820 → 0.592. Reverted, but it is a FORK and not a dead end |
 
+### The size and the gap, fitted together
+
+`EVEN_SHRINK_AT` levels both glyphs onto ONE distance for the purpose of the shrink, and
+`CROWD_SPREAD` sets how far the drum opens. They are one visual outcome — how big contending glyphs
+are and how far apart they look — so they were fitted as a pair over four rounds:
+
+| level | spread | band 60 | width alt | roll travel | roll tail |
+|---|---|---|---|---|---|
+| →1 | 1.77 | 0.820 | 0.907 | 0.305 | 636 ms |
+| 0.50 | 1.77 | 0.592 | 0.855 | **0.190** | 920 ms |
+| 0.75 | 1.40 | 0.621 | **0.802** | 0.519 | 628 ms |
+| **0.75** | **1.00** | **0.776** | 0.806 | 0.462 | 636 ms |
+| 0.50 | 1.00 | 0.936 | 0.855 | 0.481 | 636 ms |
+| reference | | 0.760 | 0.779 | 0.119 | 615 ms |
+
+**0.75 / 1.00 is kept.** It lands the band at 0.776 against 0.760 and the width at 0.806 against
+0.779 — both essentially the reference — and it is 0.34 out on the roll's travel. The corner that
+reaches the roll's travel, 0.50 / 1.77, is 0.17 out on the band and drags the tail to 920 ms. No
+corner of the square is both.
+
+That is the same split this file records everywhere else, in its sharpest form yet: **the fast
+alternation and the continuous roll want opposite settings from the same two knobs.** The reference
+does not have to choose, so one of the two regimes is being produced by something this engine does
+not have. One measurement points at where: the reference's ink is 0.779 of a settled glyph wide
+under an alternation and 0.969 through a roll — it shrinks hard when a column oscillates in place
+and barely at all when it travels — while `crowd` cannot tell those two apart. A signal that
+distinguishes oscillation from travel is the next thing to look for.
+
 ### The fork worth taking next
 
 Levelling the shrink onto the pair's mid-distance is the only thing tried that reaches the

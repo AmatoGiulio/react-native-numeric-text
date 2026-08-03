@@ -27,7 +27,7 @@ Under a fast alternation, the middle band between the two digits:
 | | 60 ms | 120 ms | 240 ms |
 |---|---|---|---|
 | reference | 0.760 | 1.460 | 1.292 |
-| android | 0.820 | **1.474** | 1.281 |
+| android | **0.776** | 1.334 | — |
 
 And the continuous roll, 14 changes 30 ms apart: sharpness 0.603 against 0.600, tail 636 ms against
 615.
@@ -43,8 +43,8 @@ barely moves. Halved, not closed. It is visible by eye on a side-by-side GIF and
 | | travel iOS / android | balance iOS / android | width iOS / android |
 |---|---|---|---|
 | single crossing | 0.163 / 0.165 | 0.072 / 0.061 | 0.900 / 0.912 |
-| alternation 60 ms | 0.103 / 0.226 | 0.058 / 0.104 | **0.779 / 0.907** |
-| continuous roll | 0.119 / 0.305 | 0.052 / 0.101 | 0.969 / 0.959 |
+| alternation 60 ms | 0.103 / 0.247 | 0.058 / 0.083 | 0.779 / **0.806** |
+| continuous roll | 0.119 / **0.462** | 0.052 / 0.118 | 0.969 / 0.860 |
 
 Balance is a standard deviation, not a peak-to-peak: the peak-to-peak on these same captures said
 0.19 against 0.39 and was set by a handful of extreme frames. Frame by frame the reference sits at
@@ -173,6 +173,17 @@ All three are zero at rest, which is why the single crossing has not moved since
    is exactly the worst frame measured. Two of the three terms are now levelled by the chase. The
    third, the alpha exponent at 1.33, was tried and reverted: it does improve the balance and it
    costs the travel, 0.29 out to 0.43. What remains after that is the drum's own `cos`, worth 1.13.
+
+   The alternation is now essentially the reference on both the band, 0.776 against 0.760, and the
+   glyph width, 0.806 against 0.779 — and the CONTINUOUS ROLL is what pays for it, travel 0.462
+   against 0.119. The two regimes want opposite corners of the same two knobs; the square of four
+   rounds is in the ground truth, and no corner is both.
+
+   The lead out of that is one measurement: the reference's ink is 0.779 of a settled glyph wide
+   under an alternation and 0.969 through a roll. It shrinks hard when a column oscillates in place
+   and barely at all when it travels, and `crowd` cannot tell those apart — it only counts changes
+   arriving. **Find a signal that distinguishes oscillating from travelling** and both corners are
+   reachable at once.
 
    The residual HAS been compared frame by frame now, and it is roughly the reference's shape —
    see the ground truth. So the balance is closer than the old metric said, and what is actually

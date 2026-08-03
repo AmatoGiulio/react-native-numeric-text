@@ -148,8 +148,14 @@ internal class NumericRollEngine {
      * cutoff behaving. Reading 1.009 back through the fixed-apothem sweep puts the effective
      * apothem at ~0.853, so `crowd` averages 0.50 over a run rather than saturating, and the
      * apothem the 60 ms band wants is ~1.05: 1.77 is that, at the same average.
+     *
+     * Refitted to 1.40 once the pair was drawn even and small. Levelling the shrink empties the
+     * space between the two glyphs further on its own — the middle band went past the reference to
+     * 0.592 against 0.760 — so the drum no longer needs to open as wide to produce the gap. The two
+     * were fitted together because they are one visual outcome: how far apart contending glyphs
+     * look.
      */
-    const val CROWD_SPREAD = 1.77f
+    const val CROWD_SPREAD = 1.00f
 
     /**
      * The chase signal, and why it is a threshold rather than a decay.
@@ -197,6 +203,21 @@ internal class NumericRollEngine {
      */
     private const val CROWD_EVEN = 2.00f
     private const val EVEN_LEVEL = 0.5f
+
+    /**
+     * The distance BOTH glyphs are given for the purpose of the shrink while the column is chased.
+     *
+     * Levelling the shrink towards 1 — no shrink at all — made the pair even and too BIG, which is
+     * the opposite of the reference. Its ink is 0.779 of a settled glyph wide under a 60 ms
+     * alternation and 0.877 through a roll; this engine read 0.907 and 0.955. Reported by eye, as
+     * the reference's contending glyphs looking smaller than ours and blurred by the same amount.
+     *
+     * So both are levelled onto one distance and that distance is past the pair's own average. At
+     * 0.5, `1 - SCALE_AMOUNT * 0.5` is 0.801 and the ink measured 0.855 — the blur carries the rest
+     * of the width — so 0.75 is where the shrink itself has to sit for the ink to read the
+     * reference's 0.779. Even AND small.
+     */
+    private const val EVEN_SHRINK_AT = 0.75f
 
     /** APPLE — `NumericTextConfiguration.delay`, 18/120. TOTAL spread of the wave, not the gap. */
     const val WAVE_TOTAL_SECONDS = 0.15f
@@ -641,10 +662,12 @@ internal class NumericRollEngine {
     // The face's angle around the drum's axis. Signed, so a glyph above the front and one below it
     // are foreshortened alike but offset opposite ways.
     val angle = (stop - column.position) * FACE_ANGLE
-    // The shrink flattens as the chase rises. Area goes as the SQUARE of it, so at 0.8 against 0.2
-    // presence it alone hands the near glyph 2.1 times the far one's ink — the half of the
-    // imbalance that levelling the opacity cannot touch.
-    val shrink = 1f - SCALE_AMOUNT * distance * (1f - evenness(column))
+    // Both glyphs are pulled onto ONE distance as the chase rises — see EVEN_SHRINK_AT. Area goes
+    // as the square of the shrink, so at 0.8 against 0.2 presence it alone hands the near glyph 2.1
+    // times the far one's ink, the half of the imbalance levelling the opacity cannot touch. The
+    // level is past their average rather than at 1, so the pair comes out even AND small.
+    val even = evenness(column)
+    val shrink = 1f - SCALE_AMOUNT * (distance + (EVEN_SHRINK_AT - distance) * even)
     // Only the OFFSET widens with the chase. The foreshortening is the face's own angle and has
     // nothing to do with how big the drum is, which is the whole reason the two are separate.
     val apothem = APOTHEM * (1f + CROWD_SPREAD * column.crowd)
