@@ -96,6 +96,15 @@ internal class NumericRollEngine {
      * that has to hold up at any font size wants the relative reading, and 0.25 is what the
      * reference's own crossing looks like.
      *
+     * It follows the crossing's DISTANCE and not the glyph's speed, which is the opposite of what
+     * a motion blur would do and is what the reference measures as. A shutter term proportional to
+     * velocity was carried here for a while on the reasoning that a fast roll should smear more;
+     * once both platforms could be driven at one cadence it turned out to be simply wrong. The
+     * reference is SHARPER through a fast burst (0.60 of a settled glyph's edge) than at the floor
+     * of a single crossing (~0.45), because each crossing in a burst is short. With the shutter at
+     * 0.026 this engine measured 0.36 there, at 0.012 it measured 0.40, and with the term removed
+     * it measures 0.603 against the reference's 0.600.
+     *
      * It is isotropic — a defocus, not a smear along the roll. A directional blur preserves a
      * glyph's structure across its axis, so the digit stays readable and merely looks streaked;
      * the reference's mid-crossing glyphs are unreadable clouds. `NumericTextConfiguration` storing
@@ -132,16 +141,6 @@ internal class NumericRollEngine {
     /** MEASURED — opacity follower. Being fitted; the reference's opacity arrives at ~750 ms. */
     private const val SETTLE_RESPONSE_SECONDS = 0.22f
 
-    /**
-     * Shutter interval for the motion blur, in seconds.
-     *
-     * BLUR_FRACTION alone scales with DISTANCE, which is bounded by one stop, so a glyph tearing
-     * through a continuous roll defocused no more than one crossing at walking pace — the number
-     * stayed legible through a burst, which is the opposite of what a fast roll looks like. This
-     * term is the distance actually covered while the shutter is open: it grows with speed and
-     * vanishes at rest.
-     */
-    private const val SHUTTER_SECONDS = 0.026f
 
     /** Rest thresholds. Not tuning — they decide when to stop asking for frames. */
     private const val POSITION_EPSILON = 0.001f
@@ -436,13 +435,7 @@ internal class NumericRollEngine {
       offsetY = (stop - column.position) * stepPx,
       alpha = alpha.coerceIn(0f, 1f),
       scale = 1f - SCALE_AMOUNT * distance,
-      blurLengthPx =
-        if (settled) {
-          0f
-        } else {
-          lineHeightPx * BLUR_FRACTION * distance +
-            abs(column.velocity) * lineHeightPx * STEP_FRACTION * SHUTTER_SECONDS
-        },
+      blurLengthPx = if (settled) 0f else lineHeightPx * BLUR_FRACTION * distance,
       stable = settled,
     )
   }

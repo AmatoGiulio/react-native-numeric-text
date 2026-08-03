@@ -25,8 +25,26 @@ MARK = 1
 ROW_HEIGHT = 150
 
 
+def burst_mark(meta, gap=250.0):
+    """Index of the mark the burst starts on.
+
+    A preset resets the value before it runs, and that reset is itself a change — so it gets a mark
+    of its own on whichever platform was not already sitting on the starting value. Aligning two
+    recordings on mark 0 then compares one platform's roll against the other's idle second, which
+    is exactly the mistake that had me report a defect the engine did not have. The burst is the
+    first mark whose successor follows within `gap`.
+    """
+    marks = meta["marks"]
+    for i in range(len(marks) - 1):
+        if marks[i + 1]["t"] - marks[i]["t"] <= gap:
+            return i
+    return 0
+
+
 def strip(prefix, times, column=None, mark=MARK):
     meta, frames = load(prefix)
+    if mark == "burst":
+        mark = burst_mark(meta)
     y0, y1, x0, x1 = ink_box(frames)
     w = frames[:, y0:y1, x0:x1]
     rel = np.array(meta["times"]) - meta["marks"][mark]["t"]
@@ -66,8 +84,10 @@ def main():
     column = int(flags["--col"]) if "--col" in flags else None
     step = int(flags.get("--step", 50))
     ios = flags.get("--ios", IOS)
-    ios_mark = int(flags.get("--ios-mark", MARK))
-    and_mark = int(flags.get("--mark", MARK))
+    ios_mark = flags.get("--ios-mark", MARK)
+    and_mark = flags.get("--mark", MARK)
+    ios_mark = ios_mark if ios_mark == "burst" else int(ios_mark)
+    and_mark = and_mark if and_mark == "burst" else int(and_mark)
     times = list(range(0, 701, step))
 
     runs = sorted(glob.glob(os.path.join(android_dir, "*.json")))
