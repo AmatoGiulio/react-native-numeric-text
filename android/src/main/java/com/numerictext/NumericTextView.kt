@@ -109,6 +109,9 @@ class NumericTextView(context: Context) : View(context), Choreographer.FrameCall
 
   private fun hHeadroom(): Float = textHeightPx * 0.36f + 4f
 
+  /** The glyph's vertical middle, signed from its baseline. Negative: ascent is above it. */
+  private fun opticalCentre(): Float = (fmAscent + fmDescent) / 2f
+
   private fun settledDesiredWidth(text: String): Int =
     ceil(advanceOf(text) + 2f * hHeadroom() + paddingLeft + paddingRight).toInt()
 
@@ -262,7 +265,11 @@ class NumericTextView(context: Context) : View(context), Choreographer.FrameCall
       }
 
     canvas.save()
-    canvas.scale(sample.scale, sample.scale, x, y)
+    // Pivoted on the glyph's optical centre, not its baseline. A drum's face turns about its own
+    // middle, and a squash about the baseline would drag every shrinking glyph downwards — an
+    // asymmetry between the pair above the front face and the pair below it that the reference,
+    // which animates a finished raster, cannot have.
+    canvas.scale(sample.scaleX, sample.scaleY, x, y + opticalCentre())
     canvas.drawText(sample.ch, left, y, textPaint)
     canvas.restore()
 
@@ -306,11 +313,11 @@ class NumericTextView(context: Context) : View(context), Choreographer.FrameCall
     }
 
     node.pivotX = localCX
-    node.pivotY = localBL
+    node.pivotY = localBL + opticalCentre()
     node.translationX = idealLeft - baseLeft
     node.translationY = sample.offsetY + (idealTop - baseTop)
-    node.scaleX = sample.scale
-    node.scaleY = sample.scale
+    node.scaleX = sample.scaleX
+    node.scaleY = sample.scaleY
     node.alpha = alpha / 255f
 
     node.setRenderEffect(effectFor(sample.blurLengthPx))

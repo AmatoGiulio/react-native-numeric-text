@@ -93,3 +93,9 @@ docs/tune/
 artifacts/**/*.bin
 artifacts/**/*.png
 artifacts/**/*.mp4
+
+# A fit round leaves three Android captures behind and each is regenerable by re-running it, so
+# only the iOS reference sets are worth carrying. Without this every round shows up as untracked
+# noise in `git status` and the real changes get lost in it.
+artifacts/*
+!artifacts/gt_ios_*

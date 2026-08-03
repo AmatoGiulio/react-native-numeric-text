@@ -1,9 +1,11 @@
 package com.numerictext
 
 import kotlin.math.abs
+import kotlin.math.cos
 import kotlin.math.floor
 import kotlin.math.max
 import kotlin.math.min
+import kotlin.math.sin
 
 /**
  * The roll engine: one persistent column per logical position, each a single continuous position on
@@ -55,22 +57,73 @@ internal class NumericRollEngine {
     val x: Float,
     val offsetY: Float,
     val alpha: Float,
-    val scale: Float,
+    /** Uniform shrink with distance. The drum turns about a horizontal axis, so width is unaffected. */
+    val scaleX: Float,
+    /** The same shrink, times the drum's `cos` foreshortening. */
+    val scaleY: Float,
     val blurLengthPx: Float,
     val stable: Boolean,
   )
 
   companion object {
     /**
-     * Separation of two stops, in line heights.
+     * The strip is a DRUM: ten digits on the ten faces of a turning decagon, not a flat ribbon.
      *
-     * Apple's `NumericTextConfiguration.offset` is 19/32 = 0.59375 and this was that, but the
-     * side-by-side grid says the reference's two glyphs CONTEND for the same space — they overlap,
-     * blurred, rather than sliding past each other stacked apart. Its crossing spans 1.18 glyph
-     * heights against 1.55 here, and that gap did not close across five fits of every other knob.
-     * So 0.59375 is not the separation of two visible stops; being fitted here instead.
+     * A stop is one face, so a stop of travel is one tenth of a turn. A glyph `d` stops from the
+     * front is therefore at an angle `d * FACE_ANGLE` around the axis, and everything about how it
+     * is drawn follows from that angle rather than from `d`:
+     *
+     *  - it sits `APOTHEM * sin(angle)` line heights off centre — the projection of its face onto
+     *    the screen, which flattens as the face turns away instead of running off linearly;
+     *  - it is foreshortened by `cos(angle)` VERTICALLY ONLY, because the drum turns about a
+     *    horizontal axis. A digit's width does not change as the drum rolls; its height does.
+     *
+     * This replaces a flat `STEP_FRACTION` of 0.32 line heights per stop. The two agree for small
+     * angles — `APOTHEM * FACE_ANGLE` is that same 0.32 — and diverge exactly where the reference
+     * and this engine diverged: through the middle of a crossing, and under an alternation, where
+     * the reference holds its pair 0.876 glyph heights apart against our 0.612 and WIDENS them as
+     * the cadence slows while we narrow. A flat strip cannot span more than one step however the
+     * target moves; a drum's two visible faces are held apart by the solid between them.
+     *
+     * The foreshortening is deliberately kept SEPARATE from `SCALE_AMOUNT`, which stays uniform.
+     * A first attempt derived both the offset and the whole scale from the angle, and it did
+     * produce the alternation's gap — middle band 1.513 down to 0.849 against the reference's
+     * 0.756 — while costing the single crossing, 0.031 out to 0.181. One angle cannot own both:
+     * the reference's crossing needs a shrink deeper than `cos` at that separation and a spacing
+     * wider than the shrink implies. Two knobs, one angle each way.
      */
-    const val STEP_FRACTION = 0.32f
+    const val FACES = 10
+    const val FACE_ANGLE = (2.0 * Math.PI / FACES).toFloat()
+
+    /**
+     * Radius of the drum from the axis to a face, in line heights. MEASURED.
+     *
+     * At 0.509 — the value that makes the drum agree for small angles with the flat 0.32 strip it
+     * replaces — the shape of the geometry changes and its amplitude does not, and that is what
+     * the first round measured: the alternation's middle band moved 1.470 to 1.451 against the
+     * reference's 0.760, and the single crossing lost 0.031 to 0.043. So the drum's SHAPE is not
+     * what produces the gap; its SIZE is.
+     *
+     * Fitted against the single crossing's extent, which is the only thing that may set it. Three
+     * rounds, mean extent over the three changing columns against the reference's 1.175:
+     *
+     *     apothem   0.509   1.150   1.539
+     *     extent    1.131   1.749   1.947
+     *
+     * 0.555 is where that line crosses 1.175. It is very close to the 0.509 that reproduces the
+     * flat strip this replaces, and that is the point: the drum's shape is right and its size is
+     * pinned by the crossing.
+     *
+     * The alternation wanted 1.15 and cannot have it. At 1.15 the alternation's mean profile
+     * matches the reference bin for bin — the middle band reads 0.715 against 0.760 — but the
+     * single crossing then spans 1.75 glyph heights against 1.18, with a HOLE where the reference
+     * has its central peak. Nothing downstream can close that: alpha scales the two lobes and
+     * cannot fill the space between them, and the reference is only ~12% blurrier than this engine
+     * at the crossing's floor, nowhere near enough to bridge a quarter of a glyph height. See the
+     * drum section of `.agent/IOS_GROUND_TRUTH.md` for why the spacing has to come from somewhere
+     * other than the angle.
+     */
+    const val APOTHEM = 0.555f
 
     /** APPLE — `NumericTextConfiguration.delay`, 18/120. TOTAL spread of the wave, not the gap. */
     const val WAVE_TOTAL_SECONDS = 0.15f
@@ -110,7 +163,7 @@ internal class NumericRollEngine {
      * the reference's mid-crossing glyphs are unreadable clouds. `NumericTextConfiguration` storing
      * its blur as a single number with no axis fits that reading.
      */
-    const val BLUR_FRACTION = 0.42f
+    const val BLUR_FRACTION = 0.50f
 
     /**
      * How far `animationDuration` may stretch or compress the spring. NOT a parity constant.
@@ -144,7 +197,22 @@ internal class NumericRollEngine {
      * pair honest: raising one without lowering the other shows up immediately.
      */
     const val ENTER_ALPHA_EXPONENT = 0.52f
-    const val EXIT_ALPHA_EXPONENT = 1.40f
+
+    /**
+     * Refitted from 1.40 once the drum was in: its `cos` foreshortening takes ~5% of a glyph's
+     * area at the crossing's separation, and the crossing's ink floor went from 0.025 off the
+     * reference to 0.039 off, low on all three columns and by the same 9%.
+     *
+     * At the floor both glyphs sit half a stop from their own, so the presence weighting hands
+     * both the midpoint of the two exponents; moving that midpoint from 0.96 to 0.835 is worth
+     * exactly the 9%, and it is the EXIT end that can afford it — `ENTER` is what holds the
+     * arrival's brightness up near its own stop, where the floor is not being measured.
+     *
+     * 1.15 overshot to 0.016 high and 1.20 is the last 2% of it. `pieno` did not move: 418/501/584
+     * at 1.40, 418/501/584 at 1.15, against the reference's 420/504/587. Lowering it does make the
+     * departing glyph linger, but not on the clock that decides when the column reads full.
+     */
+    const val EXIT_ALPHA_EXPONENT = 1.20f
 
     /**
      * MEASURED — position spring.
@@ -405,7 +473,6 @@ internal class NumericRollEngine {
 
   fun samples(): List<GlyphSample> {
     val out = ArrayList<GlyphSample>(columns.size * 2)
-    val stepPx = lineHeightPx * STEP_FRACTION
 
     for (column in columns.values) {
       val literal = column.literal
@@ -413,9 +480,7 @@ internal class NumericRollEngine {
         // A separator has no strip to roll along; it only fades and glides.
         val alpha = column.alive
         if (alpha <= 0.01f) continue
-        out.add(
-          sample(column, literal, stop = column.target, distance = 0f, alpha = alpha, stepPx = stepPx)
-        )
+        out.add(sample(column, literal, stop = column.target, distance = 0f, alpha = alpha))
         continue
       }
 
@@ -450,7 +515,7 @@ internal class NumericRollEngine {
         if (alpha <= 0.01f) continue
 
         val ch = column.charAt[stop] ?: continue
-        out.add(sample(column, ch, stop, distance, alpha, stepPx))
+        out.add(sample(column, ch, stop, distance, alpha))
       }
     }
     return out
@@ -464,7 +529,6 @@ internal class NumericRollEngine {
     stop: Int,
     distance: Float,
     alpha: Float,
-    stepPx: Float,
   ): GlyphSample {
     val settled = distance < POSITION_EPSILON &&
       abs(column.velocity) < VELOCITY_EPSILON &&
@@ -475,15 +539,20 @@ internal class NumericRollEngine {
       stop == column.target -> GlyphRole.ENTER
       else -> GlyphRole.EXIT
     }
+    // The face's angle around the drum's axis. Signed, so a glyph above the front and one below it
+    // are foreshortened alike but offset opposite ways.
+    val angle = (stop - column.position) * FACE_ANGLE
+    val shrink = 1f - SCALE_AMOUNT * distance
     return GlyphSample(
       key = column.key,
       ch = ch,
       kind = column.kind,
       role = role,
       x = column.x,
-      offsetY = (stop - column.position) * stepPx,
+      offsetY = APOTHEM * lineHeightPx * sin(angle),
       alpha = alpha.coerceIn(0f, 1f),
-      scale = 1f - SCALE_AMOUNT * distance,
+      scaleX = shrink,
+      scaleY = shrink * cos(angle),
       blurLengthPx = if (settled) 0f else lineHeightPx * BLUR_FRACTION * distance,
       stable = settled,
     )

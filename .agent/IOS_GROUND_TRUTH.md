@@ -69,9 +69,9 @@ which is why measured column steps are always 8/120 or 10/120.
 
 Reference, decrement 1,242 → 1,160, columns 2/3/4:
 
-| | ink floor | at | extent | back to full | starts |
-|---|---|---|---|---|---|
-| | 0.515 / 0.435 / 0.428 | 137/204/287 | 1.181 / 1.147 / 1.196 | 420/504/587 | 70/137/220 |
+| | ink floor | at | extent | back to full | starts | edge at the floor |
+|---|---|---|---|---|---|---|
+| | 0.515 / 0.435 / 0.428 | 137/204/287 | 1.181 / 1.147 / 1.196 | 420/504/587 | 70/137/220 | 0.873 / 0.400 / 0.728 |
 
 Increment 1,160 → 1,242, five runs, spread in brackets:
 
@@ -154,6 +154,27 @@ The geometry of it: the reference holds its pair 0.876 glyph heights apart under
 and we hold ours 0.612, and the directions are opposite — against its own slow cadence it WIDENS
 and we narrow. A two-glyph strip cannot span more than one step however the target moves.
 
+### The spacing is not a function of separation — measured
+
+The strongest form of that, and the one that decides what the drum can and cannot be. Same column,
+same reference, the ink's 5th-to-95th percentile span in glyph heights:
+
+| reference | span | when |
+|---|---|---|
+| single crossing | **1.181** | at the ink floor, 137 ms — which is also the run's MAXIMUM |
+| alternation, 60 ms | **1.527** | held, for the whole burst |
+
+The single crossing's widest frame is its floor frame; there is no later moment where it opens
+further. So under a fast alternation the reference holds its two glyphs 29% further apart than a
+single crossing ever reaches. Both regimes sit at the same angular separation — a spring chasing an
+alternating target hovers near the half-way point rather than passing through it — so **no geometry
+that is a function of the separation alone can produce both.** Whatever sets the spacing has memory.
+
+The same reading from the other side: at the crossing's floor the reference's vertical profile has a
+central PEAK (twelve bins across its 2nd-98th percentile span: 0.059 0.077 0.059 0.054 0.077 0.123
+0.143 0.109 0.075 0.068 0.066 0.052), and under the alternation it has a HOLE (0.052 0.082 0.070
+0.057 0.045 0.044 0.070 0.106 0.120 0.135 0.115 0.066). One merged mass, then two separated forms.
+
 A fourth difference is **not** part of that group: the reference's glyphs are 12% shorter than ours
 at the bottom of a crossing, and that gap is flat at 1.14 across every cadence. Its shape — agreeing
 at the start and end of a crossing and diverging only at the bottom — says it is the depth of the
@@ -170,3 +191,38 @@ shrink, not a constant factor.
 | skipping the wave hold for a moving column | burst tail overshoots to 403 ms against 545 |
 | deeper `SCALE_AMOUNT` alone | width ratio 1.125 → 1.062, headline 0.024 → 0.114 |
 | the drum, rigid | produces the gap (1.513 → 0.849) and costs the crossing (0.031 → 0.181) |
+| the drum, offset and squash independent | the SHAPE is right and the SIZE is one knob — below |
+
+### The drum, in full
+
+Kept, and it is the current engine: `offset = APOTHEM * sin(angle)`, `squash = cos(angle)` applied
+vertically only, with `SCALE_AMOUNT` left uniform and independent, angle = one tenth of a turn per
+stop. `STEP_FRACTION` is gone into the apothem. The single crossing is better for it, both ways:
+
+| | decrement | increment |
+|---|---|---|
+| headline, flat strip | 0.031 | 0.030 |
+| headline, drum | **0.010** | **0.010** |
+| extent error | 0.037 → 0.015 | 0.032 → 0.011 |
+| ink floor error | 0.025 → 0.005 | 0.028 → 0.009 |
+
+The apothem is the whole geometry, and it is pinned by the crossing. Mean extent over the three
+changing columns, against the reference's 1.175:
+
+| apothem | 0.509 | 0.555 | 1.150 | 1.539 |
+|---|---|---|---|---|
+| crossing extent | 1.131 | **1.175** | 1.749 | 1.947 |
+| alternation band | 1.451 | 1.409 | **0.715** | 0.338 |
+
+**The drum's shape is right and its size cannot be.** At 1.15 the alternation's mean profile lands
+on the reference bin for bin — 0.058 0.080 0.063 0.057 0.048 0.045 0.062 0.098 0.123 0.127 0.121
+0.080 against the reference's 0.052 0.082 0.070 0.057 0.045 0.044 0.070 0.106 0.120 0.135 0.115
+0.066, a band of 0.715 against 0.760 — which is a closer agreement than anything else tried on the
+overlapped regime. But at 1.15 the single crossing spans 1.75 against 1.18 and its profile has a
+hole exactly where the reference has its peak, and nothing downstream reaches that: alpha scales the
+two lobes and cannot fill the space between them, and the reference is only ~12% blurrier than this
+engine at the floor, against a gap a quarter of a glyph height wide. Fitted to the crossing at
+0.555, the drum leaves the alternation band at 1.409 against the reference's 0.760.
+
+So the drum is the right FORM and something else has to set its spacing — something that widens the
+pair when changes pile up, which is the direction the reference moves and this engine does not.

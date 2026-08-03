@@ -15,14 +15,17 @@ Android against the iOS reference, single value change:
 
 | | decrement 1,242→1,160 | increment 1,160→1,242 |
 |---|---|---|
-| ink floor error | 0.025 | 0.028 |
-| crossing extent error | 0.037 | 0.032 |
-| **headline** | **0.031** | **0.030** |
-| wave start | ±2 ms | ±1 ms |
-| back to full | 418/502/585 vs 420/504/587 | — |
+| ink floor error | 0.005 | 0.009 |
+| crossing extent error | 0.015 | 0.011 |
+| edge at the floor | 0.885/0.389/0.733 vs 0.873/0.400/0.728 | — |
+| **headline** | **0.010** | **0.010** |
+| wave start | ±2 ms | ±0 ms |
+| back to full | 419/502/585 vs 420/504/587 | — |
 
-The timings match to a frame. What is left is shape, plus two behaviours under interruption
-described at the end of the ground truth.
+The timings match to a frame and the single crossing now matches to within three times the noise
+floor. What is left is the alternation, and it is no longer a shape problem: the drum reproduces the
+reference's overlapped profile exactly at an apothem the single crossing forbids. See the drum
+section of the ground truth.
 
 ## The measuring rig — the part that makes progress possible
 
@@ -32,10 +35,16 @@ timestamps and a mark at every value change. No screen recording, no resampling,
 sync flash.
 
 ```bash
+.agent/tools/round.sh <name>    # one build: both crossings and the alternation, all three compared
 .agent/tools/fit.sh <name>      # build, install, drive the decrement preset, pull, compare
 python3 .agent/tools/compare.py artifacts/<dir> [--up]
+python3 .agent/tools/band.py artifacts/<dir>    # the alternation's middle band, iOS beside it
 python3 .agent/tools/grid.py artifacts/<dir> out.png --col=2 --step=33 [--mark=burst] [--ios=<prefix>]
 ```
+
+`round.sh` is the one to reach for — a round costs one build instead of three, and it prints the two
+directions and the alternation together, which is what stops a knob being called good on the
+evidence of the one measurement it was fitted against.
 
 Three traps, each of which has already cost real time:
 
@@ -75,6 +84,11 @@ per logical position, each a continuous position on a strip of stops. A change m
 `target` and never restarts anything — that single property is what makes one tap and a
 press-and-hold the same code path.
 
+The strip is a **drum**, not a flat ribbon: ten digits on the ten faces of a decagon, so a stop of
+travel is a tenth of a turn and a glyph's offset is `APOTHEM * sin(angle)` with a `cos(angle)`
+foreshortening applied to its height only. `SCALE_AMOUNT` stays uniform and independent of it —
+tying the whole scale to the angle is what the first, rigid attempt did, and it cost the crossing.
+
 Two scalars per column, deliberately not one: `position` owns geometry, `settle` owns opacity. The
 reference finishes its geometry at ~400 ms and then spends another ~350 ms bringing opacity to full
 with nothing moving, which one scalar cannot express.
@@ -100,16 +114,29 @@ one run each and both turned out to be in the *other* direction once replicated 
 
 ## Next, in order
 
-1. **The drum.** The roll behaves like a turning decagon: ten digits on ten faces, two visible at
-   once, each foreshortened by `cos(angle)` — a vertical squash, not a uniform scale. Implemented
-   and reverted. It produces the gap that nothing else could, middle-band 1.513 → 0.849 against the
-   reference's 0.756, and costs the single crossing, 0.031 → 0.181, because a rigid drum locks
-   offset and squash to one angle while the reference keeps them independent. Refit order:
-   geometry, then the alpha curves and blur against the single crossing, then the alternation.
-   `STEP_FRACTION` disappears into the apothem.
-2. **The overlap opacity.** Under a fast alternation the reference goes *fainter* than it ever goes
-   in one crossing. A crowd-normalised composition reproduced that almost exactly — peak 0.333
-   against 0.317 — but not the gap. Both are needed together; the closed brackets are in the ground
-   truth so neither dead end is walked again.
-3. **The glyph-size gap**, 12% at the bottom of a crossing and flat across cadence. Probably the
-   same foreshortening as (1), so do (1) first.
+The drum is **done and kept**, and it did not do what it was expected to do. It halved the single
+crossing — headline 0.031 → 0.010 in both directions, with the extent error that had survived five
+fits of everything else going 0.037 → 0.015 — and it left the alternation band at 1.409 against the
+reference's 0.760. What it bought instead is a much sharper question, which is (1) below.
+
+1. **What sets the spacing.** The drum's shape is the reference's: at an apothem of 1.15 the
+   alternation's mean profile lands on it bin for bin, band 0.715 against 0.760, closer than
+   anything else tried on the overlapped regime. The crossing forbids that apothem — it pins it at
+   0.555 — and the reason is now a measurement rather than a guess: the reference spans 1.527 glyph
+   heights under a 60 ms alternation and 1.181 at the widest frame of a single crossing, at the
+   same angular separation. **No function of the separation alone can produce both.** So look for
+   the thing with memory that widens the pair when changes pile up: an apothem that grows while the
+   column is being chased and relaxes when it is not. It is the same direction as the reference's
+   own cadence sweep, where it WIDENS towards fast and we narrow. Whatever the mechanism, the test
+   is `round.sh`: the apothem may not move the single crossing.
+2. **The overlap opacity**, unchanged by the drum and still open. Under a fast alternation the
+   reference goes *fainter* than it ever goes in one crossing — the grid shows it holding both
+   glyphs dim and apart where we swap between two solid ones. A crowd-normalised composition
+   reproduced the faintness almost exactly, peak 0.333 against 0.317, but not the gap. If (1) finds
+   the spacing, this is what has to land with it; the closed brackets are in the ground truth so
+   neither dead end is walked again.
+3. **The glyph-size gap**, 12% at the bottom of a crossing and flat across cadence. The standing
+   guess was that the drum's foreshortening was it; that can now be bounded rather than guessed —
+   `cos` at the crossing's separation is worth 5%, so at most half of it — but the gap has NOT been
+   re-measured since the drum went in. Measure it before deciding whether anything is left to
+   explain.
