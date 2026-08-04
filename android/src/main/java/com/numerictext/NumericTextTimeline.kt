@@ -143,6 +143,197 @@ internal class NumericRollEngine {
      */
     const val STACK_APOTHEM = 0.555f
 
+    // ── The measured model. Every number below is read off the reference per glyph, per frame;
+    // the working is in `.agent/TRANSITION_MODEL.md`. Nothing here was tuned against a metric.
+
+    /**
+     * Apple's `relativeOffset`, and it is a per-transition ENTRY amplitude — not the spacing between
+     * two stops, which is how it was read for weeks and why it never transferred. Measured: an
+     * arriving glyph appears at 0.55–0.64 GLYPH heights and it does NOT scale with how many digits
+     * the column skipped.
+     *
+     * The number here is smaller than Apple's because it is applied to [lineHeightPx] and the
+     * measurement is in cap heights: 0.59375 cap heights is 0.59375 * (cap/line) line heights, and
+     * the ratio for this face measures 0.665 rather than the 0.74 first assumed. Swept on the
+     * device, 0.3950 beats 0.4375 in both regimes at once — the single crossing's extent error
+     * falls 0.081 -> 0.032 and its headline 0.049 -> 0.022, while the roll's spread goes 1.222 ->
+     * 1.164 and its ink centroid's excursion 0.163 -> 0.136. Applying Apple's figure to the line height directly spreads the pair 1.52 glyph
+     * heights against the reference's 1.18 — which is exactly the "0.59375 does not transfer, 0.44
+     * fits" result the simulator has carried for weeks. It was a unit mismatch, not a wrong
+     * constant.
+     */
+    const val STACK_OFFSET = 0.3950f
+
+    /** Apple's `scale`: the size a glyph is born at and dies at. Measured 0.45–0.53 at first sight. */
+    const val STACK_FINAL_SCALE = 0.3984f
+
+    /** Offset spring: wn 17.8 rad/s, zeta 0.55 — it overshoots rest by a measured 12.1%. */
+    const val STACK_RESPONSE_SECONDS = 0.353f
+    const val STACK_DAMPING = 0.55f
+
+    /** Scale, alpha and blur: wn 22.7 rad/s, critically damped — these three never overshoot. */
+    const val STACK_SLOW_RESPONSE_SECONDS = 0.277f
+    const val STACK_SLOW_DAMPING = 1.00f
+
+    /**
+     * Peak blur. Measured as a Gaussian sigma of 0.10–0.125 glyph heights; taking the renderer's
+     * radius as ~2*sigma that is a radius of a quarter of a glyph height, which is also Apple's
+     * stored 0.25 relative. Check this one by eye — the mapping from this number to the
+     * RenderEffect's radius is the least pinned thing in the file.
+     */
+    const val STACK_BLUR_FRACTION = 0.42f
+
+    /**
+     * How fast a SUPERSEDED glyph's opacity dies, as a fraction of the arriving clock.
+     *
+     * With absolute departure targets the pair's masses sit either side of rest and the ink centroid
+     * stays put — measured excursion 0.112 against the reference's 0.071, the best this port has
+     * reached. What it costs is spread: a glyph that is still visible when it reaches its far target
+     * puts ink 1.31 glyph heights apart against the reference's 1.055, and diluting the column that
+     * way is why the darkest pixel only reaches 0.54 against the reference's 0.70.
+     *
+     * The reference gets tight AND symmetric, which it can only do by having its departing glyphs
+     * gone before they travel far. So the exit was made to fade quicker than the entrance — and at
+     * 1.8x it is a clear regression: mean ink 0.718 -> 0.491, excursion 0.112 -> 0.367, the roll's
+     * final floor 0.390 -> 0.136 against the reference's 0.409. Killing the outgoing glyph early
+     * empties the column instead of concentrating it. Left at 1 as the record.
+     */
+    const val STACK_EXIT_ALPHA_SPEEDUP = 1.0f
+
+    /**
+     * How much faster every clock runs when a column is fully crowded. Zero at rest, always.
+     *
+     * OFF, and that is the result of the sweep rather than a default. The arrival gate turned out to
+     * buy everything this was reaching for and the excursion turned out to be THIS constant's doing,
+     * not the gate's: with the gate in place, 0.7 gives mean ink 0.771 and an ink-centroid excursion
+     * of 0.341, while 0 gives 0.774 and 0.163 against the reference's 0.841 and 0.071. Total
+     * absolute distance from the reference across the five roll metrics: 0.484 with it, 0.409
+     * without. Keeping a mechanism that costs more than it buys is how a model turns into folklore.
+     *
+     * Swept on the device against the reference's own roll (these figures predate the gate):
+     *
+     *     speedup   ink    escursione   estensione  picco  fondo finale
+     *     0 (off)   0.718     0.112        1.306    0.544     0.390
+     *     0.7       0.749     0.146        1.284    0.594     0.416   <- kept
+     *     1.2       0.731     0.334        1.268    0.592     0.234
+     *     2.0       0.633     1.717        1.015    0.657     0.000
+     *     reference 0.851     0.071        1.055    0.700     0.409
+     *
+     * The high end is instructive rather than usable, and the reason is now measured. At 2.0 the
+     * spread and the darkest pixel both land on the reference — 1.015 and 0.657 against 1.055 and
+     * 0.700 — which is what predicted this mechanism. But the roll's final floor goes to 0.000: the
+     * column EMPTIES. Compressing the clocks makes a superseded entry lose its opacity before the
+     * one replacing it has gained any, because a critically damped rise is flat near t=0 while the
+     * decay it has to cover is already underway, so the total dips once per commit.
+     *
+     * Splitting the rush so it drives appearance only and leaves the offset alone does not fix it
+     * (extent 0.895, peak 0.694 — both past the reference — but floor still 0.000 and the centroid
+     * still swings): the dip is in the alphas, not in the geometry. What has to come first is a
+     * crowding-scaled floor under the total opacity, and only then can this go above 1.
+     */
+    /**
+     * The least total opacity a fully crowded column may fall to. Zero at rest, always.
+     *
+     * A critically damped rise is flat near t = 0, so a glyph replacing one that is already fading
+     * gains nothing for the first few frames and the column's total dips once per commit. Compress
+     * the clocks and that dip becomes a hole: the roll's final floor measured 0.000, the column
+     * literally empty between commits, while the reference holds 0.851 of a settled glyph through
+     * the same burst.
+     *
+     * The old rule was "cap, never boost", and it came from the ISOLATED crossing where the
+     * reference's ink really does dip to 0.515. Scaling by `crowdRaw` keeps that untouched.
+     *
+     * Measured at 0.95 and left OFF. At the kept speedup it costs more than it buys — extent 1.284
+     * -> 1.217 and peak 0.594 -> 0.608, but mean ink 0.749 -> 0.738 and the ink centroid's
+     * excursion 0.146 -> 0.389, because boosting a dipped total amplifies whichever glyph happens
+     * to dominate that frame. And it does NOT rescue high compression, which was the whole reason
+     * for trying it: at 3x the roll's final floor is still 0.000. That floor is measured after the
+     * burst, where `crowdRaw` has already decayed and this is zero by construction — so the hole at
+     * the end of a compressed burst was never the crowded-alpha dip it was blamed on.
+     */
+    /**
+     * How hard a crowded column dims a glyph that is still far from rest. Zero at rest, always.
+     *
+     * Traced per glyph through the reference's own roll, the brightest thing in its column is always
+     * the digit that has ARRIVED — dy 0 to +0.24, scale 0.75-1.00, alpha 0.57-0.80 — with the
+     * newcomer far out, small and faint. This engine's brightest was routinely still in transit at
+     * dy -0.56 and scale 0.45, which is what left the peak pale, the spread wide and the centroid
+     * chasing a moving glyph all at once.
+     *
+     * Swept on the device. The gate must REDISTRIBUTE, not attenuate — dimming the far glyph
+     * outright takes mean ink 0.749 -> 0.622 and the peak 0.594 -> 0.533, the opposite of the
+     * intent; rescaling so the column keeps the opacity it would have had puts both at their best
+     * measured values. Gate on the OFFSET clock, not the slow one: `q` reads 0.398 on the ink
+     * centroid's excursion against `p`'s 0.341. 0.40 is not gentler in any useful way (excursion
+     * 0.370, everything else slightly worse), so the excursion is not this constant's doing.
+     */
+    /** How sharply the arrival gate falls off with distance. 1 is linear. */
+    /** How much a crowded column shortens each glyph's journey. Zero at rest, always. */
+    const val STACK_CROWD_SHORTEN = 0.28f
+
+    const val STACK_ARRIVAL_SHARPNESS = 2.5f
+
+    const val STACK_ARRIVAL_GATE = 0.90f
+
+    const val STACK_ALPHA_FLOOR = 0.0f
+
+    const val STACK_CROWD_SPEEDUP = 0.0f
+
+    /** Blur's own clock: measured zeta 0.91, wn 15.8 rad/s. Slower than size and alpha on purpose. */
+    /**
+     * How much total opacity a crowded column may carry. The reference was measured at 1.15-1.81
+     * across 3-4 live glyphs, so 1.55 was tried here — and it changed the roll's mean ink by 0.006,
+     * because this engine's total never reaches 1 in the first place. Left at 1 as the record: the
+     * ink gap is not the cap.
+     */
+    const val STACK_ALPHA_CEILING = 1.00f
+
+    /**
+     * How much of a departure is measured from where the glyph IS rather than from rest.
+     *
+     * 0 is the absolute target: every departing glyph ends one full amplitude past rest, which keeps
+     * the pair's masses either side of centre and the ink centroid still — but a glyph superseded
+     * 30 ms after birth then crosses nearly two amplitudes, and the column spreads over 1.31 glyph
+     * heights against the reference's 1.055.
+     *
+     * 1 is the fully relative target, which is what a 220 ms cadence measures on the reference. It
+     * tightens the spread to 1.18 and lifts the mean ink from 0.718 to 0.743 — but during a
+     * one-way roll the superseded glyphs then drift WITH the roll instead of leaving symmetrically,
+     * and the centroid follows them: excursion 0.112 out to 0.255 against the reference's 0.071.
+     *
+     * Either way a glyph at rest departs to exactly ±1, so the single crossing cannot move.
+     */
+    const val STACK_DEPART_RELATIVE = 0.0f
+
+    const val STACK_BLUR_RESPONSE_SECONDS = 0.398f
+    const val STACK_BLUR_DAMPING = 0.91f
+
+    /**
+     * How tall the DEPARTING glyph is drawn while the value is reversing, as a multiple of its
+     * normal height. 1.0 is off.
+     *
+     * Fitted in the off-line simulator against the reference's own alternation, and it is the only
+     * candidate out of nine that moved several properties towards it at once: the ink centroid's
+     * excursion 0.406 -> 0.382, the pair's imbalance 0.121 -> 0.100, the lobes' separation
+     * 0.599 -> 0.638, the profile's tail ratio 1.332 -> 1.306 against the reference's 1.271, and
+     * the column's total ink onto 0.318 against the reference's 0.321 without being calibrated for
+     * it. The reference's two lobes are nearly equal in width (0.585 / 0.535) where this engine's
+     * upper one is half the lower (0.405 / 0.515), and the upper one is the departing glyph.
+     *
+     * 1.44 is 0.585 / 0.405, i.e. the gap itself. It buys 0.405 -> 0.430 of that gap, which says
+     * most of the upper lobe is NOT the departing glyph but the sum of older residues — see
+     * `.agent/NEXT.md`. The cost is the 60 ms band, 1.251 -> 1.313: a taller glyph puts mass towards
+     * the middle as well as away from it.
+     *
+     * Zero effect anywhere the value does not reverse mid-transition: the simulator renders the
+     * single crossing and the continuous roll BIT-IDENTICAL with this at 1.44.
+     */
+    const val STACK_FLIP_STRETCH_OUT = 1.44f
+
+    /** The reversal signal's impulse and bleed, mirroring [CROWD_STEP] / [CROWD_RELAX]. */
+    private const val FLIP_STEP = 0.60f
+    private const val FLIP_RELAX = 0.15f
+
     /**
      * The departing glyph's alpha exponent in STACK mode, replacing [EXIT_ALPHA_EXPONENT].
      *
@@ -400,6 +591,57 @@ internal class NumericRollEngine {
   private class Entry(val ch: String, var p: Float) {
     var velocity = 0f
     var target = 0f
+
+    /**
+     * The SECOND clock. Measured per glyph off the reference (`.agent/TRANSITION_MODEL.md` §3): the
+     * offset runs an underdamped spring that overshoots rest by 12%, while scale, alpha and blur run
+     * a critically damped one that never overshoots and settles later. Driving all four from `p`
+     * finished the transition at 183 ms against the reference's 420 — the ink floor and the wave
+     * were already right, only the closing was wrong, and no constant fixes that.
+     */
+    var q = p
+    var qVelocity = 0f
+
+    /**
+     * Where the OFFSET is heading, kept apart from [target] because a departure travels ONE
+     * amplitude from wherever the glyph currently is — measured at a 220 ms cadence, where the
+     * outgoing glyph left from its own overshoot position +0.06 plus one step rather than from
+     * rest. An absolute target sends a glyph superseded 30 ms after birth from +0.9 all the way to
+     * -1, nearly two amplitudes, and that is what spreads this column over 1.30 glyph heights
+     * against the reference's 1.055.
+     *
+     * Scale and blur keep the ABSOLUTE [target]: they must still run their full 1 -> 0.3984 travel
+     * however far the glyph moves, and tying them to a relative target is what collapsed the roll's
+     * ink to 0.537 when it was tried.
+     */
+    var posTarget = 0f
+
+    /**
+     * The THIRD clock, for blur alone: measured zeta 0.91, wn 15.8 rad/s — slower than the size and
+     * alpha clock, so the blur lingers after the glyph has stopped growing. Sharing the size clock
+     * made it clear too early, which is why a fast roll read legible here and as an unreadable smear
+     * on the reference even though `burst.py`'s sharpness said the two matched.
+     */
+    var b = p
+    var bVelocity = 0f
+
+    /** Set the first time a change supersedes this entry, and never cleared. */
+    var superseded = false
+
+    /**
+     * Opacity, on its OWN monotone clock — not a function of position.
+     *
+     * It used to be `1 - |q|`, which is wrong in one specific and very visible way: a superseded
+     * glyph travels from one side to the other and therefore passes through `q = 0`, where that
+     * expression returns FULL opacity. So every glyph a fast roll threw away lit back up to solid
+     * black on its way out, and the column stayed legible digit by digit while the reference
+     * dissolves into an unreadable soup. Measured, the reference's pair is complementary and
+     * monotone — alpha_out + alpha_in = 1.00 at every instant — so a glyph on its way out only ever
+     * gets fainter.
+     */
+    var alpha = 0f
+    var alphaVelocity = 0f
+    var alphaTarget = 1f
   }
 
   private class Column(
@@ -450,6 +692,18 @@ internal class NumericRollEngine {
     var crowdRaw = 0f
     var crowd = 0f
 
+    /**
+     * How hard this column is being REVERSED: 0 unless a change arrived that moved the value the
+     * other way while a transition was still in flight, rising towards 1 while that keeps
+     * happening. Distinct from [crowdRaw], which counts changes of any direction — through a roll
+     * the direction never turns, so this stays exactly zero and nothing it drives can touch the
+     * roll or a single crossing.
+     */
+    var flipRaw = 0f
+
+    /** The direction of this column's previous commit; null until it has had one. */
+    var lastDir: Int? = null
+
     var x = 0f
     var xVelocity = 0f
     var targetX = 0f
@@ -487,7 +741,7 @@ internal class NumericRollEngine {
       column.target = 0
       column.charAt[0] = slot.char
       column.position = 0f
-      column.entries.add(Entry(slot.char, 0f))
+      column.entries.add(Entry(slot.char, 0f).also { it.alpha = 1f })
       column.x = xRel(slot)
       column.targetX = column.x
       columns[slot.key] = column
@@ -584,6 +838,8 @@ internal class NumericRollEngine {
       column.settleVelocity = 0f
       column.crowdRaw = 0f
       column.crowd = 0f
+      column.flipRaw = 0f
+      column.lastDir = null
       column.alive = 1f
       column.retiring = false
       column.literal = literalOf(slot)
@@ -592,7 +848,7 @@ internal class NumericRollEngine {
       // Collapse the stack to the one glyph the column rests on, or `samples()` would keep drawing
       // departures that the snap has already resolved past.
       column.entries.clear()
-      column.entries.add(Entry(slot.char, 0f))
+      column.entries.add(Entry(slot.char, 0f).also { it.alpha = 1f })
       column.x = xRel(slot)
       column.targetX = column.x
       column.xVelocity = 0f
@@ -628,7 +884,28 @@ internal class NumericRollEngine {
       }
 
       if (column.pending.isNotEmpty()) {
-        val wasAtRest = abs(column.target - column.position) < POSITION_EPSILON
+        // In STACK mode ask the transitions, not the strip's scalar.
+        //
+        // `position` is never stepped in stack mode — `stepEntries` replaces `stepPosition` — so it
+        // holds whatever `snapToTarget` last left while `target` moves with every commit. Through a
+        // ROLL that is right by accident: the target walks away and never comes back, so the test
+        // reads "in flight" every time. Under an ALTERNATION the target oscillates between two
+        // stops and lands back ON the stale position every other commit, so the crowd impulse fired
+        // half as often as it should — measured in the simulator, `crowdRaw` averaging 0.190
+        // through a 60 ms alternation against 0.614 through a 30 ms roll. `STACK_ARRIVAL_GATE`,
+        // whose whole job is to pair "bright" with "arrived", was therefore barely engaged in the
+        // one regime where the brightest glyph is the one still in transit.
+        //
+        // The single crossing and the roll are unaffected — both already answered correctly, and
+        // the simulator renders them BIT-IDENTICAL either way. This changes the alternation only.
+        val wasAtRest =
+          if (stackMode) {
+            column.entries.all {
+              abs(it.p) < POSITION_EPSILON && abs(it.velocity) < VELOCITY_EPSILON
+            }
+          } else {
+            abs(column.target - column.position) < POSITION_EPSILON
+          }
         var arrived = false
         for (entry in column.pending) entry.remaining -= dt
         while (column.pending.isNotEmpty() && column.pending.first().remaining <= 0f) {
@@ -642,9 +919,33 @@ internal class NumericRollEngine {
           if (stackMode) {
             val ch = column.charAt[stop]
             if (ch != null) {
-              for (live in column.entries) live.target = lastDirection.toFloat()
+              // Supersede ONCE, and never again. A transition is not cancelled, not retargeted and
+              // not dropped: it runs its own curves to completion whatever arrives afterwards —
+              // measured directly on an isolated triple with a 28 ms gap, where the glyph a change
+              // was thought to discard still carried 0.83 of its alpha and went on fading on its own
+              // schedule (`.agent/TRANSITION_MODEL.md` §5).
+              //
+              // Re-targeting every live entry on every change is what wrecked the alternation: the
+              // direction flips each time an alternation turns over, so entries already on their way
+              // out were sent back through the middle, and the ink centroid sloshed 0.549 against the
+              // reference's 0.103.
+              for (live in column.entries) {
+                if (!live.superseded) {
+                  live.superseded = true
+                  live.target = lastDirection.toFloat()
+                  live.posTarget =
+                    lastDirection.toFloat() + STACK_DEPART_RELATIVE * live.p
+                  live.alphaTarget = 0f
+                }
+              }
               column.entries.add(Entry(ch, -lastDirection.toFloat()))
             }
+            // A REVERSAL landing on a column that was still in flight, and nothing else. Read
+            // before the impulse below so the two signals stay independent.
+            if (column.lastDir != null && column.lastDir != lastDirection && !wasAtRest) {
+              column.flipRaw = min(1f, column.flipRaw + FLIP_STEP)
+            }
+            column.lastDir = lastDirection
           }
           arrived = true
         }
@@ -761,30 +1062,95 @@ internal class NumericRollEngine {
     val count = column.entries.size
     if (count == 0) return
     var total = 0f
+    var plain = 0f
     val raw = FloatArray(count)
     for (i in 0 until count) {
-      val presence = max(0f, 1f - abs(column.entries[i].p))
+      // Alpha is LINEAR in the slow clock's progress, both ways. Measured directly: through a
+      // crossing the two glyphs' alphas sum to 1.00 at every instant, and an arriving glyph's alpha
+      // IS its progress. The exponents this used to carry were fitted to compensate for the single
+      // shared clock and are not in the reference.
+      // Opacity is gated by how far the glyph still is from rest, and only under crowding.
+      //
+      // Traced per glyph through the reference's own roll, the brightest thing in the column is
+      // ALWAYS the digit that has arrived: dy between 0 and +0.24, scale 0.75-1.00, alpha 0.57-0.80,
+      // with the newcomer far out (-0.48 to -0.56), small (0.35-0.45) and faint (0.28-0.35). This
+      // engine's brightest was routinely a glyph still in transit — dy -0.56, -0.64 at scale 0.45.
+      //
+      // The cause is in the measured clocks: opacity resolves FASTER than position (wn 22.8 against
+      // 17.8), which is right for an isolated change but means that at a 30 ms cadence a glyph goes
+      // bright long before it arrives, and is superseded before it ever gets there. Gating by
+      // distance restores the reference's pairing of "arrived" with "bright"; `crowdRaw` is exactly
+      // zero from rest, so the single crossing is untouched.
+      val far = min(1f, abs(column.entries[i].p))
+      // Sharpened, because a LINEAR gate leaves a glyph half way across still carrying 55% of the
+      // weight, and the kymograph shows exactly that: the column keeps a periodic mesh of diagonal
+      // streaks — every glyph traversing the whole height — where the reference holds one standing
+      // band. Raising the near-rest term to a power concentrates the weight where the reference
+      // puts it without touching anything at rest.
+      val near = pow(max(0f, 1f - far), STACK_ARRIVAL_SHARPNESS)
+      val gate = 1f - STACK_ARRIVAL_GATE * column.crowdRaw * (1f - near)
+      val presence = max(0f, column.entries[i].alpha * gate)
       if (presence <= 0f) continue
-      // Weighted by how close a glyph is to ITS OWN rest, not by which entry is newest — a binary
-      // role makes two glyphs swap curves the instant a change lands, which under an alternation
-      // was the whole behaviour on the roll model (swing 0.307 against the reference's 0.103).
-      val exponent = STACK_EXIT_ALPHA_EXPONENT +
-        (ENTER_ALPHA_EXPONENT - STACK_EXIT_ALPHA_EXPONENT) * presence
-      raw[i] = pow(presence, exponent)
+      raw[i] = presence
       total += raw[i]
+      plain += max(0f, column.entries[i].alpha)
     }
-    val norm = if (total > 1f) 1f / total else 1f
+    // The ceiling is NOT 1. A crossing's pair is convex and sums to 1 on its own, so the cap only
+    // ever bites under crowding — and there the reference does not cap: fitting its 30 ms burst
+    // per glyph gave alpha sums of 1.15-1.81 across 3-4 live glyphs. Holding ours at 1 is why the
+    // roll carries 0.68 of a settled glyph's ink against the reference's 0.85.
+    // A FLOOR as well as a ceiling, and only under crowding.
+    //
+    // A critically damped rise is flat near t = 0, so a glyph replacing one that is already fading
+    // gains nothing for the first few frames and the column's total opacity dips once per commit.
+    // At an ordinary cadence that dip is invisible; compress the clocks and it becomes a hole —
+    // measured, the roll's final floor went to 0.000 with the column literally empty between
+    // commits. The reference does not do that: through a burst it holds 0.851 of a settled glyph's
+    // ink against our 0.749.
+    //
+    // The old note said "cap, never boost", and that came from the ISOLATED crossing, where the
+    // reference's ink genuinely dips to 0.515 and forcing it up would destroy the primary metric.
+    // Scaling the floor by `crowdRaw` keeps that intact — it is exactly zero for a column that was
+    // at rest — while letting a crowded column stay lit.
+    // The gate REDISTRIBUTES rather than attenuates: rescale so the column carries the same total
+    // opacity it would have carried ungated, with the far glyph's share moved onto the arrived one.
+    // Attenuating outright just dims the column — measured, mean ink 0.749 -> 0.622 and the darkest
+    // pixel 0.594 -> 0.533, the opposite of the intent.
+    if (total > 1e-4f && plain > 0f) {
+      val give = plain / total
+      for (i in 0 until count) raw[i] *= give
+      total = plain
+    }
+    val floor = STACK_ALPHA_FLOOR * column.crowdRaw
+    val norm = when {
+      total > STACK_ALPHA_CEILING -> STACK_ALPHA_CEILING / total
+      total in 1e-4f..floor -> floor / total
+      else -> 1f
+    }
     for (i in 0 until count) {
       val alpha = raw[i] * norm * column.alive
       if (alpha <= 0.01f) continue
       val entry = column.entries[i]
-      val distance = min(1f, abs(entry.p))
+      // Geometry from the FAST clock, appearance from the slow one.
+      val distance = min(1f, abs(entry.q))
       val settled = count == 1 &&
+        abs(entry.p) < POSITION_EPSILON &&
         distance < POSITION_EPSILON &&
         abs(entry.velocity) < VELOCITY_EPSILON &&
         column.alive > 0.999f
-      val angle = entry.p * FACE_ANGLE
-      val shrink = 1f - SCALE_AMOUNT * distance
+      // Flat, not a drum. Measured: the entry amplitude is a FIXED ±0.59375 glyph heights whatever
+      // the digit distance — 4→6 counting down is eight stops on a drum and the reference draws no
+      // intermediate digit and travels one amplitude. There is no strip and no wheel to foreshorten.
+      // Scale stays on the POSITION clock, and that is a measured decision rather than an
+      // oversight. Riding alpha's clock is tempting — the two were measured at wn 22.6 against 22.8
+      // on an isolated crossing, i.e. the same clock — but under a burst it makes ink collapse as
+      // alpha * scale^2: the roll's final floor fell to 0.187 against the reference's 0.409 and the
+      // mean ink to 0.537 against 0.851. Rejected on measurement, kept here as the record.
+      val shrink = 1f - (1f - STACK_FINAL_SCALE) * distance
+      // The departing glyph is drawn TALLER while the value is reversing — height only, about the
+      // glyph's own optical centre, so nothing moves. See [STACK_FLIP_STRETCH_OUT].
+      val tall =
+        if (entry.superseded) 1f + (STACK_FLIP_STRETCH_OUT - 1f) * column.flipRaw else 1f
       out.add(
         GlyphSample(
           key = column.key,
@@ -796,11 +1162,20 @@ internal class NumericRollEngine {
             else -> GlyphRole.EXIT
           },
           x = column.x,
-          offsetY = STACK_APOTHEM * lineHeightPx * sin(angle),
+          // Shorter travel when changes pile up. The kymograph says the roll's defect is
+          // GEOMETRIC, not photometric: this engine draws a periodic mesh of diagonal streaks —
+          // every glyph crossing the full height, one after another — where the reference holds one
+          // standing band that only stretches at its trailing edge. Sharpening the opacity gate
+          // three-fold moved that pattern by nothing, because dimming one glyph just lets the next
+          // one occupy the same place. The only thing that shortens a streak is a shorter journey.
+          // Zero at rest, so the single crossing keeps the amplitude measured off the reference.
+          offsetY = STACK_OFFSET * (1f - STACK_CROWD_SHORTEN * column.crowdRaw) *
+            lineHeightPx * entry.p,
           alpha = alpha.coerceIn(0f, 1f),
           scaleX = shrink,
-          scaleY = shrink * cos(angle),
-          blurLengthPx = if (settled) 0f else lineHeightPx * BLUR_FRACTION * distance,
+          scaleY = shrink * tall,
+          blurLengthPx =
+            if (settled) 0f else lineHeightPx * STACK_BLUR_FRACTION * min(1f, abs(entry.b)),
           stable = settled,
         )
       )
@@ -894,22 +1269,92 @@ internal class NumericRollEngine {
    */
   private fun stepEntries(column: Column, response: Float, dt: Float): Boolean {
     var moving = false
-    val omega = (2.0 * Math.PI / max(0.05f, response)).toFloat()
+    // Under crowding the whole transition COMPRESSES — entry and exit together, not just the exit.
+    //
+    // Counted on the reference's own +123/30ms roll, the units column holds exactly TWO glyphs and
+    // one of them is nearly arrived (scale 0.89, alpha 0.81) with a single faint newcomer beside it;
+    // a matching-pursuit fit is flat from two glyphs on, residual 0.023. This engine needed five and
+    // still did not converge, 0.156, with four or five mid-weight forms spread from -0.55 to +0.29.
+    // A glyph cannot be that far along 30 ms after its commit on the isolated curve, so the
+    // reference must be running the transition faster when changes pile up.
+    //
+    // `crowdRaw` is exactly zero for a column that was at rest, so the single crossing cannot move
+    // however this is set — the same property that made the chase safe on the roll model.
+    val rush = 1f + STACK_CROWD_SPEEDUP * column.crowdRaw
+    // `response` carries the caller's duration scaling; both clocks are scaled by the same factor so
+    // `animationDuration` still stretches the whole transition uniformly.
+    // The rush drives APPEARANCE only. Compressing the offset too is what made the visible mass
+    // teleport between commits at high speedups — extent and peak landed on the reference at 3x and
+    // the ink centroid then swung 1.7 glyph heights. Letting opacity, scale and blur resolve fast
+    // while the position keeps its own pace is the separation this engine's three clocks exist for.
+    val base = response / RESPONSE_SECONDS
+    val quick = base / rush
+    val fast = (2.0 * Math.PI / max(0.05f, STACK_RESPONSE_SECONDS * base)).toFloat()
+    val slow = (2.0 * Math.PI / max(0.05f, STACK_SLOW_RESPONSE_SECONDS * quick)).toFloat()
+    val blur = (2.0 * Math.PI / max(0.05f, STACK_BLUR_RESPONSE_SECONDS * quick)).toFloat()
     for (entry in column.entries) {
-      val error = entry.target - entry.p
-      if (abs(error) <= POSITION_EPSILON && abs(entry.velocity) <= VELOCITY_EPSILON) {
+      val error = entry.posTarget - entry.p
+      if (abs(error) > POSITION_EPSILON || abs(entry.velocity) > VELOCITY_EPSILON) {
+        entry.velocity +=
+          ((fast * fast * error) - (2f * STACK_DAMPING * fast * entry.velocity)) * dt
+        entry.p += entry.velocity * dt
+        moving = true
+      } else {
         entry.p = entry.target
         entry.velocity = 0f
-        continue
       }
-      entry.velocity +=
-        ((omega * omega * error) - (2f * DAMPING_RATIO * omega * entry.velocity)) * dt
-      entry.p += entry.velocity * dt
-      moving = true
+      val bError = entry.target - entry.b
+      if (abs(bError) > POSITION_EPSILON || abs(entry.bVelocity) > VELOCITY_EPSILON) {
+        entry.bVelocity +=
+          ((blur * blur * bError) - (2f * STACK_BLUR_DAMPING * blur * entry.bVelocity)) * dt
+        entry.b += entry.bVelocity * dt
+        moving = true
+      } else {
+        entry.b = entry.target
+        entry.bVelocity = 0f
+      }
+      val aError = entry.alphaTarget - entry.alpha
+      if (abs(aError) > POSITION_EPSILON || abs(entry.alphaVelocity) > VELOCITY_EPSILON) {
+        val aw = if (entry.superseded) slow * STACK_EXIT_ALPHA_SPEEDUP else slow
+        entry.alphaVelocity +=
+          ((aw * aw * aError) - (2f * STACK_SLOW_DAMPING * aw * entry.alphaVelocity)) * dt
+        entry.alpha += entry.alphaVelocity * dt
+        moving = true
+      } else {
+        entry.alpha = entry.alphaTarget
+        entry.alphaVelocity = 0f
+      }
+      val qError = entry.target - entry.q
+      if (abs(qError) > POSITION_EPSILON || abs(entry.qVelocity) > VELOCITY_EPSILON) {
+        entry.qVelocity +=
+          ((slow * slow * qError) - (2f * STACK_SLOW_DAMPING * slow * entry.qVelocity)) * dt
+        entry.q += entry.qVelocity * dt
+        moving = true
+      } else {
+        entry.q = entry.target
+        entry.qVelocity = 0f
+      }
     }
     if (column.entries.size > 1) {
-      val newest = column.entries.last()
-      column.entries.retainAll { it === newest || 1f - abs(it.p) > 0.004f }
+      // Cull on the SLOW clock: that is the one that owns alpha, so a glyph is kept for exactly as
+      // long as it is still drawing ink. Culling on `p` dropped glyphs that were still visible.
+      // Keep the newest TWO whatever their opacity, then cull the rest on alpha.
+      //
+      // Culling everything but the newest leaves a hole: a newborn entry has opacity 0 by
+      // definition, so if the one it replaced has already fallen under the threshold the column is
+      // empty for as long as the new one takes to become visible. At an ordinary cadence that never
+      // happens; compress the clocks and it happens once per commit — seen directly in the frames,
+      // the column alternating between a sharp dark digit and nothing at all, which is what took the
+      // roll's final floor to 0.000 and made the ink centroid meaningless.
+      val keep = column.entries.takeLast(2)
+      column.entries.retainAll { it in keep || it.alpha > 0.004f }
+      // NOT capped to a pair under crowding, though the reference's column is explained by exactly
+      // two glyphs and this one needs five. Tried, and it fails for a reason worth keeping: on the
+      // reference those two carry all the ink because each is bright and full-sized, while here the
+      // newest is born at zero opacity, so deleting the others just empties the column — mean ink
+      // 0.786 -> 0.535, the kymograph going pale and sparse, and the centroid sawtoothing between
+      // the survivors, 0.131 -> 0.464. The count is a CONSEQUENCE of the reference's curves, not a
+      // cause that can be imposed by deletion.
     }
     return moving
   }
@@ -936,6 +1381,7 @@ internal class NumericRollEngine {
    * through relaxing back to its resting width.
    */
   private fun stepCrowd(column: Column, dt: Float): Boolean {
+    column.flipRaw = max(0f, column.flipRaw - dt / FLIP_RELAX)
     if (column.crowdRaw <= 0f && column.crowd <= 0.001f) {
       column.crowd = 0f
       return false
