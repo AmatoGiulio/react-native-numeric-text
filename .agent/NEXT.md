@@ -7,6 +7,63 @@ the reference**; the Android renderer is the thing being fitted.
 Read this, then `IOS_GROUND_TRUTH.md`. Everything in both either states a measurement or says it is
 a guess. A claim without a number behind it should be distrusted.
 
+> **2026-08-04 — read `TRANSITION_MODEL.md` before acting on the "Next, in order" section below.**
+> The reference's frames now reconstruct per glyph, and three things that section rests on turned
+> out to be wrong: the transition ignores the transaction's animation entirely (so nothing has to be
+> deconvolved), a column holds exactly two crossfading glyphs with a fixed ±0.59375 entry amplitude
+> whatever the digit distance (so it is neither a strip nor a drum, and no intermediate digit is
+> ever drawn), and under a fast cadence it stalls into a half-formed pair rather than stacking.
+> Item 4 below — driving the reference under an explicit `.linear` — has been run, and it is what
+> established the first of those.
+>
+> **The measured model is now PORTED and measured on device** (`stackMode`, round `stackfit`):
+> the single crossing is 0.056 down / 0.047 up with the wave inside 1 ms and the close inside 2 ms,
+> and **the continuous roll is essentially exact** — sharpness 0.603 against 0.600, tail 611 ms
+> against 615, final floor 0.426 against 0.409. Two constants had unit bugs and both are fixed:
+> Apple's `scale` 0.3984 is the FINAL scale and was being applied as the shrink amount, and
+> `relativeOffset` 0.59375 is in CAP heights and was being applied to the line height — which is the
+> whole "0.59375 does not transfer, 0.44 fits" story, a unit mismatch and not a wrong constant.
+>
+> **RETRACTED 2026-08-04 evening — "the stack loses the alternation" was never measured.**
+> This paragraph used to read: the simulator predicted travel 0.190, the device gave 0.549–0.853 and
+> a 60 ms band of 1.489, so the stack buys the roll and loses the alternation. Two separate faults
+> produced those numbers and **both sides of the comparison were wrong**.
+>
+> 1. **`round.sh` never switched the engine on.** `stackMode` is enabled by a marker file on the
+>    device, `numerictext-stack.on`, and nothing in the script touched it — so which engine a round
+>    measured depended on whether an earlier session had left the flag behind, and no number in any
+>    output said which. A fresh round of this exact source, driven before this was found, reproduced
+>    the DRUM's table to three decimals under a name meant for the stack. `ENGINE=stack|drum` now
+>    sets it explicitly and every group carries an `engine.txt` with the engine, the commit and
+>    whether the tree was dirty.
+> 2. **The simulator was not running this model.** Four divergences, all in `sim.py`: opacity
+>    derived from the position clock and therefore NOT monotone (a discarded glyph relit to full
+>    black crossing rest), no notion of direction at all (so an alternation drew both ways the
+>    same), blur fed in as a sigma where the device feeds it as a length — **3.5x** — and the final
+>    scale at 0.60 where the engine has 0.3984. `--model=kotlin` now ports the engine line for line
+>    and parses its constants out of the source.
+>
+> Re-measured with both fixed, `artifacts/align3` (stack) and `artifacts/align1` (drum), same source,
+> same session, plus the aligned simulator:
+>
+> | | drum, device | stack, device | stack, simulator | reference |
+> |---|---|---|---|---|
+> | headline down / up | **0.010** / 0.010 | 0.022 / 0.023 | 0.036 / 0.034 | — |
+> | band 60 / 120 / 240 ms | 0.846 / 1.333 / 1.305 | 0.957 / 1.544 / 1.308 | 1.034 / 1.534 / 1.328 | 0.760 / 1.460 / 1.292 |
+> | roll sharpness / tail | 0.603 / 635 ms | 0.603 / 552 ms | 0.600 / 593 ms | 0.600 / 615 ms |
+> | travel single | 0.165 | **0.156** | 0.139 | 0.163 |
+> | travel alt 60 / 120 / 240 | 0.285 / 0.259 / 0.281 | 0.440 / 0.251 / 0.177 | 0.407 / — / — | 0.103 / 0.139 / 0.161 |
+> | travel roll | 0.511 | **0.184** | 0.229 | 0.119 |
+>
+> So the trade is real but it is not the one recorded: the stack **fixes the roll** — travel 0.511 →
+> 0.184, which nothing else on this branch has managed — costs 0.012 on the single crossing, and is
+> within scatter of the drum on the 60 ms band rather than twice it. The alternation's travel is the
+> one place it is clearly worse, and only at 60 ms.
+>
+> **And the simulator can now be believed.** Aligned, it lands the device's single crossing column by
+> column (ink floor within 0.014, extent within 0.02, onsets within 2 ms) and its 120 and 240 ms
+> bands to 0.01–0.02. A candidate costs a second again, and this time the second is worth something.
+
 ---
 
 ## Where it stands
@@ -49,6 +106,266 @@ further than the reference's under a crowd, while matching it exactly (0.165 aga
 single change. The reference moves its ink LESS through a crowd than through one change; this engine
 moves it monotonically more, the more the changes pile up. That is a shape no constant reaches — see
 the last section.
+
+## The 60 ms alternation — six levers swept, and what the trade turned out to be
+
+Simulator only, `--model=kotlin`, nothing ported. Every lever is gated on ONE signal, `flipRaw`,
+which rises only when the value REVERSES onto a column still in flight — so it is identically zero
+for a single change and identically zero through a roll, where the direction never reverses.
+**Verified rather than asserted**: with all six levers at 0.9 the single crossing and the roll come
+out bit-identical to the ungated render (`cmp` on the raw frame planes). The single crossing and the
+roll cannot be damaged by anything in this section, by construction.
+
+`.agent/tools/alttrace.py` prints the engine's own per-glyph state — position, velocity, alpha,
+blur, which way it was born, time since the last reversal — and it is what made the mechanism
+visible. At 60 ms, steady state:
+
+```
+t=216ms   0 +1.093 α0.071 | 1 -0.909 α0.107 | 0 +0.550 α0.269 | 1 -0.536 α0.410 | 0 +0.912 α0.143
+```
+
+Seven glyphs alive, the two bright ones at ±0.55 with unequal alpha, and they swap every 60 ms.
+**Nothing is ever near rest**, and the centroid swings with whichever of the pair is brighter.
+
+| lever | what it does on a reversal | travel 0.407 → | band 1.034 → |
+|---|---|---|---|
+| `FLIP_TRAVEL` | birth the newcomer closer in | **0.216** at 1.0 | 1.483 |
+| `FLIP_SHORTEN` | compress the drawn offset | 0.358 at 0.75 | — |
+| `FLIP_MIRROR` | birth it opposite the glyph it supersedes | 0.305 at 1.0 | 1.304 |
+| `FLIP_DAMP` | kill the live glyphs' velocity | 0.388 at 0.9 | worse imbalance |
+| `FLIP_FADE` | speed the superseded glyphs' fade | 0.393 at 0.75 | worse imbalance |
+| `FLIP_DEPART` | shorten the departure too | **0.425**, worse | worse |
+| `FLIP_LEVEL` | even the pair's opacity, moving nothing | 0.414, no effect | 1.014 |
+
+Damping, fading and shortening the departure do nothing for the travel, and two of them make the
+pair's imbalance worse. Levelling the opacity does not move the centroid at all — which kills the
+reading that the swing is photometric.
+
+Best on the stated objective, `FLIP_TRAVEL=1.0` with `FLIP_SHORTEN=0.75`:
+
+| | 60 ms | 120 ms | 240 ms |
+|---|---|---|---|
+| travel, this vs reference | **0.187** / 0.103 | 0.121 / 0.139 | 0.141 / 0.161 |
+| imbalance, this vs reference | **0.056** / 0.058 | 0.122 / 0.115 | 0.119 / 0.118 |
+| band, this vs reference | **1.517** / 0.760 | 1.450 / 1.460 | 1.192 / 1.292 |
+
+Travel 0.407 → 0.187 against the reference's 0.103, the pair's imbalance lands the reference at all
+three cadences, and 120 / 240 ms improve on the band as well. **One thing regresses and it is the
+60 ms band, 1.034 → 1.517 against 0.760** — and that is not a badly chosen constant, it is the
+mechanism. The band measures whether the two forms stay SEPARATED (below 1) or merge (above 1).
+Every lever that pulls ink towards rest to still the centroid also fills the middle. Travel and band
+are coupled through the same quantity.
+
+**The reference is not on that curve at all, and that is the finding.** Its band goes 0.760 at 60 ms,
+1.460 at 120, 1.292 at 240 — it separates MORE as the cadence gets faster, while this engine merges
+more. `TRANSITION_MODEL.md` §5 already describes it in words: under crowding the reference stalls
+into two half-formed glyphs held apart, one above and one below, at half scale and half opacity,
+essentially unchanging. It does not converge them to rest and it does not swap them; it PARKS them.
+This engine's transitions each keep converging on rest, and no reversal-gated adjustment to where
+they start or how fast they get there turns converging into parking.
+
+### The park was tried, and it does exactly one of the two things
+
+`FLIP_PARK` / `FLIP_PARK_AT`: under a reversal in flight, aim the pair at ±`at` — one above, one
+below, held — instead of at rest and at the exit, blended every frame off the live signal so the
+column still settles normally once the burst ends. `target` untouched, so scale, blur and alpha go
+on crossfading underneath, which is what "half scale, half opacity, essentially unchanging" needs.
+
+**It moves the band, and it is the only thing that does**: 1.034 → 0.852 at `at` 0.80, → 0.691 with
+the rest-test fix and the opacity levelling, against the reference's 0.760. Every other lever moves
+it the wrong way. **It does not move the travel** — 0.407 → 0.453, slightly worse.
+
+The trace says why, and it retracts the reading that the swing is about where glyphs END UP. Under a
+park the newest glyph is still born at full amplitude and still travels inward from ±0.95 to ±0.4
+*while it is the brightest thing in the column*, alternating sides. The old glyphs the park holds
+are already at alpha 0.005–0.17. **The centroid follows the newcomer's journey, not the pair's
+resting geometry.** Which is also why `FLIP_LEVEL` does nothing for travel even with the positions
+made symmetric — tried, 0.441 against 0.437 without it.
+
+### A real bug, and it is in the engine rather than in a constant
+
+The crowd impulse fires when a change lands on a column "not at rest", tested as
+`abs(target - position)`. **In stack mode `position` is never stepped** — `stepEntries` replaces
+`stepPosition` — so it holds whatever `snapToTarget` last left while `target` moves with every
+commit. Through a roll the target walks away and never returns, so the test is right by accident.
+Under an alternation the target oscillates between two stops and lands back ON the stale position
+every other commit, so **the impulse fires half as often as it should**: `crowdRaw` averages 0.190
+through a 60 ms alternation against 0.614 through a 30 ms roll. `STACK_ARRIVAL_GATE`, whose whole
+job is to pair "bright" with "arrived", is therefore barely engaged in the one regime where the
+brightest glyph is the one still in transit.
+
+Asking the entries themselves — any live glyph away from its own rest or still carrying velocity —
+leaves the single crossing and the roll **bit-identical** (both already answer correctly) and
+changes only the alternation. It is a fix, not a knob, and it should go into the Kotlin on its own.
+
+### Where the frontier stands
+
+| | travel | band | imbalance |
+|---|---|---|---|
+| reference | **0.103** | **0.760** | **0.058** |
+| base | 0.407 | 1.034 | 0.131 |
+| restfix + park 0.80 + level | 0.425 | **0.691** | 0.097 |
+| restfix + park + level + mirror | 0.351 | 0.941 | 0.085 |
+| restfix + travel 0.75 | 0.237 | 1.254 | 0.053 |
+| travel 1.0 + shorten 0.75 | **0.187** | 1.517 | 0.056 |
+
+The frontier moved — `restfix + park + level + mirror` beats the base on all three at once, which
+nothing before it did — and **the reference still dominates every point on it**. The goal of 0.103
+is not reached and should not be claimed.
+
+### The rest-test fix is PORTED, and it costs the band — read this before judging it
+
+`NumericTextTimeline.step` now asks the entries in stack mode. It is the right test and the old one
+was measuring a scalar that stack mode never updates. But "correct" is not the same as "better", and
+here it is not better on every count. Re-measured in the simulator, alternation only:
+
+| | travel | band | imbalance |
+|---|---|---|---|
+| before the fix | 0.407 | **1.034** | 0.131 |
+| after the fix | 0.406 | **1.251** | 0.121 |
+
+Travel does not move at all, the pair's imbalance improves slightly, and **the band gets worse**.
+
+Confirmed on device, `artifacts/align5` against `artifacts/align3` — same source otherwise, same
+session, `engine.txt` in both:
+
+| | align3, no fix | align5, fix | reference |
+|---|---|---|---|
+| headline down / up | 0.022 / 0.023 | **0.022 / 0.023** | — |
+| travel single | 0.156 | **0.156** | 0.163 |
+| travel roll | 0.184 | **0.185** | 0.119 |
+| roll sharpness / tail | 0.603 / 552 ms | 0.603 / 553 ms | 0.600 / 615 ms |
+| band 60 ms | 0.957 **±0.156** | 1.136 **±0.010** | 0.760 |
+| band 120 / 240 ms | 1.544 / 1.308 | 1.516 / 1.281 | 1.460 / 1.292 |
+| travel alt 60 | 0.440 ±0.061 | 0.417 ±0.029 | 0.103 |
+
+The single crossing and the roll are untouched on the device too, which is what the simulator said
+bit-identically. The band cost is real and the two agree on its size: +0.22 in the simulator,
++0.18 on the device.
+
+**And there is a benefit the simulator could not show: the 60 ms band stopped being noise.** Its
+run-to-run spread goes from ±0.156 to ±0.010, and 120/240 ms tighten to ±0.012/±0.009. This file has
+carried a warning for weeks that the 60 ms band's own scatter (0.041–0.172) was larger than the
+differences rounds were being decided on, and that "that round carried no information". The cause
+was in the engine, not in the rig: the crowd impulse was firing on alternate commits, so which
+commits it caught depended on where the run happened to start. It is now a measurement worth
+fitting against.
+The reason is not subtle: `STACK_ARRIVAL_GATE` and everything around it was fitted WITH the broken
+signal, so restoring the signal changes the gate's effective strength and the constants fitted
+against it no longer hold. The fix should stay — a signal that fires half the time is not a thing to
+build on — but the constants it drives are now unfitted and the 60 ms band is where that shows.
+
+### Driving the arrival gate off the reversal signal — tried, and it FAILS
+
+The obvious follow-up, and the trace's own suggestion: if the brightest glyph is one still in
+transit, lean harder on the mechanism that exists to prevent exactly that. Measured, with the gate
+given extra drive under a reversal and its depth raised towards 1:
+
+| | travel | band |
+|---|---|---|
+| base (fix in) | 0.406 | 1.251 |
+| `FLIP_GATE=1` | **0.438** | 1.297 |
+| `FLIP_GATE=1, FLIP_GATEHARD=1` | **0.454** | 1.333 |
+
+Worse, monotonically. The reason is in the engine's own comment: the gate **redistributes** rather
+than attenuates — it moves the far glyph's share of the opacity onto the arrived one, keeping the
+column's total. Under a 60 ms alternation **nothing ever arrives**, so "the arrived one" is merely
+whichever glyph is least far out, sitting at ±0.4, and concentrating the column's brightness there
+moves the centroid further rather than less.
+
+So the remaining defect is not a weighting problem. No redistribution of brightness among glyphs
+that are all off-centre can centre the ink. The only lever that touches it is how far the bright
+newcomer has to travel — which is `FLIP_TRAVEL`, and which is a statement about the entry amplitude
+under a reversal, not about opacity.
+
+Best combined point measured so far, with the fix in:
+`FLIP_GATE=1, FLIP_GATEHARD=1, FLIP_PARK=1, FLIP_PARK_AT=0.80, FLIP_LEVEL=1` — travel 0.424,
+**band 0.698** against the reference's 0.760, imbalance 0.093. The band is solved; the travel is not.
+
+### The hand test says the STACK wins, and it outranks the band
+
+Driven on the device by a human, both engines side by side through the example app's own switch:
+**the stack is the better one to look at.** That is worth recording precisely because the metric
+disagreed — the 60 ms band reads 1.313 for the stack against 1.251 for the drum, i.e. the number
+that has driven most of this branch's decisions said the opposite.
+
+It is the same lesson this file already carries in "what to know before touching anything": the
+metric ranks candidates, it does not find defects, and every defect fixed here was found by looking.
+The band measures whether two forms stay separated in a time-averaged profile; it says nothing about
+whether the motion reads as one continuous thing. Do not re-decide this on the band alone.
+
+### Nine reversal-gated levers, and the three roads they closed
+
+All in the simulator, `--model=kotlin`, nothing ported. Every lever is gated on `flipRaw`, so the
+single crossing and the roll render **bit-identical** to the ungated model — checked with `cmp` on
+the raw frame planes on every one of the nine, not asserted.
+
+| lever | what it does | travel | band | imbalance |
+|---|---|---|---|---|
+| — | base, with the rest-test fix | 0.406 | 1.251 | 0.121 |
+| `BIG=0.5` | glyphs shrink less | 0.385 | 1.389 | 0.095 |
+| `AREA=0.5` | same ink weight, base size | **0.376** | 1.225 | 0.104 |
+| `AREA=0.16` | calibrated to the reference's ink | 0.395 | 1.242 | 0.115 |
+| `TILT=1.0` | weight towards the far glyph, total held | 0.401 | **1.222** | 0.115 |
+| `KEEP=3` | only 3 contributors composited | 0.415 | 1.270 | 0.123 |
+| `KEEP=2` | only 2 | 0.391 | 1.301 | 0.127 |
+| `STRETCH=1.22` | every glyph taller | 0.411 | 1.333 | 0.101 |
+| `STRETCH=1.40` | more so | 0.413 | 1.391 | **0.088** |
+| `STRETCH_OUT=1.44` | only the DEPARTING glyph taller | **0.382** | 1.313 | 0.100 |
+| reference | | 0.103 | 0.760 | 0.058 |
+
+**The contributor count is REFUTED, and decisively.** With `KEEP=2` two glyphs carry **96.8%** of
+the ink — the configuration this was supposed to need — and the central ink reads **0.155 against
+the base's 0.157**, where the reference sits at 0.097. The middle is not filled by the weak
+contributors; it is filled by the two dominant glyphs' own tails. Measured inside the engine, no
+glyph is ever within 0.12 of rest at any cadence, so nothing is sitting in the middle at all.
+
+**`AREA` wins for the wrong reason.** It improved all three at once, but it left the column 28%
+brighter than the reference, and `TILT` — the same redistribution with the total held fixed — is
+worth nothing (0.406 → 0.401). The gain is the alpha ceiling: brightening saturates the dominant
+glyph at 1.0 and only the far ones grow. An artefact of the clamp, not a mechanism.
+
+### The profiles, and what they actually say
+
+Mean vertical profiles of the changing column, resampled onto glyph heights about rest and scaled
+to unit AREA, so only shape differs (`profile.py` in the scratchpad):
+
+| | FWHM up | FWHM down | W10 up | W10 down | W10/FWHM |
+|---|---|---|---|---|---|
+| reference | 0.585 | 0.535 | 0.705 | 0.715 | 1.271 |
+| this engine | 0.405 | 0.515 | 0.560 | 0.660 | 1.332 |
+
+And in ABSOLUTE windows about rest, at equal total area:
+
+| window | reference | engine | ratio |
+|---|---|---|---|
+| \|y\| < 0.05 | 0.047 | 0.096 | **2.04** |
+| \|y\| < 0.10 | 0.103 | 0.194 | 1.88 |
+| \|y\| > 0.55 | **0.854** | 0.372 | **0.44** |
+
+**Our lobes are not heavy-tailed — they are NARROW.** The tail ratio is 1.33 against 1.27 with a
+Gaussian at 1.82, i.e. both profiles are flat-topped and ours is barely different. The real gap is
+that the reference's mass is pushed OUT: it carries 2.3x ours beyond ±0.55 and we carry 2.0x its
+ink inside ±0.05. A blur reduction was therefore **not run** — it would narrow the profile further
+and empty the far mass, which is the axis we are already furthest from.
+
+This also retracts the framing of the earlier "central ink 0.097 vs 0.157": that measure takes the
+middle third *of the distance between the lobes*, and the reference's lobes are further apart, so
+the two platforms were being compared over windows of different absolute width. The sign survives —
+our middle really is twice as full — but the cause is not tail weight.
+
+### What every road so far has converged on
+
+Nine levers across three families — photometric share, entry/park geometry, and per-glyph shape —
+and the same fact under each: **the reference holds two FULL glyphs, and this engine holds one full
+glyph and a trail of faint residues.** Stretching the departing glyph by 44% moved the upper lobe by
+6%, which says the upper lobe is not the departing glyph at all; it is the sum of the residues.
+
+The untested thing that all three roads point at is the departing glyph's own ALPHA CURVE under a
+reversal — it has to stay large and bright far longer than the measured isolated curve allows. That
+is not a knob on top of the model; it is the fade law itself, and `TRANSITION_MODEL.md` §5 measured
+that law on an isolated triple, never under a reversal. **There is no capture of a reversal at a
+30-60 ms gap in the ground truth**, which is why this has never been checked.
 
 ## The measuring rig — the part that makes progress possible
 
@@ -101,6 +418,16 @@ differences of 0.03–0.04 at 60 ms, and HEAD re-measured moves 0.038 on that sa
 round carried no information.** 60 ms now gets five runs; 120 and 240 are the cadences to fit on.
 
 Traps, each of which has already cost real time:
+
+- **Which ENGINE a round measured used to be invisible.** `stackMode` is switched by a marker file
+  on the device and `round.sh` did not touch it, so a round measured whichever engine the last
+  session had left armed — and the output said nothing. That is how "the stack" acquired a table of
+  the drum's numbers. Drive with `ENGINE=stack .agent/tools/round.sh <name>`; read
+  `artifacts/<name>/engine.txt` before believing any number in a directory.
+- **The HOST's disk fills too, not just the emulator's.** A round writes ~3 GB locally and `sim.py`
+  ~90–320 MB per preset. At 100% full the round simply stops part way — `align2` came back with two
+  alternation runs out of nine and no roll at all, and its single-crossing table looked perfectly
+  normal. Check `df -h .` before a round, not after.
 
 - **A recording that ran out of disk leaves a `.bin` with no `.json`, and every glob here keys off
   the `.json`** — so it is skipped in silence and the analysis measures what survived. A run is
