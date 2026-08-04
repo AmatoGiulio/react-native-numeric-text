@@ -32,6 +32,7 @@ function NumericTextViewImpl({
   testID,
   debugTransitionStrategy,
   debugManualProgress,
+  debugEngine,
 }: Props) {
   const text = resolveTextStyle(style);
 
@@ -61,6 +62,7 @@ function NumericTextViewImpl({
       textColor={text.textColor}
       testID={testID}
       debugTransitionStrategy={debugTransitionStrategy}
+      debugEngine={debugEngine}
       debugManualProgress={
         typeof debugManualProgress === 'number'
           ? debugManualProgress

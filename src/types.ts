@@ -57,4 +57,10 @@ export type NumericTextProps = {
 export type NumericTextDebugProps = {
   debugTransitionStrategy?: 'whole_run' | 'changed_run' | 'per_glyph';
   debugManualProgress?: number;
+  /**
+   * Android only. Which engine draws a column: `drum` is the roll model, `stack` is the stack of
+   * independent transitions. Global rather than per-view, and `auto` leaves whatever the frame
+   * recorder's marker file decided so the measuring rig is unaffected.
+   */
+  debugEngine?: 'auto' | 'drum' | 'stack';
 };

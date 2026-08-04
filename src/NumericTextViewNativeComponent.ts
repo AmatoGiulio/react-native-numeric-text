@@ -20,6 +20,12 @@ interface NativeProps extends ViewProps {
   readonly textColor?: ColorValue;
   readonly debugTransitionStrategy?: string;
   readonly debugManualProgress?: Double;
+  /**
+   * Android debug switch: 'drum' | 'stack' | 'auto'. Selects which engine draws a column. Global
+   * rather than per-view, and 'auto' leaves whatever the recorder's marker file decided. No effect
+   * on iOS, which hosts the real SwiftUI view.
+   */
+  readonly debugEngine?: string;
 }
 
 export default codegenNativeComponent<NativeProps>('NumericTextView');

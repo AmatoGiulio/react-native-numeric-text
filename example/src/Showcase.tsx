@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import { NumericText } from 'react-native-numeric-text';
 import {
   SEQUENCE,
@@ -183,6 +183,9 @@ type Props = { onOpenLab: () => void };
 export function Showcase({ onOpenLab }: Props) {
   const [value, setValue] = useState(START);
   const [playing, setPlaying] = useState(false);
+  // Android only, and 'auto' means "leave whatever the frame recorder's marker file decided", so a
+  // measuring round is unaffected unless this is touched deliberately.
+  const [engine, setEngine] = useState<'auto' | 'drum' | 'stack'>('auto');
   const [syncing, setSyncing] = useState(false);
   const timers = useRef<ReturnType<typeof setTimeout>[]>([]);
   /** Cancels the in-flight frame-clock run, if any. See scheduleOnFrames. */
@@ -424,19 +427,44 @@ export function Showcase({ onOpenLab }: Props) {
           measuring band for either never overlaps it. */}
       <View style={[styles.sync, syncing && styles.syncOn]} />
 
-      <Pressable
-        style={styles.lab}
-        onPress={onOpenLab}
-        accessibilityRole="button"
-      >
-        <Text style={styles.labText}>Lab</Text>
-      </Pressable>
+      {/* The top row keeps the Lab pill's own height, so adding the engine switch beside it does
+          NOT move anything below. That matters more than it looks: `.agent/tools/round.sh` taps
+          FIXED SCREEN COORDINATES for the preset buttons, and a layout shift here would silently
+          put a whole round of measurements on the wrong transition. */}
+      <View style={styles.topRow}>
+        {Platform.OS === 'android' ? (
+          <Pressable
+            style={styles.lab}
+            onPress={() =>
+              setEngine((e) =>
+                e === 'auto' ? 'drum' : e === 'drum' ? 'stack' : 'auto'
+              )
+            }
+            accessibilityRole="button"
+            accessibilityLabel={`Motore: ${engine}`}
+          >
+            <Text style={styles.labText}>
+              {engine === 'auto' ? 'motore: auto' : `motore: ${engine}`}
+            </Text>
+          </Pressable>
+        ) : (
+          <View />
+        )}
+        <Pressable
+          style={styles.lab}
+          onPress={onOpenLab}
+          accessibilityRole="button"
+        >
+          <Text style={styles.labText}>Lab</Text>
+        </Pressable>
+      </View>
 
       <View style={styles.stack}>
         <NumericText
           animationDuration={320}
           value={value}
           style={styles.number}
+          debugEngine={engine}
         />
 
         <View style={styles.row}>
@@ -712,8 +740,12 @@ const styles = StyleSheet.create({
     paddingBottom: 56,
     paddingHorizontal: 24,
   },
+  topRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
   lab: {
-    alignSelf: 'flex-end',
     paddingHorizontal: 14,
     paddingVertical: 7,
     borderRadius: 999,
