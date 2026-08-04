@@ -62,6 +62,24 @@ adb -s "$SERIAL" shell mkdir -p "$FILES" 2>/dev/null || true
 adb -s "$SERIAL" shell touch "$FILES/numerictext-record.on"
 adb -s "$SERIAL" shell rm -rf "$FILES/numerictext-record"
 
+# WHICH ENGINE — and it is set here, never left to whatever the device happened to be holding.
+#
+#   ENGINE=stack .agent/tools/round.sh <name>     # NumericRollEngine.stackMode = true
+#   .agent/tools/round.sh <name>                  # the drum, the default
+#
+# `numerictext-stack.on` is a file on the device and nothing here used to touch it, so the engine a
+# round measured depended on whether some EARLIER round had left the flag behind — and no number in
+# any output said which. Two of this branch's engines were being compared through that switch. A
+# fresh round of the current source, driven before this line existed, reproduced the DRUM's table to
+# three decimals under a name that was meant to be the stack's.
+ENGINE="${ENGINE:-drum}"
+case "$ENGINE" in
+  stack) adb -s "$SERIAL" shell touch "$FILES/numerictext-stack.on" ;;
+  drum)  adb -s "$SERIAL" shell rm -f "$FILES/numerictext-stack.on" 2>/dev/null || true ;;
+  *)     echo "   ENGINE=$ENGINE non esiste — usa drum o stack"; exit 1 ;;
+esac
+echo "   motore: $ENGINE"
+
 echo "── launch"
 adb -s "$SERIAL" reverse "tcp:$PORT" "tcp:$PORT" >/dev/null
 adb -s "$SERIAL" shell am force-stop numerictext.example
@@ -85,6 +103,12 @@ fi
 open_group() { # <dir> — start a group empty; drain() only ever appends to it
   rm -rf "artifacts/$1"
   mkdir -p "artifacts/$1"
+  # Beside the recordings, so a directory found later can still say what made it. The numbers are
+  # kept for months; the shell that produced them is not.
+  printf 'engine=%s\ncommit=%s\ndirty=%s\ndriven=%s\n' \
+    "$ENGINE" "$(git rev-parse --short HEAD)" \
+    "$(git diff --quiet -- android/src && echo no || echo yes)" \
+    "$(date +%FT%T)" > "artifacts/$1/engine.txt"
 }
 
 # Drain after EVERY run, not once per group.
