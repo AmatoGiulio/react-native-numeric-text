@@ -185,7 +185,7 @@ export function Showcase({ onOpenLab }: Props) {
   const [playing, setPlaying] = useState(false);
   // Android only, and 'auto' means "leave whatever the frame recorder's marker file decided", so a
   // measuring round is unaffected unless this is touched deliberately.
-  const [engine, setEngine] = useState<'auto' | 'drum' | 'stack'>('auto');
+  const [engine, setEngine] = useState<'auto' | 'drum' | 'stack'>('stack');
   const [syncing, setSyncing] = useState(false);
   const timers = useRef<ReturnType<typeof setTimeout>[]>([]);
   /** Cancels the in-flight frame-clock run, if any. See scheduleOnFrames. */

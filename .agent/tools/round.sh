@@ -65,7 +65,10 @@ adb -s "$SERIAL" shell rm -rf "$FILES/numerictext-record"
 # WHICH ENGINE — and it is set here, never left to whatever the device happened to be holding.
 #
 #   ENGINE=stack .agent/tools/round.sh <name>     # NumericRollEngine.stackMode = true
-#   .agent/tools/round.sh <name>                  # the drum, the default
+#   ENGINE=drum .agent/tools/round.sh <name>      # the drum
+#
+# BOTH engines get an explicit marker now. "No file" used to mean the drum, which is why
+# the app could never start on the stack however its own selector was set.
 #
 # `numerictext-stack.on` is a file on the device and nothing here used to touch it, so the engine a
 # round measured depended on whether some EARLIER round had left the flag behind — and no number in
@@ -74,8 +77,10 @@ adb -s "$SERIAL" shell rm -rf "$FILES/numerictext-record"
 # three decimals under a name that was meant to be the stack's.
 ENGINE="${ENGINE:-drum}"
 case "$ENGINE" in
-  stack) adb -s "$SERIAL" shell touch "$FILES/numerictext-stack.on" ;;
-  drum)  adb -s "$SERIAL" shell rm -f "$FILES/numerictext-stack.on" 2>/dev/null || true ;;
+  stack) adb -s "$SERIAL" shell touch "$FILES/numerictext-stack.on"
+         adb -s "$SERIAL" shell rm -f "$FILES/numerictext-drum.on" 2>/dev/null || true ;;
+  drum)  adb -s "$SERIAL" shell touch "$FILES/numerictext-drum.on"
+         adb -s "$SERIAL" shell rm -f "$FILES/numerictext-stack.on" 2>/dev/null || true ;;
   *)     echo "   ENGINE=$ENGINE non esiste — usa drum o stack"; exit 1 ;;
 esac
 echo "   motore: $ENGINE"

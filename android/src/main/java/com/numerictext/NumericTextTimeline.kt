@@ -125,7 +125,16 @@ internal class NumericRollEngine {
      * to find out whether that prediction survives the real renderer and the real frame clock,
      * which the simulator does not have. Do not delete the roll model until it does.
      */
-    var stackMode = false
+    var stackMode = true
+
+    /**
+     * Set once a `debugEngine` prop has chosen explicitly, so the recorder's marker files stop
+     * overriding it. React Native applies props BEFORE the view is attached, and the marker read
+     * happens on attach — so without this the first transition of every session ran on whichever
+     * engine the FILE named, no matter what the app's selector said. Only the first, because the
+     * read is one-shot, which is what made it so hard to see.
+     */
+    var engineChosenByProp = false
 
     /**
      * The drum's radius in STACK mode. Larger than the roll model's [APOTHEM] because a stack does
@@ -309,26 +318,57 @@ internal class NumericRollEngine {
     const val STACK_BLUR_DAMPING = 0.91f
 
     /**
-     * How tall the DEPARTING glyph is drawn while the value is reversing, as a multiple of its
-     * normal height. 1.0 is off.
+     * How much further out the arriving glyph is born while the value is reversing. 1.0 is off.
      *
-     * Fitted in the off-line simulator against the reference's own alternation, and it is the only
-     * candidate out of nine that moved several properties towards it at once: the ink centroid's
-     * excursion 0.406 -> 0.382, the pair's imbalance 0.121 -> 0.100, the lobes' separation
-     * 0.599 -> 0.638, the profile's tail ratio 1.332 -> 1.306 against the reference's 1.271, and
-     * the column's total ink onto 0.318 against the reference's 0.321 without being calibrated for
-     * it. The reference's two lobes are nearly equal in width (0.585 / 0.535) where this engine's
-     * upper one is half the lower (0.405 / 0.515), and the upper one is the departing glyph.
-     *
-     * 1.44 is 0.585 / 0.405, i.e. the gap itself. It buys 0.405 -> 0.430 of that gap, which says
-     * most of the upper lobe is NOT the departing glyph but the sum of older residues — see
-     * `.agent/NEXT.md`. The cost is the 60 ms band, 1.251 -> 1.313: a taller glyph puts mass towards
-     * the middle as well as away from it.
-     *
-     * Zero effect anywhere the value does not reverse mid-transition: the simulator renders the
-     * single crossing and the continuous roll BIT-IDENTICAL with this at 1.44.
+     * The pair has to be pushed APART, and this is the only thing that empties the middle of the
+     * column: central ink 0.157 -> 0.104 against the reference's 0.097, with the lobes' separation
+     * 0.599 -> 0.663 and their width 0.141 -> 0.160 against 0.738 and 0.168. Nine earlier levers
+     * left the middle untouched because every one of them moved BRIGHTNESS around glyphs that
+     * stayed where they were. `.agent/NEXT.md` recorded that the middle could not be emptied; that
+     * was a conclusion drawn from experiments none of which moved the glyphs, and it is withdrawn.
      */
-    const val STACK_FLIP_STRETCH_OUT = 1.44f
+    const val STACK_FLIP_BORN = 1.5f
+
+    /**
+     * How much the alpha clock is stretched while the value is reversing. 1.0 is off.
+     *
+     * Opacity is linear in its own clock here and the departing glyph vanishes on the same curve
+     * the arriving one appears on, so the handover is as abrupt as that clock. Doubling the response
+     * produces the reference's persistent overlap — the fraction of a cycle where BOTH lobes carry
+     * more than 35% of the column goes 0.08 -> 0.29 against the reference's 0.38 — and takes the
+     * ink centroid's excursion 0.406 -> 0.268, the largest single gain measured on this branch.
+     */
+    const val STACK_FLIP_SOFT = 2.0f
+
+    /**
+     * A gain on the pair's opacity while the value is reversing. 1.0 is off.
+     *
+     * Pushing the pair apart and softening the handover both cost ink, because ink goes as alpha
+     * times AREA and these glyphs stay small for longer: the column measured 0.175 of a settled
+     * glyph against the reference's 0.321. Raising the alpha CEILING cannot fix that and was tried
+     * first — a crossfade is convex, the pair already sums to ~0.99 on its own, so the cap is never
+     * the binding constraint and lifting it changed nothing to three decimals. The gain has to be on
+     * the alphas, which the reference's own crowded sums of 1.15-1.81 allow. Per-glyph alpha is
+     * still clamped to 1 below.
+     */
+    const val STACK_FLIP_LIFT = 1.5f
+
+    /**
+     * Every glyph is drawn taller while the value is reversing, about its own optical centre.
+     * 1.0 is off.
+     *
+     * A departing-glyph-only variant of this was tried first and removed: stacked on top of the
+     * whole-pair stretch it took the column's ink to 0.371 against the reference's 0.321 and put
+     * the middle back to 0.156 from 0.132. It bought legibility — one glyph over 70% of the column
+     * in 26.1% of frames instead of 36.2%, against the reference's 15.4% — so it is worth trying
+     * again once the density is settled.
+     *
+     * The reference's lobes are 30-45% wider in FWHM (0.585 / 0.535 against 0.405 / 0.515) and it
+     * carries 2.3x our ink beyond ±0.55 while we carry 2.0x its ink inside ±0.05. Our distribution
+     * is not heavy-tailed — the tail ratio is 1.33 against 1.27, both far from a Gaussian's 1.82 —
+     * it is simply NARROWER.
+     */
+    const val STACK_FLIP_STRETCH = 1.35f
 
     /** The reversal signal's impulse and bleed, mirroring [CROWD_STEP] / [CROWD_RELAX]. */
     private const val FLIP_STEP = 0.60f
@@ -918,6 +958,12 @@ internal class NumericRollEngine {
           // against the reference's 0.515.
           if (stackMode) {
             val ch = column.charAt[stop]
+            // A REVERSAL landing on a column that was still in flight, and nothing else. Raised
+            // BEFORE the birth below, because the birth amplitude reads it.
+            if (column.lastDir != null && column.lastDir != lastDirection && !wasAtRest) {
+              column.flipRaw = min(1f, column.flipRaw + FLIP_STEP)
+            }
+            column.lastDir = lastDirection
             if (ch != null) {
               // Supersede ONCE, and never again. A transition is not cancelled, not retargeted and
               // not dropped: it runs its own curves to completion whatever arrives afterwards —
@@ -938,14 +984,11 @@ internal class NumericRollEngine {
                   live.alphaTarget = 0f
                 }
               }
-              column.entries.add(Entry(ch, -lastDirection.toFloat()))
+              // Born FURTHER OUT while the value is reversing. See [STACK_FLIP_BORN].
+              val amplitude =
+                -lastDirection.toFloat() * (1f + (STACK_FLIP_BORN - 1f) * column.flipRaw)
+              column.entries.add(Entry(ch, amplitude))
             }
-            // A REVERSAL landing on a column that was still in flight, and nothing else. Read
-            // before the impulse below so the two signals stay independent.
-            if (column.lastDir != null && column.lastDir != lastDirection && !wasAtRest) {
-              column.flipRaw = min(1f, column.flipRaw + FLIP_STEP)
-            }
-            column.lastDir = lastDirection
           }
           arrived = true
         }
@@ -1128,7 +1171,8 @@ internal class NumericRollEngine {
       else -> 1f
     }
     for (i in 0 until count) {
-      val alpha = raw[i] * norm * column.alive
+      val alpha =
+        raw[i] * norm * column.alive * (1f + (STACK_FLIP_LIFT - 1f) * column.flipRaw)
       if (alpha <= 0.01f) continue
       val entry = column.entries[i]
       // Geometry from the FAST clock, appearance from the slow one.
@@ -1148,9 +1192,8 @@ internal class NumericRollEngine {
       // mean ink to 0.537 against 0.851. Rejected on measurement, kept here as the record.
       val shrink = 1f - (1f - STACK_FINAL_SCALE) * distance
       // The departing glyph is drawn TALLER while the value is reversing — height only, about the
-      // glyph's own optical centre, so nothing moves. See [STACK_FLIP_STRETCH_OUT].
-      val tall =
-        if (entry.superseded) 1f + (STACK_FLIP_STRETCH_OUT - 1f) * column.flipRaw else 1f
+      // glyph's own optical centre, so nothing moves. See [STACK_FLIP_STRETCH].
+      val tall = 1f + (STACK_FLIP_STRETCH - 1f) * column.flipRaw
       out.add(
         GlyphSample(
           key = column.key,
@@ -1315,7 +1358,8 @@ internal class NumericRollEngine {
       }
       val aError = entry.alphaTarget - entry.alpha
       if (abs(aError) > POSITION_EPSILON || abs(entry.alphaVelocity) > VELOCITY_EPSILON) {
-        val aw = if (entry.superseded) slow * STACK_EXIT_ALPHA_SPEEDUP else slow
+        val aw = (if (entry.superseded) slow * STACK_EXIT_ALPHA_SPEEDUP else slow) /
+          (1f + (STACK_FLIP_SOFT - 1f) * column.flipRaw)
         entry.alphaVelocity +=
           ((aw * aw * aError) - (2f * STACK_SLOW_DAMPING * aw * entry.alphaVelocity)) * dt
         entry.alpha += entry.alphaVelocity * dt

@@ -101,7 +101,15 @@ object NumericTextFrameRecorder {
       // change, so a flag read there would leave the first transition of a session on the other
       // engine — one crossing measured from the wrong renderer, silently, which is exactly the
       // class of mistake the notes in `.agent/NEXT.md` are full of.
-      NumericRollEngine.stackMode = dir != null && File(dir, "numerictext-stack.on").exists()
+      // The DEFAULT is the stack. A marker file still overrides it, and both engines now have
+      // one — `numerictext-drum.on` had to exist because "no file" used to mean the drum, which is
+      // exactly what stopped the app from ever starting on the stack.
+      if (!NumericRollEngine.engineChosenByProp && dir != null) {
+        when {
+          File(dir, "numerictext-stack.on").exists() -> NumericRollEngine.stackMode = true
+          File(dir, "numerictext-drum.on").exists() -> NumericRollEngine.stackMode = false
+        }
+      }
       drawFilter = when {
         dir == null -> 0
         File(dir, "numerictext-record.outgoing").exists() -> 1

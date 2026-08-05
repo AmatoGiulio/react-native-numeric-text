@@ -112,6 +112,8 @@ class NumericTextViewManager : SimpleViewManager<NumericTextView>(),
       "drum" -> NumericRollEngine.stackMode = false
       else -> return
     }
+    // From here the marker files leave it alone. See [NumericRollEngine.engineChosenByProp].
+    NumericRollEngine.engineChosenByProp = true
     view?.invalidate()
   }
 
