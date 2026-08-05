@@ -270,6 +270,116 @@ def flip_knobs():
         # multiplier has little mass to act on. The reference holds its two lobes nearly equal in
         # width. Factor derived from that gap: 0.585 / 0.405 = 1.44.
         "stretchout": float(e("FLIP_STRETCH_OUT", 1.0)),
+        # A CEILING on how far the pair may diverge, under a reversal only.
+        #
+        # Measured on the 60 ms alternation, the ink imbalance between the two sides of rest:
+        # the reference sits at a median 0.294 and NEVER exceeds 0.446, while this engine sits at
+        # 0.351 and reaches 0.647, with one glyph over 70% of the column in 40.6% of frames against
+        # the reference's 15.4%. That is what reads as "darker and legible" — a digit becomes
+        # readable when one glyph carries two thirds of the ink, and the reference never lets it.
+        #
+        # NOT the same as levelling every glyph's opacity, which was tried and moved nothing: this
+        # is about the two SIDES, and it only bites when they have already diverged past the
+        # reference's own ceiling. Total ink is preserved, so it cannot win by fading the column.
+        "cap":      float(e("FLIP_CAP", 0.0)),        # max |up - down| / total; 0 = off
+        # Birth the newcomer FURTHER OUT under a reversal. Above 1.0 pushes it away from rest.
+        #
+        # Never actually tried in this direction: `travel` only ever shortened the entry, and
+        # `park` held the OLD glyphs out rather than launching the new one from further away. The
+        # two are not the same thing and the second does not test the first.
+        "born":     float(e("FLIP_BORN", 1.0)),
+        # Soften the handover: stretch the alpha clock so the pair crossfades over longer.
+        #
+        # In the stack path opacity is LINEAR in its own clock and the departing glyph vanishes on
+        # the same curve the arriving one appears on, so the exchange is as fast as that clock. This
+        # is the "general model" knob — opened deliberately, under a reversal only.
+        "soft":     float(e("FLIP_SOFT", 1.0)),       # multiplies the alpha clock's response
+        # Let the column carry more total opacity under a reversal.
+        #
+        # `STACK_ALPHA_CEILING` holds the sum of the live glyphs' alphas at 1.00, and that ceiling
+        # is ours rather than the reference's: fitting its 30 ms burst per glyph gave alpha sums of
+        # 1.15-1.81 across 3-4 live glyphs (see the note beside the constant in
+        # NumericTextTimeline.kt). Pushing the pair apart and softening the handover both cost ink —
+        # measured 0.277 -> 0.175 against the reference's 0.321 — and this is the measured reason
+        # the ceiling can be raised rather than a knob invented to undo the loss.
+        "lift":     float(e("FLIP_LIFT", 1.0)),       # multiplies the alpha ceiling at full signal
+        # Pull every live glyph onto ONE size, the way the DRUM does under its chase.
+        #
+        # `NumericTextTimeline.sample` has, on the roll path:
+        #     shrink = 1 - SCALE_AMOUNT * (distance + (EVEN_SHRINK_AT - distance) * even)
+        # i.e. as the chase rises both glyphs are drawn at the same distance, 0.75, whatever their
+        # real one. The stack has no equivalent: each glyph keeps its own distance, so the near one
+        # is large and the far one small, and since ink goes as the SQUARE of the size the near one
+        # takes four to six times the column's ink. That is the dominance three photometric levers
+        # failed to cap — it was never about opacity.
+        # The newborn inherits the VELOCITY of the glyph it replaces, instead of starting at rest.
+        #
+        # Every entry is currently born stationary, so at each commit the column materialises a
+        # motionless mass far from centre while the one leaving is already travelling. The ink
+        # centroid inherits that discontinuity once per commit, and that is the angular trajectory —
+        # the reference cannot have it, because its departing glyph IS the previous arriving one
+        # carrying on. Nothing else changes: same birth position, same amplitude, same curves.
+        # Photometric continuity ACROSS a commit: hold the column's ink where it was and let the
+        # correction decay, so the step in `flipRaw` stops being visible as a flash.
+        #
+        # Traced per commit, the column's ink jumps +9 to +15% on the commit frame and falls 13-20%
+        # on the next — a spike and a trough 16.7 ms apart, which is the flicker. The NEWBORN cannot
+        # be the cause: it contributes 0.008-0.011 against a jump of 0.045. The cause is that
+        # `flipRaw` and `crowdRaw` are STEPS, and everything reading them steps too. Geometry is
+        # left alone here on purpose.
+        # Pilota il solo LIFT con il segnale continuo «quanto la colonna e' lontana dall'essere
+        # risolta» invece che con `flipRaw`. Nient'altro cambia driver.
+        #
+        # Il segnale e' una media pesata sull'inchiostro, quindi e' invariante al guadagno che
+        # pilota: si puo' calcolare dentro il rendering senza circolarita'.
+        "useu":     float(e("FLIP_USE_U", 0.0)),
+        # Il CANCELLO: quanto vale la costante di tempo con cui la modalita' alternanza entra ed
+        # esce. Non un interruttore — un inseguitore che mira a 1 mentre un'inversione e' viva e a 0
+        # quando non lo e'. Fuori dall'alternanza l'impulso e' esattamente zero, quindi il cancello
+        # resta chiuso e LIFT torna la baseline per costruzione, non per taratura.
+        "ugate":    float(e("FLIP_U_GATE", 0.0)),
+        # LE CORSIE. Durante l'alternanza ogni glifo viene tenuto in una delle due fasce invece di
+        # percorrere la propria traiettoria: semi-distanza in altezze di glifo, 0 = spenta.
+        #
+        # 0.369 e' la misura di iOS — i suoi lobi stanno a -0.390 e +0.348. La mappa e' una tangente
+        # iperbolica e non un segno: un glifo che attraversa il centro passa con continuita' invece
+        # di saltare da una corsia all'altra, e soprattutto il COMMIT non ricrea nessuna posizione —
+        # la coppia in volo continua da dove si trova.
+        # Lo SCAMBIO PAREGGIATO: tiene fermo l'inchiostro TOTALE della colonna e lascia libera la
+        # ripartizione fra i due lobi. Compensazione perfetta e totale costante sono la stessa cosa —
+        # se cio' che un lobo perde l'altro lo guadagna, la somma non si muove.
+        # Solo opacita': nessuna geometria, nessun blur, nessuna dimensione, nessun glifo in piu'.
+        # Correzione a MEDIA ZERO del totale: tira l'inchiostro verso una sua media lenta, dove la
+        # media lenta insegue il segnale NON corretto. Il riferimento non e' quindi alimentato dal
+        # proprio risultato — che e' il difetto per cui la versione precedente derivava verso l'alto
+        # (inchiostro medio da 0.354 a 0.610) — e il livello medio resta quello della baseline.
+        # Il guadagno del glifo che ENTRA non puo' superare, nello stesso fotogramma, la perdita di
+        # quelli che ESCONO. Non e' un rapporto e non c'e' riferimento: riordina soltanto QUANDO
+        # avviene lo scambio, quindi non puo' spostare il livello medio come faceva il filtro.
+        "hold":     float(e("FLIP_HOLD", 0.0)),
+        # Lo SPECULARE, ed e' il verso che i dati indicano: in 27 fotogrammi su 34 chi esce perde
+        # piu' di quanto chi entra guadagni, quindi il totale cala. Qui la perdita complessiva degli
+        # uscenti non puo' superare il guadagno dell'entrante — la loro dissolvenza rallenta invece
+        # che l'arrivo frenare. Puro trasferimento nel tempo: nessun riferimento, nessun rapporto
+        # verso una media, quindi il livello medio non si sposta.
+        "holdout":  float(e("FLIP_HOLD_OUT", 0.0)),
+        # Rallenta la VELOCITA' di dissolvenza del solo glifo uscente quando la sua perdita supera
+        # il guadagno dell'entrante. Nessuna divisione per alpha o per l'inchiostro residuo — il
+        # fattore ha al denominatore 1 piu' il disavanzo, quindi e' limitato per costruzione e non
+        # puo' esplodere mentre il glifo svanisce. Si spegne da solo quando diventa trasparente,
+        # cosi' l'uscita finisce normalmente e non restano fantasmi.
+        "fadeslow": float(e("FLIP_FADE_SLOW", 0.0)),
+        "fadefloor": float(e("FLIP_FADE_FLOOR", 0.30)),
+        "hp":       float(e("FLIP_HP", 0.0)),
+        "hptau":    float(e("FLIP_HP_TAU", 0.25)),
+        "pair":     float(e("FLIP_PAIR", 0.0)),
+        "pairtau":  float(e("FLIP_PAIR_TAU", 0.25)),  # su che scala il riferimento puo' muoversi
+        "lane":     float(e("FLIP_LANE", 0.0)),
+        "lanesoft": float(e("FLIP_LANE_SOFT", 0.30)),
+        "smooth":   float(e("FLIP_SMOOTH", 0.0)),     # seconds over which the correction decays
+        "momentum": float(e("FLIP_MOMENTUM", 0.0)),   # fraction of the outgoing glyph's velocity
+        "even":     float(e("FLIP_EVEN", 0.0)),       # how far to pull, 0 = off, 1 = fully levelled
+        "evenat":   float(e("FLIP_EVEN_AT", 0.75)),   # the common distance, the drum's own value
         #
         # NOTE: what was `FLIP_RESTFIX` here is now unconditional, in this port and in the Kotlin —
         # see `_step`'s `was_at_rest`. It is a fix, not a lever, so it is no longer switchable.
@@ -300,13 +410,24 @@ def engine_constants(path=None):
         "STACK_BLUR_DAMPING", "STACK_BLUR_FRACTION", "STACK_EXIT_ALPHA_SPEEDUP",
         "STACK_CROWD_SHORTEN", "STACK_ARRIVAL_SHARPNESS", "STACK_ARRIVAL_GATE",
         "STACK_ALPHA_FLOOR", "STACK_ALPHA_CEILING", "STACK_CROWD_SPEEDUP", "STACK_DEPART_RELATIVE",
+        "STACK_FLIP_BORN", "STACK_FLIP_SOFT",
+        "STACK_FLIP_LIFT", "STACK_FLIP_STRETCH",
         "WAVE_TOTAL_SECONDS", "RESPONSE_SECONDS", "CROWD_STEP", "CROWD_RELAX",
         "POSITION_EPSILON", "VELOCITY_EPSILON",
     ]
     missing = [k for k in need if k not in found]
     if missing:
         raise SystemExit(f"{path or ENGINE_SOURCE} no longer defines: {', '.join(missing)}")
-    return {k: float(found[k]) for k in need}
+    out = {k: float(found[k]) for k in need}
+    # Forzatura dall'ambiente, per ATTRIBUIRE: `SIM_CONST_STACK_FLIP_BORN=1.0` spegne quella leva
+    # sola e lascia le altre come sono. Non e' una manopola del modello — serve a chiedere «quale
+    # delle quattro sta facendo questo?», e finisce nel manifest di `canon.py`, quindi un render
+    # forzato non si confonde mai con uno normale.
+    for k in list(out):
+        v = os.environ.get("SIM_CONST_" + k)
+        if v is not None:
+            out[k] = float(v)
+    return out
 
 
 class Atlas:
@@ -659,7 +780,7 @@ class KEntry:
 
     __slots__ = ("ch", "p", "velocity", "target", "posTarget", "q", "qVelocity",
                  "b", "bVelocity", "alpha", "alphaVelocity", "alphaTarget", "superseded",
-                 "parkTarget")
+                 "parkTarget", "prevInk", "curInk")
 
     def __init__(self, ch, p):
         self.ch = ch
@@ -676,6 +797,8 @@ class KEntry:
         self.alphaTarget = 1.0
         self.superseded = False
         self.parkTarget = 0.0    # experiment; see flip_knobs()["park"]
+        self.prevInk = None      # inchiostro di questo glifo al fotogramma precedente
+        self.curInk = None       # e a quello corrente, scritto da samples()
 
 
 class KColumn:
@@ -688,6 +811,13 @@ class KColumn:
         self.crowdRaw = 0.0
         self.crowd = 0.0
         self.flipRaw = 0.0       # experiment only; see flip_knobs()
+        self.inkPrev = None      # inchiostro del fotogramma precedente
+        self.inkFix = 1.0        # correzione di continuita', decade a 1
+        self.flipGate = 0.0      # cancello morbido della modalita' alternanza
+        self.inkEma = None       # riferimento lento dell'inchiostro totale
+        self.inkRaw = None       # totale PRIMA della correzione, per il filtro
+        self.inkLP = None        # media lenta del totale non corretto
+        self.deficit = 0.0       # di quanto l'uscente perde piu' di cio' che l'entrante guadagna
         self.lastDir = None      # the direction of this column's previous commit
 
 
@@ -807,6 +937,9 @@ class KotlinModel:
                     # simply has less distance to cover, which is what a reversal at 60 ms leaves
                     # room for.
                     born = -float(self.direction) * (1.0 - F["travel"] * col.flipRaw)
+                    # Push the birth further from rest under a reversal.
+                    born *= 1.0 + (K["STACK_FLIP_BORN"] - 1.0) * col.flipRaw
+                    born *= 1.0 + (F["born"] - 1.0) * col.flipRaw
                     # EXPERIMENT: birth the newcomer at the MIRROR of the glyph it supersedes,
                     # rather than at a fixed fraction of the entry amplitude.
                     #
@@ -825,11 +958,22 @@ class KotlinModel:
                         blend = F["mirror"] * col.flipRaw
                         born = -float(self.direction) * (1.0 + blend * (outgoing - 1.0))
                     fresh = KEntry(ch, born)
+                    if F["momentum"] > 0.0 and col.flipRaw > 0.0 and col.entries:
+                        fresh.velocity = (col.entries[-1].velocity
+                                          * F["momentum"] * col.flipRaw)
                     # The arriving glyph stops PART WAY IN instead of running to rest, so the pair
                     # straddles the rest line rather than piling onto it.
                     fresh.parkTarget = -float(self.direction) * F["at"]
                     col.entries.append(fresh)
                     arrived = True
+                if (arrived and F["smooth"] > 0.0 and col.inkPrev is not None
+                        and col.flipRaw > 0.0):
+                    # Il totale d'inchiostro non deve saltare attraverso il commit: misuralo con le
+                    # grandezze NUOVE e correggi il guadagno perche' coincida con quello di prima.
+                    col.inkFix = 1.0
+                    now = self._ink(col)
+                    if now > 1e-6:
+                        col.inkFix = min(2.0, max(0.5, col.inkPrev / now))
                 if arrived and not was_at_rest:
                     col.crowdRaw = min(1.0, col.crowdRaw + K["CROWD_STEP"])
                 active = True
@@ -837,13 +981,50 @@ class KotlinModel:
                 active = True
             if self._step_entries(col, dt):
                 active = True
+        tau = flip_knobs()["pairtau"]
+        for col in self.columns:
+            col.inkPrev = self._ink(col)     # chiama samples(), che riempie e.curInk
+            # L'OGGETTO glifo e' l'identificatore stabile: sopravvive fra i fotogrammi, quindi il
+            # suo inchiostro si scrive su di lui e non si riallinea mai a una lista di disegnati —
+            # che e' filtrata per soglia e quindi ha indici diversi.
+            # Il disavanzo del fotogramma appena disegnato, prima di far scorrere la contabilita'.
+            if len(col.entries) > 1:
+                nuovo = col.entries[-1]
+                perdita = sum(max(0.0, e.prevInk - e.curInk) for e in col.entries
+                              if e is not nuovo and e.prevInk is not None and e.curInk is not None)
+                guadagno = (max(0.0, nuovo.curInk - nuovo.prevInk)
+                            if nuovo.prevInk is not None and nuovo.curInk is not None else 0.0)
+                col.deficit = max(0.0, perdita - guadagno)
+            for e in col.entries:
+                if e.curInk is not None:
+                    e.prevInk = e.curInk
+            if col.inkEma is None:
+                col.inkEma = col.inkPrev
+            else:
+                col.inkEma += (col.inkPrev - col.inkEma) * min(1.0, dt / max(1e-3, tau))
         if not active:
             self._snap()
         return active
 
+    def _ink(self, col):
+        """L'inchiostro che la colonna sta per posare: alpha per l'AREA, non alpha da sola."""
+        return sum(a * sc * sc for _, _, sc, a, _, _ in self.samples(col))
+
     def _step_crowd(self, col, dt):
         K = self.K
         col.flipRaw = max(0.0, col.flipRaw - dt / flip_knobs()["relax"])   # experiment
+        _f = flip_knobs()
+        g = _f["ugate"] or (0.12 if _f["lane"] > 0.0 else 0.0)
+        if g > 0.0:
+            target = 1.0 if col.flipRaw > 0.0 else 0.0
+            col.flipGate += (target - col.flipGate) * min(1.0, dt / g)
+        ht = _f["hptau"]
+        if _f["hp"] > 0.0 and col.inkRaw is not None:
+            col.inkLP = col.inkRaw if col.inkLP is None else \
+                col.inkLP + (col.inkRaw - col.inkLP) * min(1.0, dt / max(1e-3, ht))
+        tau = flip_knobs()["smooth"]
+        if tau > 0.0 and col.inkFix != 1.0:
+            col.inkFix += (1.0 - col.inkFix) * min(1.0, dt / tau)
         if col.crowdRaw <= 0.0 and col.crowd <= 0.001:
             col.crowd = 0.0
             return False
@@ -888,6 +1069,16 @@ class KotlinModel:
             err = e.alphaTarget - e.alpha
             if abs(err) > eps_p or abs(e.alphaVelocity) > eps_v:
                 aw = slow * K["STACK_EXIT_ALPHA_SPEEDUP"] if e.superseded else slow
+                if (park["fadeslow"] > 0.0 and e.superseded
+                        and col.flipGate > 0.0 and col.deficit > 0.0):
+                    vis = min(1.0, max(0.0, (e.alpha - 0.05) / 0.15))
+                    if vis > 0.0:
+                        f = 1.0 / (1.0 + park["fadeslow"] * col.deficit * col.flipGate * vis)
+                        aw *= max(park["fadefloor"], f)
+                # Soften the handover: a longer response means a slower spring, so the pair
+                # crossfades over more time and neither glyph gets the column to itself.
+                aw /= 1.0 + (K["STACK_FLIP_SOFT"] - 1.0) * col.flipRaw
+                aw /= 1.0 + (park["soft"] - 1.0) * col.flipRaw
                 e.alphaVelocity += ((aw * aw * err) - (2.0 * K["STACK_SLOW_DAMPING"] * aw * e.alphaVelocity)) * dt
                 e.alpha += e.alphaVelocity * dt
                 moving = True
@@ -983,6 +1174,29 @@ class KotlinModel:
                 if rank >= int(F["keep"]):
                     raw[i] *= max(0.0, 1.0 - col.flipRaw)
             total = sum(raw)
+        if F["cap"] > 0.0 and col.flipRaw > 0.0 and total > 1e-4:
+            # Ink, not opacity: a glyph at 0.4 scale lays down a sixth of what its alpha says, so
+            # the side that LOOKS dominant is the one with the ink, not the one with the alpha.
+            ink = [r * (1.0 - (1.0 - K["STACK_FINAL_SCALE"]) * min(1.0, abs(e.q))) ** 2
+                   for r, e in zip(raw, col.entries)]
+            up = sum(i for i, e in zip(ink, col.entries) if e.p < 0)
+            dn = sum(i for i, e in zip(ink, col.entries) if e.p >= 0)
+            t = up + dn
+            if t > 1e-6:
+                imbalance = abs(up - dn) / t
+                if imbalance > F["cap"]:
+                    # Blend the RESULT towards the capped column by the signal, not the ceiling.
+                    # Blending the ceiling instead is what made a nominal 0.45 behave as 0.603 at
+                    # the signal's own median of 0.722, so it almost never bit and the first run of
+                    # this lever moved the rendered dominance by nothing at all.
+                    s = 1.0 if up > dn else -1.0
+                    want_up = t * (1.0 + F["cap"] * s) / 2.0
+                    fu = (want_up / up if up > 1e-9 else 1.0)
+                    fd = ((t - want_up) / dn if dn > 1e-9 else 1.0)
+                    k = col.flipRaw
+                    raw = [r * (1.0 + ((fu if e.p < 0 else fd) - 1.0) * k)
+                           for r, e in zip(raw, col.entries)]
+                    total = sum(raw)
         if F["tilt"] > 0.0 and col.flipRaw > 0.0 and total > 1e-4:
             # Iteration 4: tilt the column's opacity towards whatever is furthest from rest, then
             # rescale so the column carries exactly the ink it carried before. A pure change of
@@ -1007,15 +1221,94 @@ class KotlinModel:
             raw = [r * give for r in raw]
             total = plain
         floor = K["STACK_ALPHA_FLOOR"] * col.crowdRaw
-        if total > K["STACK_ALPHA_CEILING"]:
-            norm = K["STACK_ALPHA_CEILING"] / total
+        # Raising the CEILING was the first attempt and it could not work: the pair's alphas sum to
+        # ~0.99 on their own — a crossfade is convex by construction, exactly as the reference
+        # measures — so the cap is never the binding constraint and lifting it changed nothing to
+        # three decimals. The column is faint because ink goes as alpha x AREA and these glyphs stay
+        # small for longer, so the gain has to be on the alphas themselves.
+        ceiling = K["STACK_ALPHA_CEILING"] * max(1.0, F["lift"])
+        if total > ceiling:
+            norm = ceiling / total
         elif 1e-4 <= total <= floor:
             norm = floor / total
         else:
             norm = 1.0
+        # The gain itself, under a reversal only. Per-glyph alphas are still clamped to 1 below, so
+        # this brightens the pair without letting any single glyph exceed opaque.
+        drive = col.flipRaw
+        if F["useu"] > 0.0:
+            inks, dists = [], []
+            for r, e in zip(raw, col.entries):
+                sc = 1.0 - (1.0 - K["STACK_FINAL_SCALE"]) * min(1.0, abs(e.q))
+                inks.append(r * sc * sc)
+                dists.append(min(1.0, abs(e.p)))
+            ti = sum(inks)
+            drive = sum(i * d for i, d in zip(inks, dists)) / ti if ti > 1e-9 else 0.0
+            if F["ugate"] > 0.0:
+                drive *= col.flipGate
+        gain = (1.0 + (K["STACK_FLIP_LIFT"] - 1.0) * drive) * \
+            (1.0 + (F["lift"] - 1.0) * drive) * col.inkFix
+        def _inks():
+            out = []
+            for r, e in zip(raw, col.entries):
+                sc = 1.0 - (1.0 - K["STACK_FINAL_SCALE"]) * min(1.0, abs(e.q))
+                out.append(r * sc * sc)
+            return out
+        if (F["hold"] > 0.0 or F["holdout"] > 0.0) and col.flipGate > 0.0 \
+                and len(col.entries) > 1:
+            inks = _inks()
+            entrante = col.entries[-1]
+            # Quanto stanno perdendo TUTTI gli altri, ciascuno confrontato con SE STESSO.
+            perdita = 0.0
+            for i, e in zip(inks, col.entries):
+                if e is entrante or e.prevInk is None:
+                    continue
+                perdita += max(0.0, e.prevInk - i)
+            if F["holdout"] > 0.0:
+                vecchi = [(i, e) for i, e in zip(inks, col.entries)
+                          if e is not entrante and e.prevInk is not None]
+                ora = sum(i for i, _ in vecchi)
+                allora = sum(e.prevInk for _, e in vecchi)
+                gain = (inks[-1] - entrante.prevInk) if entrante.prevInk is not None else 0.0
+                if allora - ora > gain > -1e9 and ora > 1e-9:
+                    tetto = allora - max(0.0, gain)
+                    k = F["holdout"] * col.flipGate
+                    f = 1.0 + (tetto / ora - 1.0) * k
+                    for idx, (_, e) in enumerate(vecchi):
+                        j = col.entries.index(e)
+                        raw[j] *= f
+                    inks = _inks()
+            prima = entrante.prevInk
+            if F["hold"] > 0.0 and prima is not None and inks[-1] > 1e-9:
+                guadagno = inks[-1] - prima
+                if guadagno > perdita:
+                    tetto = prima + perdita
+                    k = F["hold"] * col.flipGate
+                    raw[-1] *= 1.0 + (tetto / inks[-1] - 1.0) * k
+        if F["hp"] > 0.0:
+            cur = 0.0
+            for r, e in zip(raw, col.entries):
+                sc = 1.0 - (1.0 - K["STACK_FINAL_SCALE"]) * min(1.0, abs(e.q))
+                cur += r * sc * sc
+            cur *= norm * gain
+            col.inkRaw = cur
+            if col.flipGate > 0.0 and col.inkLP and cur > 1e-9:
+                k = F["hp"] * col.flipGate
+                gain *= 1.0 + (col.inkLP / cur - 1.0) * k
+        if F["pair"] > 0.0 and col.flipGate > 0.0 and col.inkEma:
+            cur = 0.0
+            for r, e in zip(raw, col.entries):
+                sc = 1.0 - (1.0 - K["STACK_FINAL_SCALE"]) * min(1.0, abs(e.q))
+                cur += r * sc * sc
+            cur *= norm * gain
+            if cur > 1e-9:
+                k = F["pair"] * col.flipGate
+                gain *= 1.0 + (col.inkEma / cur - 1.0) * k
+        for e, i in zip(col.entries, _inks()):
+            e.curInk = i * norm * gain
         out = []
         for e, r in zip(col.entries, raw):
-            alpha = r * norm
+            alpha = r * norm * gain
             # EXPERIMENT: dim what is far from rest, and hand its brightness to nobody. Same
             # `near` term the engine's own gate uses, so the shape of the attenuation is the
             # engine's; the difference is only that this survives the redistribution above.
@@ -1030,6 +1323,10 @@ class KotlinModel:
             # 0.3984 as the FINAL scale, a floor of 0.3984 — the unit bug NEXT.md records as fixed
             # in the Kotlin and never fixed here. A glyph is 50% smaller at birth than the
             # simulator thought, which moves every ink number it prints.
+            if F["even"] > 0.0 and col.flipRaw > 0.0:
+                # Both glyphs onto one distance, exactly as the drum's `even` does.
+                k = min(1.0, F["even"] * col.flipRaw)
+                distance = distance + (F["evenat"] - distance) * k
             shrink = 1.0 - (1.0 - K["STACK_FINAL_SCALE"]) * distance * \
                 (1.0 - F["big"] * col.flipRaw)   # experiment, iteration 1
             if F["area"] > 0.0 and col.flipRaw > 0.0:
@@ -1048,13 +1345,18 @@ class KotlinModel:
             offset = (K["STACK_OFFSET"] / CAP_PER_LINE) * \
                 (1.0 - K["STACK_CROWD_SHORTEN"] * col.crowdRaw) * e.p
             offset *= (1.0 - flip_knobs()["shorten"] * col.flipRaw)   # experiment
+            if F["lane"] > 0.0 and col.flipGate > 0.0:
+                # Solo GEOMETRIA: nessun alpha, nessun blur, nessuna dimensione.
+                target = F["lane"] * math.tanh(e.p / max(1e-3, F["lanesoft"]))
+                offset += (target - offset) * col.flipGate
             # WAS: blur rode the slow clock at 0.16. The engine gives it its own clock (zeta 0.91,
             # response 0.398) and 0.42 of a line height — nearly 3x, and it lingers.
             blurred = self.blur_sigma(K["STACK_BLUR_FRACTION"] * min(1.0, abs(e.b)))
             # The last field is the height-only multiplier the rasteriser already takes (the drum
             # model uses it to foreshorten). 1.0 is the engine; above 1.0 stretches, about the
             # glyph's own centre, because the raster is placed centred on its offset.
-            tall = 1.0 + (F["stretch"] - 1.0) * col.flipRaw
+            tall = (1.0 + (K["STACK_FLIP_STRETCH"] - 1.0) * col.flipRaw) * \
+                (1.0 + (F["stretch"] - 1.0) * col.flipRaw)
             if e.superseded:
                 tall *= 1.0 + (F["stretchout"] - 1.0) * col.flipRaw
             out.append((e.ch, offset, shrink, min(1.0, alpha), blurred, tall))

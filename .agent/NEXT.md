@@ -66,6 +66,81 @@ a guess. A claim without a number behind it should be distrusted.
 
 ---
 
+## CHECKPOINT 2026-08-05 — the best simulated GEOMETRY candidate, and the ONE thing to port next
+
+**Best simulated GEOMETRY candidate** — best on the geometry, NOT on every metric: the centroid's
+excursion goes 0.313 -> 0.416, worse:
+`stack engine + rest-test fix + STACK_FLIP_BORN 1.5 + SOFT 2.0 + LIFT 1.5 + STRETCH 1.35 + LANES`.
+
+> **Corrected within the session — the first version of this line read "+ LANES. Nothing else."**
+> That was wrong. `sim.py` PARSES the four `STACK_FLIP_*` constants out of the Kotlin source and
+> applies them on every render, so every number in this checkpoint was measured with them active.
+> The manifest of the lanes render says so in one line — `STACK_FLIP_BORN = 1.5, SOFT = 2.0,
+> LIFT = 1.5, STRETCH = 1.35` — and `canon.py` exists precisely so this cannot be got wrong. It was
+> got wrong anyway, by writing the summary from memory instead of from the manifest. **Read the
+> manifest.**
+
+The lanes hold each glyph in one of two bands during an alternation instead of letting it travel its
+own path — half-separation 0.369 glyph heights, taken from the reference's own lobes at −0.390 and
++0.348, mapped through a `tanh` so a glyph crossing rest passes smoothly and **a commit never
+recreates a position**: the pair in flight carries on. Geometry only.
+
+| 60 ms alternation | reference | before lanes | **with lanes** |
+|---|---|---|---|
+| midpoint wobble | 0.049 | 0.156 | **0.065** |
+| lobe separation | 0.738 | 0.696 | **0.746** |
+| central ink | 0.097 | 0.132 | **0.095** |
+| band | 0.760 | 1.056 | **0.790** |
+| total-ink pulsation | 0.057 | 0.158 | 0.158 (untouched) |
+| centroid excursion | 0.103 | 0.313 | 0.416 (worse) |
+
+Single crossing and continuous roll render **bit-identical** to the baseline, verified through
+`canon.py` manifests rather than asserted.
+
+### Port ONLY the lanes, behind an A/B flag
+
+The next session ports the lanes to Kotlin and nothing else, to answer three questions on the
+device: do they stabilise the midpoint, do they hold the separation, and do they leave the single
+crossing and the roll alone. **Do not commit the behaviour as final before that device comparison.**
+
+**And "nothing else" means: add the lanes ON TOP of the four `STACK_FLIP_*` constants that are
+already in the tree — do not remove them.** The measured configuration includes them. Porting the
+lanes onto a tree with those reverted would produce something this session never rendered, and the
+device numbers would not be comparable to anything above. The A/B flag toggles the LANES only.
+
+**Explicitly NOT to port** — none of these earned it:
+
+- the ink-pairing (`FLIP_PAIR`): stabilised the total against a reference fed by its own output, so
+  it drifted the column from 0.354 to 0.610;
+- the brightness filters (`FLIP_HP`): the tested ratio-based corrections, of the form
+  `reference / current`, raised the mean — the mean of that ratio exceeds 1 when the denominator
+  oscillates. This rules out THAT implementation family, not every possible multiplicative
+  correction;
+- the fade slowdown (`FLIP_FADE_SLOW`): correctly implemented and near-useless, 0.158 → 0.160. A
+  departing glyph is also SHRINKING, and ink goes as the square of size, so keeping it opaque for
+  longer keeps something small on screen and fills almost nothing;
+- `FLIP_SMOOTH`: reduced the flicker by a quarter and moved the trajectory, which it was not
+  supposed to touch;
+- `FLIP_MOMENTUM`, and every other lever in `flip_knobs()` — they default to 0 and stay there.
+
+### What the Kotlin tree already carries, uncommitted
+
+`STACK_FLIP_BORN` 1.5, `STACK_FLIP_SOFT` 2.0, `STACK_FLIP_LIFT` 1.5, `STACK_FLIP_STRETCH` 1.35, plus
+the rest-test fix and the engine selector. Measured on device as `artifacts/align6` and `align7`;
+the lanes are NOT among them. Whoever ports the lanes should know these are already there and that
+`align7`'s numbers include them.
+
+### The defect the lanes do NOT fix, measured
+
+The centroid still moves ~3x the reference, and the total ink pulses ~3x. Traced per lobe on the
+pixels of both platforms: the mean imbalance between the two lobes is nearly the reference's (0.363
+against 0.324) and the exchange correlation is close (−0.645 against −0.784), so it is not that one
+lobe outweighs the other. The measured mismatch is in the TIMING of the ink exchange, and its underlying
+cause is not yet isolated: an opacity slowdown alone was ruled out, while size and opacity remain
+coupled. Measured by glyph identity across frames, the departing glyph loses 0.056 of ink per frame
+while the arriving one gains 0.036, and the loss exceeds the gain in 27 frames out of 34. The column briefly runs short of ink, and that is the flicker. Slowing the
+fade does not fill it, because the departing glyph is shrinking at the same time.
+
 ## Where it stands
 
 Rebuilt from HEAD and re-measured on 2026-08-03 evening (`artifacts/verify1*`), because the engine
@@ -281,6 +356,46 @@ under a reversal, not about opacity.
 Best combined point measured so far, with the fix in:
 `FLIP_GATE=1, FLIP_GATEHARD=1, FLIP_PARK=1, FLIP_PARK_AT=0.80, FLIP_LEVEL=1` — travel 0.424,
 **band 0.698** against the reference's 0.760, imbalance 0.093. The band is solved; the travel is not.
+
+### "Darker and more legible" is the pair handing over too completely — not sharpness
+
+Reported from the device by eye, and the first two explanations for it were both wrong.
+
+**Not sharpness.** Measured on the 60 ms alternation, per unit ink: this engine's changing column
+reads 0.561 against the reference's 0.645, and its darkest pixel 0.298 against 0.314. Ours is
+BLURRIER and LIGHTER, so "born already formed" is refuted.
+
+**Not the press-and-hold either.** Lab's hold is `setInterval(30)` and the perceived cycle looked
+like timer jitter. Sampled inside the JS runtime during a real hold: median 33 ms, one sample over
+50 ms in 120. The timer is healthy. A first measurement said 68.6 ms with commits coalescing to +2
+— **that was the frame recorder's own load**, which renders the layer into an alpha buffer every
+tick and streams it to disk. Anyone measuring cadence with the rig armed is looking at a cadence no
+user ever sees. What IS periodic is the data: Lab steps by ±1, so every ten ticks the units wrap
+9 → 0 and the value carries into the tens, which makes it a two-column change and puts the units
+column at the back of the wave. The reference does the same — `TRANSITION_MODEL.md` §5 measures its
+"9" sitting crisp for 150 ms at exactly that carry.
+
+**What it actually is:** how often ONE glyph owns the column. Ink either side of rest, 60 ms
+alternation:
+
+| | median imbalance | frames with one glyph over 70% | max |
+|---|---|---|---|
+| reference | 0.294 | **15.4%** | **0.446** |
+| this engine | 0.351 | **40.6%** | 0.647 |
+
+A digit becomes readable when one glyph carries two thirds of the column, and the reference never
+lets that happen — it has a hard ceiling around 0.45 that this engine passes routinely.
+
+**A ceiling on it was tried and it misses.** `FLIP_CAP=0.45` improves the excursion 0.406 → 0.342,
+the imbalance 0.121 → 0.102 and the band 1.251 → 1.230, with the single crossing and the roll
+bit-identical — but the rendered dominance does not move at all (0.351, 40.6%, max 0.647 → 0.633).
+The cap divides glyphs by which side of rest they sit on; the profile does not, because a glyph just
+above rest lays most of its ink below it. So this is a real gain arriving for a reason other than
+the one it was built for, which is the same trap `AREA` fell into — do not port it as a fix for
+legibility.
+
+(Also worth keeping: the first version of that lever blended the CEILING by the signal rather than
+the result, so a nominal 0.45 behaved as 0.603 at the signal's own median of 0.722 and never bit.)
 
 ### The hand test says the STACK wins, and it outranks the band
 
