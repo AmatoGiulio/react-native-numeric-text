@@ -6,6 +6,7 @@ import kotlin.math.floor
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.sin
+import kotlin.math.tanh
 
 /**
  * The roll engine: one persistent column per logical position, each a single continuous position on
@@ -66,6 +67,10 @@ internal class NumericRollEngine {
   )
 
   companion object {
+    private var nextEntryId = 0
+    private var buildIdLogged = false
+    const val BUILD_ID = "STRUCTURAL-FINAL-2026-08-06"  // set by pre-build script
+
     /**
      * The strip is a DRUM: ten digits on the ten faces of a turning decagon, not a flat ribbon.
      *
@@ -279,6 +284,8 @@ internal class NumericRollEngine {
     /** How sharply the arrival gate falls off with distance. 1 is linear. */
     /** How much a crowded column shortens each glyph's journey. Zero at rest, always. */
     const val STACK_CROWD_SHORTEN = 0.28f
+    
+    const val STACK_BIRTH_SHORTEN = 0.36f
 
     const val STACK_ARRIVAL_SHARPNESS = 2.5f
 
@@ -351,7 +358,7 @@ internal class NumericRollEngine {
      * the alphas, which the reference's own crowded sums of 1.15-1.81 allow. Per-glyph alpha is
      * still clamped to 1 below.
      */
-    const val STACK_FLIP_LIFT = 1.5f
+    const val STACK_FLIP_LIFT = 1f
 
     /**
      * Every glyph is drawn taller while the value is reversing, about its own optical centre.
@@ -368,7 +375,52 @@ internal class NumericRollEngine {
      * is not heavy-tailed — the tail ratio is 1.33 against 1.27, both far from a Gaussian's 1.82 —
      * it is simply NARROWER.
      */
-    const val STACK_FLIP_STRETCH = 1.35f
+    const val STACK_FLIP_STRETCH = 1f
+
+    /**
+     * Toggle the lanes: hold each glyph in one of two bands during an alternation instead of
+     * letting it travel its own path. Geometry only — no alpha, no blur, no size. With this OFF
+     * the engine is bit-identical to the baseline; with it ON the lanes stabilise the midpoint
+     * and hold the separation while leaving the single crossing and the roll alone.
+     */
+    const val STACK_LANES = true
+
+    /**
+     * Half-separation between the two bands.
+     * 0.369 cap heights × (1/1.384) = 0.267 line heights — converted to the engine's
+     * internal unit so the lane/base ratio matches the simulator (0.94 at full crowd).
+     * Measured from the reference's own lobes at −0.390 and +0.348.
+     */
+    const val STACK_LANE = 0.267f
+
+    /** Softness of the tanh that maps position to lane side. */
+    const val STACK_LANE_SOFT = 0.30f
+
+    /** Time constant (seconds) for the gate that engages/disengages the lanes. */
+    private const val STACK_LANE_GATE = 0.12f
+
+    /**
+     * Durante l'alternanza, non forzare alphaTarget=0 sui glifi soppiantati: lo scambio
+     * di opacità rimane continuo e l'envelope resta arrotondato invece di ripartire a
+     * ogni commit. Quando l'inversione finisce (flipRaw → 0), il comportamento normale
+     * riprende e il glifo finale raggiunge il massimo.
+     */
+    /**
+     * Quando un commit chiede una cifra che un glifo VIVO sta gia' portando, ri-mira quel glifo
+     * invece di aggiungerne un altro. E' la differenza strutturale col riferimento: SwiftUI, sotto
+     * +1/-1 rapido, tiene DUE glifi che si contendono lo spazio; noi ne creavamo uno per commit.
+     */
+    const val STACK_REUSE_IN_FLIGHT = true
+
+    /**
+     * Durante un'inversione di direzione con transizione ancora in corso, riusa il glifo in volo
+     * conservando posizione, alpha, scala e blur correnti, ma azzerando TUTTE le velocità
+     * (velocity, qVelocity, bVelocity, alphaVelocity) come se il glifo nascesse da fermo
+     * nella posizione in cui è stato colto dal retarget.
+     */
+    const val STACK_ZERO_ALL_VELOCITIES_ON_REVERSAL = false
+
+    const val STACK_CONTINUOUS_EXCHANGE = false
 
     /** The reversal signal's impulse and bleed, mirroring [CROWD_STEP] / [CROWD_RELAX]. */
     private const val FLIP_STEP = 0.60f
@@ -615,7 +667,7 @@ internal class NumericRollEngine {
   }
 
   /** A stop this column will move to once [remaining] seconds have passed. */
-  private class PendingStop(val stop: Int, var remaining: Float)
+  private class PendingStop(val stop: Int, val direction: Int, var remaining: Float)
 
   /**
    * One transition, with its own clock — the unit of the STACK model.
@@ -626,9 +678,10 @@ internal class NumericRollEngine {
    * there however many further changes arrive. That bound is the whole point: a removal in a
    * content transition runs to its removal state and is then gone, it does not keep travelling,
    * and because arrivals and departures sit either side of rest their masses balance — the ink
-   * centroid stays put however many are alive.
-   */
-  private class Entry(val ch: String, var p: Float) {
+    * centroid stays put however many are alive.
+    */
+   private class Entry(val ch: String, var p: Float) {
+    val id: Int = nextEntryId++
     var velocity = 0f
     var target = 0f
 
@@ -741,6 +794,12 @@ internal class NumericRollEngine {
      */
     var flipRaw = 0f
 
+    /**
+     * Soft gate for the lanes: tracks whether [flipRaw] is active, rising towards 1 while a
+     * reversal is in flight and falling to 0 after, with time constant [STACK_LANE_GATE].
+     */
+    var flipGate = 0f
+
     /** The direction of this column's previous commit; null until it has had one. */
     var lastDir: Int? = null
 
@@ -852,7 +911,7 @@ internal class NumericRollEngine {
         // 403, against the full hold's 586. The reference's 545 sits between them and none of the
         // three rules produces it, so the smallest error is the simple rule. See the burst section
         // of .agent/IOS_GROUND_TRUTH.md before trying a fourth.
-        existing.pending.addLast(PendingStop(next, gap * (waveIndex + 0.5f)))
+        existing.pending.addLast(PendingStop(next, lastDirection, gap * (waveIndex + 0.5f)))
         waveIndex += 1
       }
     }
@@ -879,6 +938,7 @@ internal class NumericRollEngine {
       column.crowdRaw = 0f
       column.crowd = 0f
       column.flipRaw = 0f
+      column.flipGate = 0f
       column.lastDir = null
       column.alive = 1f
       column.retiring = false
@@ -924,6 +984,7 @@ internal class NumericRollEngine {
       }
 
       if (column.pending.isNotEmpty()) {
+        active = true
         // In STACK mode ask the transitions, not the strip's scalar.
         //
         // `position` is never stepped in stack mode — `stepEntries` replaces `stepPosition` — so it
@@ -931,82 +992,105 @@ internal class NumericRollEngine {
         // ROLL that is right by accident: the target walks away and never comes back, so the test
         // reads "in flight" every time. Under an ALTERNATION the target oscillates between two
         // stops and lands back ON the stale position every other commit, so the crowd impulse fired
-        // half as often as it should — measured in the simulator, `crowdRaw` averaging 0.190
-        // through a 60 ms alternation against 0.614 through a 30 ms roll. `STACK_ARRIVAL_GATE`,
-        // whose whole job is to pair "bright" with "arrived", was therefore barely engaged in the
-        // one regime where the brightest glyph is the one still in transit.
-        //
-        // The single crossing and the roll are unaffected — both already answered correctly, and
-        // the simulator renders them BIT-IDENTICAL either way. This changes the alternation only.
-        val wasAtRest =
-          if (stackMode) {
-            column.entries.all {
-              abs(it.p) < POSITION_EPSILON && abs(it.velocity) < VELOCITY_EPSILON
-            }
-          } else {
-            abs(column.target - column.position) < POSITION_EPSILON
-          }
-        var arrived = false
+        // half as often as it should. The stack must therefore determine rest from its live entries.
         for (entry in column.pending) entry.remaining -= dt
         while (column.pending.isNotEmpty() && column.pending.first().remaining <= 0f) {
-          val stop = column.pending.removeFirst().stop
+          val pendingStop = column.pending.removeFirst()
+          val stop = pendingStop.stop
+          val commitDir = pendingStop.direction
+
+          // Evaluate immediately before this pending is committed. This remains correct when more
+          // than one pending matures in the same frame.
+          val wasAtRest =
+            if (stackMode) {
+              column.entries.all {
+                abs(it.p) < POSITION_EPSILON && abs(it.velocity) < VELOCITY_EPSILON
+              }
+            } else {
+              abs(column.target - column.position) < POSITION_EPSILON
+            }
+
           column.target = stop
-          // In STACK mode the commit does not move a position: it supersedes every live transition
-          // and starts a new one. The hold above still belongs to the CHANGE and not to the
-          // arriving glyph — holding only the newcomer lets the outgoing one leave immediately and
-          // the column goes dark in the gap, measured in the simulator as an ink floor of 0.000
-          // against the reference's 0.515.
+
+          if (!wasAtRest) {
+            column.crowdRaw = min(1f, column.crowdRaw + CROWD_STEP)
+          } else {
+            column.settle = 0f
+            column.settleVelocity = 0f
+          }
+
           if (stackMode) {
             val ch = column.charAt[stop]
-            // A REVERSAL landing on a column that was still in flight, and nothing else. Raised
-            // BEFORE the birth below, because the birth amplitude reads it.
-            if (column.lastDir != null && column.lastDir != lastDirection && !wasAtRest) {
+            val oldDir = column.lastDir
+            if (oldDir != null && oldDir != commitDir && !wasAtRest) {
               column.flipRaw = min(1f, column.flipRaw + FLIP_STEP)
             }
-            column.lastDir = lastDirection
+            column.lastDir = commitDir
             if (ch != null) {
-              // Supersede ONCE, and never again. A transition is not cancelled, not retargeted and
-              // not dropped: it runs its own curves to completion whatever arrives afterwards —
-              // measured directly on an isolated triple with a 28 ms gap, where the glyph a change
-              // was thought to discard still carried 0.83 of its alpha and went on fading on its own
-              // schedule (`.agent/TRANSITION_MODEL.md` §5).
-              //
-              // Re-targeting every live entry on every change is what wrecked the alternation: the
-              // direction flips each time an alternation turns over, so entries already on their way
-              // out were sent back through the middle, and the ink centroid sloshed 0.549 against the
-              // reference's 0.103.
               for (live in column.entries) {
                 if (!live.superseded) {
                   live.superseded = true
-                  live.target = lastDirection.toFloat()
+                  live.target = commitDir.toFloat()
                   live.posTarget =
-                    lastDirection.toFloat() + STACK_DEPART_RELATIVE * live.p
-                  live.alphaTarget = 0f
+                    commitDir.toFloat() + STACK_DEPART_RELATIVE * live.p
+                  if (!STACK_CONTINUOUS_EXCHANGE || column.flipRaw <= 0f) {
+                    live.alphaTarget = 0f
+                  }
                 }
               }
-              // Born FURTHER OUT while the value is reversing. See [STACK_FLIP_BORN].
-              val amplitude =
-                -lastDirection.toFloat() * (1f + (STACK_FLIP_BORN - 1f) * column.flipRaw)
-              column.entries.add(Entry(ch, amplitude))
+
+              val reversing =
+                oldDir != null &&
+                  oldDir != commitDir &&
+                  !wasAtRest
+
+              val reuse =
+                if (STACK_REUSE_IN_FLIGHT && reversing) {
+                  column.entries.lastOrNull { it.superseded && it.ch == ch }
+                } else {
+                  null
+                }
+
+              if (reuse != null) {
+                reuse.superseded = false
+                reuse.target = 0f
+                reuse.posTarget = 0f
+                reuse.alphaTarget = 1f
+                if (STACK_ZERO_ALL_VELOCITIES_ON_REVERSAL && reversing) {
+                  reuse.velocity = 0f
+                  reuse.qVelocity = 0f
+                  reuse.bVelocity = 0f
+                  reuse.alphaVelocity = 0f
+                }
+              } else {
+               
+                
+                val continuity =
+                  (1f - STACK_CROWD_SHORTEN * column.crowdRaw).coerceIn(0f, 1f)
+
+                val amplitude =
+                  -commitDir.toFloat() *
+                    continuity *
+                    (1f + (STACK_FLIP_BORN - 1f) * column.flipRaw)
+
+                column.entries.add(Entry(ch, amplitude))
+                
+                /*
+                val amplitude =
+                  -commitDir.toFloat() * (1f + (STACK_FLIP_BORN - 1f) * column.flipRaw)
+                column.entries.add(Entry(ch, amplitude))
+                */
+                
+              }
+
+              if (!buildIdLogged) {
+                buildIdLogged = true
+                android.util.Log.i("numerictext-entry", "BUILD ${BUILD_ID}")
+              }
             }
           }
-          arrived = true
+          active = true
         }
-        // A change that lands on a column already in flight is the whole chase signal. One that
-        // lands on a column at rest is a single crossing and must leave the geometry alone.
-        if (arrived && !wasAtRest) {
-          column.crowdRaw = min(1f, column.crowdRaw + CROWD_STEP)
-        }
-        if (arrived && wasAtRest) {
-          // The follower starts a fresh run only when the column was actually at rest. Springing
-          // down from the previous handover's 1 reads as a dip, which is why this reset exists —
-          // but resetting it mid-flight is the same mistake the position never makes. In a burst,
-          // commits land every 33 ms, so the follower was knocked back to zero over and over and
-          // the last one started from scratch: the column kept resolving 41 ms past the reference.
-          column.settle = 0f
-          column.settleVelocity = 0f
-        }
-        active = true
       }
 
       if (stepCrowd(column, dt)) active = true
@@ -1194,6 +1278,14 @@ internal class NumericRollEngine {
       // The departing glyph is drawn TALLER while the value is reversing — height only, about the
       // glyph's own optical centre, so nothing moves. See [STACK_FLIP_STRETCH].
       val tall = 1f + (STACK_FLIP_STRETCH - 1f) * column.flipRaw
+      // Zero at rest, so the single crossing keeps the amplitude measured off the reference.
+      val baseOffset = STACK_OFFSET * (1f - STACK_CROWD_SHORTEN * column.crowdRaw) * entry.p
+      val effectiveOffset = if (STACK_LANES && column.flipGate > 0f) {
+        val laneTarget = STACK_LANE * tanh(entry.p / max(1e-3f, STACK_LANE_SOFT))
+        baseOffset + (laneTarget - baseOffset) * column.flipGate
+      } else {
+        baseOffset
+      }
       out.add(
         GlyphSample(
           key = column.key,
@@ -1211,9 +1303,7 @@ internal class NumericRollEngine {
           // standing band that only stretches at its trailing edge. Sharpening the opacity gate
           // three-fold moved that pattern by nothing, because dimming one glyph just lets the next
           // one occupy the same place. The only thing that shortens a streak is a shorter journey.
-          // Zero at rest, so the single crossing keeps the amplitude measured off the reference.
-          offsetY = STACK_OFFSET * (1f - STACK_CROWD_SHORTEN * column.crowdRaw) *
-            lineHeightPx * entry.p,
+          offsetY = effectiveOffset * lineHeightPx,
           alpha = alpha.coerceIn(0f, 1f),
           scaleX = shrink,
           scaleY = shrink * tall,
@@ -1426,6 +1516,10 @@ internal class NumericRollEngine {
    */
   private fun stepCrowd(column: Column, dt: Float): Boolean {
     column.flipRaw = max(0f, column.flipRaw - dt / FLIP_RELAX)
+    if (STACK_LANES) {
+      val target = if (column.flipRaw > 0f) 1f else 0f
+      column.flipGate += (target - column.flipGate) * min(1f, dt / STACK_LANE_GATE)
+    }
     if (column.crowdRaw <= 0f && column.crowd <= 0.001f) {
       column.crowd = 0f
       return false
