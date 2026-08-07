@@ -55,8 +55,6 @@ internal class NumericRollEngine {
     val ch: String,
     val kind: TokenKind,
     val role: GlyphRole,
-    /** Unique identity of a live STACK transition; 0 for non-STACK samples. */
-    val renderId: Int = 0,
     val x: Float,
     val offsetY: Float,
     val alpha: Float,
@@ -215,7 +213,7 @@ internal class NumericRollEngine {
      * empties the column instead of concentrating it. Left at 1 as the record.
      */
     const val STACK_EXIT_ALPHA_SPEEDUP = 1.0f
-    const val STACK_EXIT_BLUR_SPEEDUP = 1.35f
+
     /**
      * How much faster every clock runs when a column is fully crowded. Zero at rest, always.
      *
@@ -285,15 +283,15 @@ internal class NumericRollEngine {
      */
     /** How sharply the arrival gate falls off with distance. 1 is linear. */
     /** How much a crowded column shortens each glyph's journey. Zero at rest, always. */
-    const val STACK_CROWD_SHORTEN = 0.0f
+    const val STACK_CROWD_SHORTEN = 0.28f
     
     const val STACK_ARRIVAL_SHARPNESS = 2.5f
 
-    const val STACK_ARRIVAL_GATE = 0.0f
+    const val STACK_ARRIVAL_GATE = 0.90f
 
     const val STACK_ALPHA_FLOOR = 0.0f
 
-    const val STACK_CROWD_SPEEDUP = 0.70f
+    const val STACK_CROWD_SPEEDUP = 0.0f
 
     /** Blur's own clock: measured zeta 0.91, wn 15.8 rad/s. Slower than size and alpha on purpose. */
     /**
@@ -720,9 +718,8 @@ internal class NumericRollEngine {
      * made it clear too early, which is why a fast roll read legible here and as an unreadable smear
      * on the reference even though `burst.py`'s sharpness said the two matched.
      */
-    var b = abs(p)
+    var b = p
     var bVelocity = 0f
-    var blurTarget = 0f
 
     /** Set the first time a change supersedes this entry, and never cleared. */
     var superseded = false
@@ -1088,9 +1085,6 @@ fun setTarget(
                   live.target = commitDir.toFloat()
                   live.posTarget =
                     commitDir.toFloat() + STACK_DEPART_RELATIVE * live.p
-
-                  live.blurTarget = 1f
-
                   if (!STACK_CONTINUOUS_EXCHANGE || column.flipRaw <= 0f) {
                     live.alphaTarget = 0f
                   }
@@ -1111,11 +1105,9 @@ fun setTarget(
 
               if (reuse != null) {
                 reuse.superseded = false
-reuse.target = 0f
-reuse.posTarget = 0f
-reuse.alphaTarget = 1f
-reuse.blurTarget = 0f
-
+                reuse.target = 0f
+                reuse.posTarget = 0f
+                reuse.alphaTarget = 1f
                 if (STACK_ZERO_ALL_VELOCITIES_ON_REVERSAL && reversing) {
                   reuse.velocity = 0f
                   reuse.qVelocity = 0f
@@ -1306,26 +1298,13 @@ reuse.blurTarget = 0f
         raw[i] * norm * column.alive * (1f + (STACK_FLIP_LIFT - 1f) * column.flipRaw)
       if (alpha <= 0.01f) continue
       val entry = column.entries[i]
-
-// Geometry from the FAST clock, appearance from the slow one.
-val distance = min(1f, abs(entry.q))
-
-// La stack conserva intenzionalmente gli ultimi due Entry per evitare
-// buchi durante un handoff. Un Entry sotto la soglia di rendering,
-// però, non deve impedire al glifo finale di diventare stabile.
-val hasOtherVisibleEntry =
-  column.entries.indices.any { j ->
-    j != i &&
-      column.entries[j].alpha > 0.01f
-  }
-
-val settled =
-  i == count - 1 &&
-    !hasOtherVisibleEntry &&
-    abs(entry.p) < POSITION_EPSILON &&
-    distance < POSITION_EPSILON &&
-    abs(entry.velocity) < VELOCITY_EPSILON &&
-    column.alive > 0.999f
+      // Geometry from the FAST clock, appearance from the slow one.
+      val distance = min(1f, abs(entry.q))
+      val settled = count == 1 &&
+        abs(entry.p) < POSITION_EPSILON &&
+        distance < POSITION_EPSILON &&
+        abs(entry.velocity) < VELOCITY_EPSILON &&
+        column.alive > 0.999f
       // Flat, not a drum. Measured: the entry amplitude is a FIXED ±0.59375 glyph heights whatever
       // the digit distance — 4→6 counting down is eight stops on a drum and the reference draws no
       // intermediate digit and travels one amplitude. There is no strip and no wheel to foreshorten.
@@ -1356,7 +1335,6 @@ val settled =
             i == count - 1 -> GlyphRole.ENTER
             else -> GlyphRole.EXIT
           },
-          renderId = entry.id,
           x = column.x,
           // Shorter travel when changes pile up. The kymograph says the roll's defect is
           // GEOMETRIC, not photometric: this engine draws a periodic mesh of diagonal streaks —
@@ -1368,15 +1346,8 @@ val settled =
           alpha = alpha.coerceIn(0f, 1f),
           scaleX = shrink,
           scaleY = shrink * tall,
-          
           blurLengthPx =
-            if (settled) {
-              0f
-            } else {
-              lineHeightPx *
-                STACK_BLUR_FRACTION *
-                entry.b.coerceIn(0f, 1f)
-            },
+            if (settled) 0f else lineHeightPx * STACK_BLUR_FRACTION * min(1f, abs(entry.b)),
           stable = settled,
         )
       )
@@ -1481,7 +1452,7 @@ val settled =
     //
     // `crowdRaw` is exactly zero for a column that was at rest, so the single crossing cannot move
     // however this is set — the same property that made the chase safe on the roll model.
-    /*val rush = 1f + STACK_CROWD_SPEEDUP * column.crowdRaw
+    val rush = 1f + STACK_CROWD_SPEEDUP * column.crowdRaw
     // `response` carries the caller's duration scaling; both clocks are scaled by the same factor so
     // `animationDuration` still stretches the whole transition uniformly.
     // The rush drives APPEARANCE only. Compressing the offset too is what made the visible mass
@@ -1492,56 +1463,7 @@ val settled =
     val quick = base / rush
     val fast = (2.0 * Math.PI / max(0.05f, STACK_RESPONSE_SECONDS * base)).toFloat()
     val slow = (2.0 * Math.PI / max(0.05f, STACK_SLOW_RESPONSE_SECONDS * quick)).toFloat()
-    val blur = (2.0 * Math.PI / max(0.05f, STACK_BLUR_RESPONSE_SECONDS * quick)).toFloat()*/
-    val oneWayCrowd =
-      column.crowd * column.crowdRaw
-
-    val reversalSuppression =
-      (1f - column.flipRaw).coerceIn(0f, 1f)
-
-    val geometryRush =
-      1f +
-        STACK_CROWD_SPEEDUP *
-          oneWayCrowd *
-          reversalSuppression
-
-    val base = response / RESPONSE_SECONDS
-
-    val fast =
-      (
-        2.0 * Math.PI /
-          max(
-            0.05f,
-            STACK_RESPONSE_SECONDS * base / geometryRush
-          )
-      ).toFloat()
-
-    val slow =
-      (
-        2.0 * Math.PI /
-          max(
-            0.05f,
-            STACK_SLOW_RESPONSE_SECONDS * base
-          )
-      ).toFloat()
-
-    val scale =
-      (
-        2.0 * Math.PI /
-          max(
-            0.05f,
-            STACK_SLOW_RESPONSE_SECONDS * base / geometryRush
-          )
-      ).toFloat()
-
-    val blur =
-      (
-        2.0 * Math.PI /
-          max(
-            0.05f,
-            STACK_BLUR_RESPONSE_SECONDS * base
-          )
-      ).toFloat()
+    val blur = (2.0 * Math.PI / max(0.05f, STACK_BLUR_RESPONSE_SECONDS * quick)).toFloat()
     for (entry in column.entries) {
       val error = entry.posTarget - entry.p
       if (abs(error) > POSITION_EPSILON || abs(entry.velocity) > VELOCITY_EPSILON) {
@@ -1553,44 +1475,16 @@ val settled =
         entry.p = entry.target
         entry.velocity = 0f
       }
-      val blurClock =
-        if (entry.superseded) {
-          blur * STACK_EXIT_BLUR_SPEEDUP
-        } else {
-          blur
-        }
-
-      val bError = entry.blurTarget - entry.b
-
-if (
-  abs(bError) > POSITION_EPSILON ||
-  abs(entry.bVelocity) > VELOCITY_EPSILON
-) {
-  entry.bVelocity +=
-    (
-      (blurClock * blurClock * bError) -
-        (2f * STACK_BLUR_DAMPING * blurClock * entry.bVelocity)
-    ) * dt
-
-  entry.b =
-    (entry.b + entry.bVelocity * dt)
-      .coerceIn(0f, 1f)
-
-  // Il blur è uno stato limitato 0..1.
-  // Non conservare velocità "nascosta" oltre i suoi estremi.
-  if (
-    (entry.b <= 0f && entry.bVelocity < 0f) ||
-    (entry.b >= 1f && entry.bVelocity > 0f)
-  ) {
-    entry.bVelocity = 0f
-  }
-
-  moving = true
-} else {
-  entry.b = entry.blurTarget
-  entry.bVelocity = 0f
-}  
-      
+      val bError = entry.target - entry.b
+      if (abs(bError) > POSITION_EPSILON || abs(entry.bVelocity) > VELOCITY_EPSILON) {
+        entry.bVelocity +=
+          ((blur * blur * bError) - (2f * STACK_BLUR_DAMPING * blur * entry.bVelocity)) * dt
+        entry.b += entry.bVelocity * dt
+        moving = true
+      } else {
+        entry.b = entry.target
+        entry.bVelocity = 0f
+      }
       val aError = entry.alphaTarget - entry.alpha
       if (abs(aError) > POSITION_EPSILON || abs(entry.alphaVelocity) > VELOCITY_EPSILON) {
         val aw = (if (entry.superseded) slow * STACK_EXIT_ALPHA_SPEEDUP else slow) /
@@ -1606,9 +1500,7 @@ if (
       val qError = entry.target - entry.q
       if (abs(qError) > POSITION_EPSILON || abs(entry.qVelocity) > VELOCITY_EPSILON) {
         entry.qVelocity +=
-          ((scale * scale * qError) -
-            (2f * STACK_SLOW_DAMPING * scale * entry.qVelocity)) * dt
-
+          ((slow * slow * qError) - (2f * STACK_SLOW_DAMPING * slow * entry.qVelocity)) * dt
         entry.q += entry.qVelocity * dt
         moving = true
       } else {
