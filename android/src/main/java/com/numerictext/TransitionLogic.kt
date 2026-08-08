@@ -13,11 +13,15 @@ data class GlyphSlot(val oldToken: NumericToken?, val newToken: NumericToken?, v
 data class TransitionPlan(val oldFormatted: String, val newFormatted: String, val slots: List<GlyphSlot>, val oldWidth: Float, val newWidth: Float)
 
 /**
- * A single glyph position of a formatted number, tagged with a stable key anchored to
- * logical position (units, tens, ...) rather than array index.
+ * A single glyph position of a formatted number, tagged with a stable key.
+ *
+ * Integer digit identity is anchored from the LEFT. This matters when the formatted
+ * structure gains or loses a digit: 999 -> 1,000 maps the old leftmost 9 onto the
+ * new leading 1, so it performs a normal numeric transition instead of creating a
+ * static structural digit. Fractional digits remain anchored from the decimal point.
  *
  * Key convention:
- *  - `I{n}`  integer digit, n = digits to its right (I0 = units, I3 = thousands)
+ *  - `I{n}`  integer digit, n = visual digit position from the left (I0 = first digit)
  *  - `F{n}`  fractional digit, n = position after decimal (F0 = tenths)
  *  - `G{n}`  group separator, n = integer digits to its right
  *  - `DEC`   decimal separator, `S` sign, `O{i}` anything else
@@ -195,8 +199,8 @@ object TransitionLogic {
   }
 
   /**
-   * Build slot pairs between old and new token lists, right-aligned by integer digits
-   * and left-aligned by fractional digits from the decimal separator.
+   * Build slot pairs between old and new token lists. Integer digits follow the SAME left-anchored
+   * identity used by layoutKeyedSlots(); fractional digits stay anchored from the decimal point.
    */
   fun buildCompoundSlots(oldTokens: List<NumericToken>, newTokens: List<NumericToken>): List<Triple<Int, Int, Boolean>> {
     val od = oldTokens.indexOfFirst { it.kind == TokenKind.DECIMAL_SEPARATOR }
@@ -213,18 +217,40 @@ object TransitionLogic {
   }
 
   private fun buildIntegerSlots(oi: List<NumericToken>, ni: List<NumericToken>, ot: List<NumericToken>, nt: List<NumericToken>): List<Triple<Int, Int, Boolean>> {
-    val od = oi.filter { it.kind == TokenKind.DIGIT }; val nd = ni.filter { it.kind == TokenKind.DIGIT }
-    val oR = od.reversed(); val nR = nd.reversed(); val mL = maxOf(oR.size, nR.size)
-    val dp = mutableListOf<Pair<Int, Int>>()
-    for (i in 0 until mL) { val oD = oR.getOrNull(i); val nD = nR.getOrNull(i); dp.add(0, Pair(if (oD != null) ot.indexOf(oD) else -1, if (nD != null) nt.indexOf(nD) else -1)) }
+    val od = oi.filter { it.kind == TokenKind.DIGIT }
+    val nd = ni.filter { it.kind == TokenKind.DIGIT }
+    val count = maxOf(od.size, nd.size)
     val slots = mutableListOf<Triple<Int, Int, Boolean>>()
-    var loi = -1; var lni = -1
-    for ((odi, ndi) in dp) {
-      insSep(ot, nt, oi, ni, loi, odi, lni, ndi, slots)
-      slots.add(Triple(odi, ndi, odi >= 0 && ndi >= 0 && ot[odi].text != nt[ndi].text))
-      if (odi >= 0) loi = odi; if (ndi >= 0) lni = ndi
+
+    var lastOld = -1
+    var lastNew = -1
+
+    for (i in 0 until count) {
+      val oldDigit = od.getOrNull(i)
+      val newDigit = nd.getOrNull(i)
+      val oldIndex = if (oldDigit != null) ot.indexOf(oldDigit) else -1
+      val newIndex = if (newDigit != null) nt.indexOf(newDigit) else -1
+
+      // Once one side runs out of digits, separators on that side are searched through the end.
+      // This is what lets 999 -> 1,000 pair 9->1, 9->0, 9->0, then birth the trailing 0 while
+      // still inserting the comma between the first and second visual digit.
+      val oldBoundary = if (oldIndex >= 0) oldIndex else Int.MAX_VALUE
+      val newBoundary = if (newIndex >= 0) newIndex else Int.MAX_VALUE
+      insSep(ot, nt, oi, ni, lastOld, oldBoundary, lastNew, newBoundary, slots)
+
+      slots.add(
+        Triple(
+          oldIndex,
+          newIndex,
+          oldIndex >= 0 && newIndex >= 0 && ot[oldIndex].text != nt[newIndex].text,
+        )
+      )
+
+      if (oldIndex >= 0) lastOld = oldIndex
+      if (newIndex >= 0) lastNew = newIndex
     }
-    insSep(ot, nt, oi, ni, loi, Int.MAX_VALUE, lni, Int.MAX_VALUE, slots)
+
+    insSep(ot, nt, oi, ni, lastOld, Int.MAX_VALUE, lastNew, Int.MAX_VALUE, slots)
     return slots
   }
 
@@ -266,11 +292,20 @@ object TransitionLogic {
 
     val result = ArrayList<KeyedSlot>(tokens.size)
     var cum = 0f
+    var intPos = 0
     var fracPos = 0
     for (i in tokens.indices) {
       val t = tokens[i]; val w = widths[i]; val center = cum + w / 2f
       val key = when (t.kind) {
-        TokenKind.DIGIT -> if (decIdx >= 0 && i > decIdx) "F${fracPos++}" else "I${intDigitsToRight[i]}"
+        TokenKind.DIGIT ->
+          if (decIdx >= 0 && i > decIdx) {
+            "F${fracPos++}"
+          } else {
+            // Structural integer changes keep visual-order identity.
+            // 999 -> 1,000 therefore reuses the three existing digit columns as
+            // 9->1, 9->0, 9->0 and births only the final trailing 0.
+            "I${intPos++}"
+          }
         TokenKind.GROUP_SEPARATOR -> "G${intDigitsToRight[i]}"
         TokenKind.DECIMAL_SEPARATOR -> "DEC"
         TokenKind.SIGN -> "S"

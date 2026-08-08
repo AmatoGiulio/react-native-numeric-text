@@ -668,11 +668,14 @@ internal class NumericRollEngine {
 
   /** A stop this column will move to once [remaining] seconds have passed. */
   //private class PendingStop(val stop: Int, val direction: Int, var remaining: Float)
+  private enum class PendingKind { CHANGE, REMOVE, ENTER }
+
   private class PendingStop(
     val stop: Int,
     val direction: Int,
     val enqueuedAtNanos: Long,
     val dueAtNanos: Long,
+    val kind: PendingKind = PendingKind.CHANGE,
   )
   /**
    * One transition, with its own clock — the unit of the STACK model.
@@ -815,6 +818,8 @@ internal class NumericRollEngine {
 
     /** 1 while the column belongs to the number, falling to 0 once it has been removed. */
     var alive = 1f
+    var aliveVelocity = 0f
+
     var retiring = false
 
     fun goalStop(): Int = pending.lastOrNull()?.stop ?: target
@@ -864,107 +869,188 @@ fun setTarget(
     lineHeightPx = max(1f, lineHeight)
     durationScale = animationDurationMs.coerceAtLeast(80L) / 320f
     lastDirection = if (direction < 0) -1 else 1
+
+    // IMPORTANT: structural membership is an EVENT STREAM, exactly like numeric changes.
+    // Capture the previously REQUESTED layout before replacing it. Looking at `columns` is wrong
+    // during a rapid retrigger because a physically exiting column can still exist after its key has
+    // already disappeared from the requested formatted value.
+    val previousLayout = targetLayout.associateBy { it.key }
+
     targetText = text
     targetLayout = layout
 
     val eventNanos = System.nanoTime()
-
     val incoming = layout.associateBy { it.key }
-    for (column in columns.values) {
-      column.retiring = incoming[column.key] == null
+
+    // A digit key crossing the requested-layout boundary is a real transition even when the previous
+    // transition has not committed yet. Do not cancel it. Queue EXIT / ENTER in order, preserving the
+    // same scheduler semantics used by ordinary CHANGE events.
+    val structuralEnterKeys = HashSet<String>()
+    for (slot in layout) {
+      if (
+        stackMode &&
+          slot.kind == TokenKind.DIGIT &&
+          previousLayout[slot.key]?.kind != TokenKind.DIGIT
+      ) {
+        structuralEnterKeys.add(slot.key)
+      }
     }
 
-    // The wave's total is fixed, so a column's share of it needs the count first.
-    var changingCount = 0
+    val structuralRemovals = ArrayList<Column>()
+    for ((key, oldSlot) in previousLayout) {
+      if (
+        stackMode &&
+          oldSlot.kind == TokenKind.DIGIT &&
+          incoming[key]?.kind != TokenKind.DIGIT
+      ) {
+        columns[key]?.let { structuralRemovals.add(it) }
+      }
+    }
+
+    // `retiring` describes only the latest requested layout. It controls final cleanup, NOT whether a
+    // queued structural event is discarded. A 999 -> 1,000 -> 999 -> 1,000 burst therefore keeps
+    // REMOVE -> ENTER -> REMOVE -> ENTER in the queue for I3.
+    for ((key, column) in columns) {
+      val willRetire = incoming[key] == null
+      column.retiring = willRetire
+
+      if (stackMode && column.kind == TokenKind.DIGIT) {
+        column.alive = 1f
+        column.aliveVelocity = 0f
+      }
+    }
+
+    var changingCount = structuralRemovals.size
     for (slot in layout) {
-      val column = columns[slot.key] ?: continue
-      if (stopFor(column, slot, lastDirection) != column.goalStop()) changingCount += 1
+      val column = columns[slot.key]
+      val changing =
+        when {
+          structuralEnterKeys.contains(slot.key) -> true
+          column == null -> slot.kind == TokenKind.DIGIT
+          else -> stopFor(column, slot, lastDirection) != column.goalStop()
+        }
+
+      if (changing) changingCount += 1
     }
     val gap = if (changingCount > 1) WAVE_TOTAL_SECONDS / (changingCount - 1) else 0f
 
-    var waveIndex = 0
-    for (slot in layout) {
-      val existing = columns[slot.key]
-      if (existing == null) {
-        // A column being born starts one stop out, so it arrives the way a roll does.
-        val born = Column(slot.key, slot.kind, literalOf(slot))
-        born.target = 0
-        born.charAt[0] = slot.char
-        born.position = -lastDirection.toFloat()
-        born.entries.add(Entry(slot.char, -lastDirection.toFloat()))
-        born.settle = 0f
-        born.alive = 0f
-        born.x = xRel(slot)
-        born.targetX = born.x
-        columns[slot.key] = born
-        continue
-      }
-      existing.kind = slot.kind
-      existing.targetX = xRel(slot)
-      existing.retiring = false
-
-      val next = stopFor(existing, slot, lastDirection)
-      if (next != existing.goalStop()) {
-        existing.literal = literalOf(slot)
-        existing.charAt[next] = slot.char
-        // Half a gap on the leader: it does not leave the instant the value changes, but it does
-        // not wait a whole step either. The reference's columns start at 70 / 137 / 220 ms; at
-        // zero this engine read 35 / 102 / 186 and at a full gap 101 / 176 / 243, which brackets
-        // it — there is ~35 ms of latency before the first frame either way, so the leader's own
-        // share is about half.
-        // Every change pays the hold, including one arriving at a column already rolling.
-        //
-        // That is measurably not what the reference does — it finishes a burst 545 ms after the
-        // last change and a single change in 587, so it is FASTER when already in flight, while
-        // this engine takes 586 either way. But the two obvious shortcuts both overshoot: skipping
-        // the hold for a column with work queued lands at 469, skipping it for any moving column at
-        // 403, against the full hold's 586. The reference's 545 sits between them and none of the
-        // three rules produces it, so the smallest error is the simple rule. See the burst section
-        // of .agent/IOS_GROUND_TRUTH.md before trying a fourth.
-        /*qui existing.pending.addLast(PendingStop(next, lastDirection, gap * (waveIndex + 0.5f)))
-        waveIndex += 1*/
-
-
-       val waveDelayNanos =
+    fun enqueue(
+      column: Column,
+      stop: Int,
+      direction: Int,
+      kind: PendingKind,
+      waveIndex: Int,
+    ) {
+      val waveDelayNanos =
         (
           gap.toDouble() *
             (waveIndex + 0.5) *
             1_000_000_000.0
         ).toLong()
 
-        val requestedDueNanos = eventNanos + waveDelayNanos
+      val requestedDueNanos = eventNanos + waveDelayNanos
+      val previousPending = column.pending.lastOrNull()
 
-        val previousPending = existing.pending.lastOrNull()
+      val dueAtNanos =
+        if (previousPending == null) {
+          requestedDueNanos
+        } else {
+          val arrivalSpacingNanos =
+            (eventNanos - previousPending.enqueuedAtNanos)
+              .coerceAtLeast(1L)
 
-        val dueAtNanos =
-          if (previousPending == null) {
-            requestedDueNanos
-          } else {
-            // Preserve the real cadence of incoming updates even when an older
-            // wave delay is still pending. A later update may never collapse
-            // onto the same deadline as the one before it.
-            val arrivalSpacingNanos =
-              (eventNanos - previousPending.enqueuedAtNanos)
-                .coerceAtLeast(1L)
-
-            maxOf(
-              requestedDueNanos,
-              previousPending.dueAtNanos + arrivalSpacingNanos,
-            )
-          }
-
-        existing.pending.addLast(
-          PendingStop(
-            stop = next,
-            direction = lastDirection,
-            enqueuedAtNanos = eventNanos,
-            dueAtNanos = dueAtNanos,
+          maxOf(
+            requestedDueNanos,
+            previousPending.dueAtNanos + arrivalSpacingNanos,
           )
-        )
+        }
 
+      column.pending.addLast(
+        PendingStop(
+          stop = stop,
+          direction = direction,
+          enqueuedAtNanos = eventNanos,
+          dueAtNanos = dueAtNanos,
+          kind = kind,
+        )
+      )
+    }
+
+    var waveIndex = 0
+    for (slot in layout) {
+      var existing = columns[slot.key]
+
+      if (existing == null) {
+        val born = Column(slot.key, slot.kind, literalOf(slot))
+        born.target = 0
+        born.position = 0f
+        born.settle = 0f
+        born.alive = if (slot.kind == TokenKind.DIGIT) 1f else 0f
+        born.aliveVelocity = 0f
+        born.x = xRel(slot)
+        born.targetX = born.x
+
+        if (slot.kind != TokenKind.DIGIT) {
+          born.charAt[0] = slot.char
+        }
+
+        columns[slot.key] = born
+        existing = born
+      }
+
+      existing.kind = slot.kind
+      existing.targetX = xRel(slot)
+      existing.retiring = false
+
+      if (stackMode && slot.kind == TokenKind.DIGIT && structuralEnterKeys.contains(slot.key)) {
+        // Structural insertion is a genuine ENTER every time the requested key crosses absent ->
+        // present. Even if a previous REMOVE has not committed yet, this ENTER remains queued behind
+        // it, so rapid retriggers cannot collapse into a static zero.
+        val enterStop = existing.goalStop()
+        existing.literal = null
+        existing.charAt[enterStop] = slot.char
+
+        enqueue(
+          column = existing,
+          stop = enterStop,
+          direction = lastDirection,
+          kind = PendingKind.ENTER,
+          waveIndex = waveIndex,
+        )
+        waveIndex += 1
+        continue
+      }
+
+      val next = stopFor(existing, slot, lastDirection)
+      if (next != existing.goalStop()) {
+        existing.literal = literalOf(slot)
+        existing.charAt[next] = slot.char
+
+        enqueue(
+          column = existing,
+          stop = next,
+          direction = lastDirection,
+          kind = PendingKind.CHANGE,
+          waveIndex = waveIndex,
+        )
         waveIndex += 1
       }
     }
+
+    // With left-anchored integer identity the disappearing structural digit is trailing. Keep it in
+    // the same wave, but NEVER cancel it on a later retarget: a following ENTER is queued after it.
+    structuralRemovals.sortBy { it.x }
+    for (column in structuralRemovals) {
+      enqueue(
+        column = column,
+        stop = column.goalStop(),
+        direction = lastDirection,
+        kind = PendingKind.REMOVE,
+        waveIndex = waveIndex,
+      )
+      waveIndex += 1
+    }
+
     isRunning = true
   }
 
@@ -1024,16 +1110,75 @@ fun setTarget(
     while (iterator.hasNext()) {
       val column = iterator.next().value
 
-      if (column.retiring) {
-        column.alive = max(0f, column.alive - dt / max(0.01f, response))
-        if (column.alive <= 0f) {
+      if (stackMode && column.kind == TokenKind.DIGIT) {
+        // DIGIT structure is owned by Entry geometry. Never fade an entire digit column just
+        // because the formatted string gained/lost a slot: that leaves a sharp static glyph and,
+        // on a fast retarget, simply fades the same glyph back in without any numeric motion.
+        column.alive = 1f
+        column.aliveVelocity = 0f
+
+        val structuralExitComplete =
+          column.retiring &&
+            column.pending.isEmpty() &&
+            column.entries.isNotEmpty() &&
+            column.entries.all {
+              it.superseded &&
+                it.alpha <= 0.004f &&
+                abs(it.alphaVelocity) <= VELOCITY_EPSILON &&
+                abs(it.p - it.posTarget) <= POSITION_EPSILON &&
+                abs(it.velocity) <= VELOCITY_EPSILON
+            }
+
+        if (structuralExitComplete) {
           iterator.remove()
           continue
         }
-        active = true
-      } else if (column.alive < 1f) {
-        column.alive = min(1f, column.alive + dt / max(0.01f, response))
-        active = true
+      } else {
+        val aliveTarget =
+          if (column.retiring) 0f else 1f
+
+        val aliveError =
+          aliveTarget - column.alive
+
+        if (
+          abs(aliveError) > POSITION_EPSILON ||
+          abs(column.aliveVelocity) > VELOCITY_EPSILON
+        ) {
+          val aliveOmega =
+            (
+              2.0 * Math.PI /
+                max(
+                  0.05f,
+                  STACK_SLOW_RESPONSE_SECONDS *
+                    (response / RESPONSE_SECONDS)
+                )
+            ).toFloat()
+
+          column.aliveVelocity +=
+            (
+              (aliveOmega * aliveOmega * aliveError) -
+                (
+                  2f *
+                    STACK_SLOW_DAMPING *
+                    aliveOmega *
+                    column.aliveVelocity
+                )
+            ) * dt
+
+          column.alive =
+            (column.alive + column.aliveVelocity * dt)
+              .coerceIn(0f, 1f)
+
+          active = true
+        } else {
+          column.alive = aliveTarget
+          column.aliveVelocity = 0f
+        }
+
+        if (column.retiring && column.alive <= POSITION_EPSILON) {
+          iterator.remove()
+          continue
+        }
       }
 
       if (column.pending.isNotEmpty()) {
@@ -1075,64 +1220,107 @@ fun setTarget(
           }
 
           if (stackMode) {
-            val ch = column.charAt[stop]
             val oldDir = column.lastDir
             if (oldDir != null && oldDir != commitDir && !wasAtRest) {
               column.flipRaw = min(1f, column.flipRaw + FLIP_STEP)
             }
             column.lastDir = commitDir
-            if (ch != null) {
-              for (live in column.entries) {
-                if (!live.superseded) {
-                  live.superseded = true
-                  live.target = commitDir.toFloat()
-                  live.posTarget =
-                    commitDir.toFloat() + STACK_DEPART_RELATIVE * live.p
 
-                  live.blurTarget = 1f
-
-                  if (!STACK_CONTINUOUS_EXCHANGE || column.flipRaw <= 0f) {
+            when (pendingStop.kind) {
+              PendingKind.REMOVE -> {
+                // Structural removal is the same departure geometry used by a normal digit
+                // replacement, only without creating a new incoming Entry.
+                for (live in column.entries) {
+                  if (!live.superseded) {
+                    live.superseded = true
+                    live.target = commitDir.toFloat()
+                    live.posTarget =
+                      commitDir.toFloat() + STACK_DEPART_RELATIVE * live.p
+                    live.blurTarget = 1f
                     live.alphaTarget = 0f
                   }
                 }
               }
+              PendingKind.ENTER -> {
+                val ch = column.charAt[stop]
+                if (ch != null) {
+                  // ENTER is not a revival of an old Entry. It is the same structural arrival used
+                  // by a single insertion: a fresh glyph starts at the normal incoming amplitude.
+                  // A preceding REMOVE remains physically visible as the EXIT half of the handoff.
+                  val amplitude =
+                    -commitDir.toFloat() *
+                      (1f + (STACK_FLIP_BORN - 1f) * column.flipRaw)
 
-              val reversing =
-                oldDir != null &&
-                  oldDir != commitDir &&
-                  !wasAtRest
-
-              val reuse =
-                if (STACK_REUSE_IN_FLIGHT && reversing) {
-                  column.entries.lastOrNull { it.superseded && it.ch == ch }
-                } else {
-                  null
+                  val bornEntry = Entry(ch, amplitude)
+                  bornEntry.alpha = 0.32f
+                  column.entries.add(bornEntry)
                 }
-
-              if (reuse != null) {
-                reuse.superseded = false
-reuse.target = 0f
-reuse.posTarget = 0f
-reuse.alphaTarget = 1f
-reuse.blurTarget = 0f
-
-                if (STACK_ZERO_ALL_VELOCITIES_ON_REVERSAL && reversing) {
-                  reuse.velocity = 0f
-                  reuse.qVelocity = 0f
-                  reuse.bVelocity = 0f
-                  reuse.alphaVelocity = 0f
-                }
-              } else {
-                val amplitude =
-                  -commitDir.toFloat() *
-                    (1f + (STACK_FLIP_BORN - 1f) * column.flipRaw)
-
-                column.entries.add(Entry(ch, amplitude))
               }
 
-              if (!buildIdLogged) {
-                buildIdLogged = true
-                android.util.Log.i("numerictext-entry", "BUILD ${BUILD_ID}")
+              PendingKind.CHANGE -> {
+                val ch = column.charAt[stop]
+                if (ch != null) {
+                  for (live in column.entries) {
+                    if (!live.superseded) {
+                      live.superseded = true
+                      live.target = commitDir.toFloat()
+                      live.posTarget =
+                        commitDir.toFloat() + STACK_DEPART_RELATIVE * live.p
+
+                      live.blurTarget = 1f
+
+                      if (!STACK_CONTINUOUS_EXCHANGE || column.flipRaw <= 0f) {
+                        live.alphaTarget = 0f
+                      }
+                    }
+                  }
+
+                  val reversing =
+                    oldDir != null &&
+                      oldDir != commitDir &&
+                      !wasAtRest
+
+                  val reuse =
+                    if (STACK_REUSE_IN_FLIGHT && reversing) {
+                      column.entries.lastOrNull { it.superseded && it.ch == ch }
+                    } else {
+                      null
+                    }
+
+                  if (reuse != null) {
+                    reuse.superseded = false
+                    reuse.target = 0f
+                    reuse.posTarget = 0f
+                    reuse.alphaTarget = 1f
+                    reuse.blurTarget = 0f
+
+                    if (STACK_ZERO_ALL_VELOCITIES_ON_REVERSAL && reversing) {
+                      reuse.velocity = 0f
+                      reuse.qVelocity = 0f
+                      reuse.bVelocity = 0f
+                      reuse.alphaVelocity = 0f
+                    }
+                  } else {
+                    val amplitude =
+                      -commitDir.toFloat() *
+                        (1f + (STACK_FLIP_BORN - 1f) * column.flipRaw)
+
+                    val bornEntry = Entry(ch, amplitude)
+
+                    // A structural birth has no outgoing glyph. Keep the already-tested small
+                    // far-edge presence so its vertical path is visible from the first rendered frame.
+                    if (column.entries.isEmpty()) {
+                      bornEntry.alpha = 0.32f
+                    }
+
+                    column.entries.add(bornEntry)
+                  }
+
+                  if (!buildIdLogged) {
+                    buildIdLogged = true
+                    android.util.Log.i("numerictext-entry", "BUILD ${BUILD_ID}")
+                  }
+                }
               }
             }
           }

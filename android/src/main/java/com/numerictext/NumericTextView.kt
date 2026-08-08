@@ -91,6 +91,7 @@ class NumericTextView(context: Context) : View(context), Choreographer.FrameCall
 
   // Render caches
   private val glyphNodeCache = HashMap<String, RenderNode>(32)
+  private val activeGlyphNodeKeys = HashSet<String>(32)
   private val directionalEffectCache = HashMap<Int, RenderEffect>(32)
   private val gaussianEffectCache = HashMap<Int, RenderEffect>(24)
 
@@ -220,6 +221,8 @@ class NumericTextView(context: Context) : View(context), Choreographer.FrameCall
     val samples = engine.samples()
     val ordered = samples.sortedBy { it.role.ordinal }
 
+    if (hardwareNodes) activeGlyphNodeKeys.clear()
+
     for (sample in ordered) {
       val alpha = (sample.alpha * 255f).roundToInt().coerceIn(0, 255)
       if (alpha <= 0) continue
@@ -229,6 +232,9 @@ class NumericTextView(context: Context) : View(context), Choreographer.FrameCall
       } else {
         drawGlyphSoftware(canvas, sample, x, baseline, alpha)
       }
+    }
+    if (hardwareNodes) {
+      glyphNodeCache.keys.retainAll(activeGlyphNodeKeys)
     }
     textPaint.alpha = 255
     textPaint.maskFilter = null
@@ -287,7 +293,7 @@ class NumericTextView(context: Context) : View(context), Choreographer.FrameCall
     alpha: Int,
   ) {
     val advance = advanceOf(sample.ch)
-    val margin = ceil(textHeightPx * 0.62f)
+    val margin = ceil(textHeightPx * 0.80f)
     val nodeW = ceil(advance + 2f * margin).toInt()
     val nodeH = ceil(textHeightPx + 2f * margin).toInt()
     val idealLeft = centreX - margin - advance / 2f
@@ -297,7 +303,8 @@ class NumericTextView(context: Context) : View(context), Choreographer.FrameCall
     val localCX = margin + advance / 2f
     val localBL = margin - fmAscent
 
-    val cacheKey = "${paintGeneration}_${numericTextColor}_${sample.key}_${sample.ch}_${nodeW}_${nodeH}"
+    val cacheKey = "${paintGeneration}_${numericTextColor}_${sample.key}_${sample.renderId}_${sample.ch}_${nodeW}_${nodeH}"
+    activeGlyphNodeKeys.add(cacheKey)
     var node = glyphNodeCache[cacheKey]
     if (node == null || !node.hasDisplayList()) {
       node = RenderNode(cacheKey)

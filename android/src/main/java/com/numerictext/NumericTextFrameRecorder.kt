@@ -232,6 +232,9 @@ object NumericTextFrameRecorder {
       markArray.put(JSONObject().put("t", at).put("label", name))
     }
     meta.put("marks", markArray)
+    meta.put("buildId", NumericRollEngine.BUILD_ID)
+    meta.put("zeroVel", NumericRollEngine.STACK_ZERO_ALL_VELOCITIES_ON_REVERSAL)
+    meta.put("stackMode", NumericRollEngine.stackMode)
 
     sink?.flush(); sink?.close(); sink = null
     val bin = binFile
