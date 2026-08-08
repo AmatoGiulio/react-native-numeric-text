@@ -95,25 +95,10 @@ class NumericTextViewManager : SimpleViewManager<NumericTextView>(),
     view?.setDebugManualProgress(progress.toFloat())
   }
 
-  /**
-   * Which engine draws a column: the roll model on a drum, or the stack of transitions.
-   *
-   * A DEBUG switch, and deliberately global rather than per-view: [NumericRollEngine.stackMode] is
-   * a companion property that every column reads, and making it per-instance is a refactor with no
-   * user-facing purpose. "auto" (or unset) leaves whatever the recorder's marker file decided, so
-   * `.agent/tools/round.sh` keeps working unchanged; only an explicit "drum" or "stack" overrides
-   * it. With several views on screen the last one to be configured wins — which is what the example
-   * app's single selector is for.
-   */
+
   @ReactProp(name = "debugEngine")
   override fun setDebugEngine(view: NumericTextView?, engine: String?) {
-    when (engine) {
-      "stack" -> NumericRollEngine.stackMode = true
-      "drum" -> NumericRollEngine.stackMode = false
-      else -> return
-    }
-    // From here the marker files leave it alone. See [NumericRollEngine.engineChosenByProp].
-    NumericRollEngine.engineChosenByProp = true
+    // Kept for the generated RN interface. STACK is the only runtime engine.
     view?.invalidate()
   }
 

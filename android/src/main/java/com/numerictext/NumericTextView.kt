@@ -2,7 +2,6 @@ package com.numerictext
 
 import android.annotation.SuppressLint
 import android.content.Context
-import android.graphics.BlendMode
 import android.graphics.BlurMaskFilter
 import android.graphics.Canvas
 import android.graphics.Color
@@ -12,7 +11,6 @@ import android.graphics.PorterDuff
 import android.graphics.PorterDuffXfermode
 import android.graphics.RenderEffect
 import android.graphics.RenderNode
-import android.graphics.RuntimeShader
 import android.graphics.Shader
 import android.graphics.Typeface
 import android.os.Build
@@ -70,8 +68,6 @@ class NumericTextView(context: Context) : View(context), Choreographer.FrameCall
   var numericFontWeight: String = "normal"; private set
   var numericFontFamily: String = NumericTextFonts.BUNDLED; private set
   var numericTextColor: Int = Color.BLACK; private set
-  var debugTransitionStrategy: String = ""; private set
-  var debugManualProgress: Float = -1f; private set
 
   // Persistent motion
   private val engine = NumericRollEngine()
@@ -92,7 +88,6 @@ class NumericTextView(context: Context) : View(context), Choreographer.FrameCall
   // Render caches
   private val glyphNodeCache = HashMap<String, RenderNode>(32)
   private val activeGlyphNodeKeys = HashSet<String>(32)
-  private val directionalEffectCache = HashMap<Int, RenderEffect>(32)
   private val gaussianEffectCache = HashMap<Int, RenderEffect>(24)
 
   // Formatter
@@ -511,7 +506,6 @@ class NumericTextView(context: Context) : View(context), Choreographer.FrameCall
 
   private fun clearRenderCaches() {
     glyphNodeCache.clear()
-    directionalEffectCache.clear()
     gaussianEffectCache.clear()
   }
 
@@ -572,8 +566,8 @@ class NumericTextView(context: Context) : View(context), Choreographer.FrameCall
   fun setDirection(value: String) { numericDirection = value }
   fun setAnimationDuration(value: Double) { animationDurationMs = value.toLong().coerceAtLeast(80L) }
   fun setReduceMotion(value: String) { numericReduceMotion = value }
-  fun setDebugTransitionStrategy(value: String) { debugTransitionStrategy = value }
-  fun setDebugManualProgress(value: Float) { debugManualProgress = value }
+  fun setDebugTransitionStrategy(@Suppress("UNUSED_PARAMETER") value: String) = Unit
+  fun setDebugManualProgress(@Suppress("UNUSED_PARAMETER") value: Float) = Unit
 
   fun setLocale(value: String) {
     if (value == numericLocale) return

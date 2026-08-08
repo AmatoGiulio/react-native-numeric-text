@@ -89,27 +89,6 @@ object NumericTextFrameRecorder {
       checkedEnabled = true
       val dir = view.context.getExternalFilesDir(null)
       enabled = dir != null && File(dir, "numerictext-record.on").exists()
-      // Read alongside the recorder's own flag, off the same directory and on the same one-shot
-      // check, so a round can drive both engines from ONE build:
-      //
-      //     adb shell touch /sdcard/Android/data/<pkg>/files/numerictext-stack.on
-      //
-      // Reading it here rather than in the engine keeps every marker file in one place; the engine
-      // has no Context and should not grow one for a debug switch.
-      //
-      // Called from the view's ATTACH and not only from `arm`. `arm` runs on the first value
-      // change, so a flag read there would leave the first transition of a session on the other
-      // engine — one crossing measured from the wrong renderer, silently, which is exactly the
-      // class of mistake the notes in `.agent/NEXT.md` are full of.
-      // The DEFAULT is the stack. A marker file still overrides it, and both engines now have
-      // one — `numerictext-drum.on` had to exist because "no file" used to mean the drum, which is
-      // exactly what stopped the app from ever starting on the stack.
-      if (!NumericRollEngine.engineChosenByProp && dir != null) {
-        when {
-          File(dir, "numerictext-stack.on").exists() -> NumericRollEngine.stackMode = true
-          File(dir, "numerictext-drum.on").exists() -> NumericRollEngine.stackMode = false
-        }
-      }
       drawFilter = when {
         dir == null -> 0
         File(dir, "numerictext-record.outgoing").exists() -> 1
@@ -233,8 +212,8 @@ object NumericTextFrameRecorder {
     }
     meta.put("marks", markArray)
     meta.put("buildId", NumericRollEngine.BUILD_ID)
-    meta.put("zeroVel", NumericRollEngine.STACK_ZERO_ALL_VELOCITIES_ON_REVERSAL)
-    meta.put("stackMode", NumericRollEngine.stackMode)
+    meta.put("zeroVel", false)
+    meta.put("stackMode", true)
 
     sink?.flush(); sink?.close(); sink = null
     val bin = binFile
