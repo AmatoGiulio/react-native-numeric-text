@@ -8,7 +8,9 @@ import android.graphics.Color
 import android.graphics.LinearGradient
 import android.graphics.Paint
 import android.graphics.PorterDuff
+import android.graphics.PorterDuffColorFilter
 import android.graphics.PorterDuffXfermode
+import android.graphics.RectF
 import android.graphics.RenderEffect
 import android.graphics.RenderNode
 import android.graphics.Shader
@@ -19,24 +21,16 @@ import android.text.TextPaint
 import android.view.Choreographer
 import android.view.View
 import com.facebook.react.common.assets.ReactFontManager
-import com.numerictext.NumericRollEngine.GlyphRole
-import com.numerictext.NumericRollEngine.GlyphSample
 import java.text.DecimalFormatSymbols
 import java.text.NumberFormat
 import java.util.Locale
 import kotlin.math.ceil
 import kotlin.math.floor
-import kotlin.math.abs
 import kotlin.math.max
-import kotlin.math.min
 import kotlin.math.roundToInt
 /**
- * Android implementation of SwiftUI-like numericText.
- *
- * V8 uses persistent rolling columns rather than rebuilding ENTER/EXIT timelines.
- * Repeated value updates only move each column's target stop, preserving current
- * position and velocity. Rendering uses a normalized directional blur on Android 13+
- * and a conservative Gaussian fallback on Android 12.
+ * Android numericText renderer. The complete formatted line is shaped and rasterized once, then
+ * persistent STACK entries animate keyed slices of that immutable raster.
  */
 class NumericTextView(context: Context) : View(context), Choreographer.FrameCallback {
 
@@ -81,8 +75,26 @@ class NumericTextView(context: Context) : View(context), Choreographer.FrameCall
   private var fmAscent = 0f
   private var fmDescent = 0f
   private var textHeightPx = 0f
-  private val advanceCache = HashMap<String, Float>(24)
+  private val lineGeometryCache = LinkedHashMap<String, TextLineGeometry>(32, 0.75f, true)
   private var paintGeneration = 0
+  private var nextRasterId = 1
+
+  private data class PreparedKey(
+    val text: String,
+    val group: Char,
+    val decimal: Char,
+    val minus: Char,
+  )
+
+  private data class PreparedText(
+    val layout: List<KeyedSlot>,
+    val raster: NumericTextRaster,
+  )
+
+  private val preparedByKey = LinkedHashMap<PreparedKey, PreparedText>(16, 0.75f, true)
+  private val preparedById = HashMap<Int, PreparedText>(16)
+  private val bitmapPaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
+  private var rasterColorFilter = PorterDuffColorFilter(numericTextColor, PorterDuff.Mode.SRC_IN)
   private var lastDesiredWidth = -1
 
   // Render caches
@@ -109,12 +121,12 @@ class NumericTextView(context: Context) : View(context), Choreographer.FrameCall
   private fun opticalCentre(): Float = (fmAscent + fmDescent) / 2f
 
   private fun settledDesiredWidth(text: String): Int =
-    ceil(advanceOf(text) + 2f * hHeadroom() + paddingLeft + paddingRight).toInt()
+    ceil(lineWidthOf(text) + 2f * hHeadroom() + paddingLeft + paddingRight).toInt()
 
   override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
   val h = textHeightPx
   val contentWidth = if (engine.isRunning) max(measureOldWidth, measureNewWidth)
-  else advanceOf(settledText.ifEmpty { "0" })
+  else lineWidthOf(settledText.ifEmpty { "0" })
   
   val dw = ceil(contentWidth + 2f * hHeadroom() + paddingLeft + paddingRight).toInt()
   
@@ -133,7 +145,6 @@ class NumericTextView(context: Context) : View(context), Choreographer.FrameCall
     super.onAttachedToWindow()
     NumericTextFrameRecorder.configure(this)
     recalcFormatter()
-    recalcTextPaint()
     if (engine.isRunning) postFrame()
   }
 
@@ -161,11 +172,7 @@ class NumericTextView(context: Context) : View(context), Choreographer.FrameCall
 
     canvas.saveLayer(0f, topClip, width.toFloat(), bottomClip, null)
 
-    if (!engine.isRunning && targetText == settledText) {
-      drawSettled(canvas)
-    } else {
-      drawRolling(canvas)
-    }
+    drawRolling(canvas)
 
     val fadeTop = kotlin.math.max(topClip, baseline + fmAscent - marginY + fadePx)
     val fadeBottom = kotlin.math.min(bottomClip, baseline + fmDescent + marginY - fadePx)
@@ -200,39 +207,37 @@ class NumericTextView(context: Context) : View(context), Choreographer.FrameCall
     NumericTextFrameRecorder.capture(this)
   }
 
-  private fun drawSettled(canvas: Canvas) {
-    textPaint.maskFilter = null
-    textPaint.alpha = 255
-    val baseline = baselineY(height / 2f)
-    val left = width / 2f - advanceOf(settledText) / 2f
-    canvas.drawText(settledText, left, baseline, textPaint)
-  }
-
   private fun drawRolling(canvas: Canvas) {
     val baseline = baselineY(height / 2f)
     val centreX = width / 2f
     val hardwareNodes = Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && canvas.isHardwareAccelerated
 
-    val samples = engine.samples()
-    val ordered = samples.sortedBy { it.role.ordinal }
+    val ordered = engine.samples().sortedBy { it.role.ordinal }
 
     if (hardwareNodes) activeGlyphNodeKeys.clear()
 
     for (sample in ordered) {
       val alpha = (sample.alpha * 255f).roundToInt().coerceIn(0, 255)
       if (alpha <= 0) continue
+
+      val prepared = preparedById[sample.rasterId] ?: continue
+      val slice = prepared.raster.slice(sample.key) ?: continue
       val x = centreX + sample.x
+
       if (hardwareNodes) {
-        drawGlyphNode(canvas, sample, x, baseline, alpha)
+        drawRasterNode(canvas, sample, prepared.raster, slice, x, baseline, alpha)
       } else {
-        drawGlyphSoftware(canvas, sample, x, baseline, alpha)
+        drawRasterSoftware(canvas, sample, prepared.raster, slice, x, baseline, alpha)
       }
     }
+
     if (hardwareNodes) {
       glyphNodeCache.keys.retainAll(activeGlyphNodeKeys)
     }
-    textPaint.alpha = 255
-    textPaint.maskFilter = null
+
+    bitmapPaint.alpha = 255
+    bitmapPaint.maskFilter = null
+    bitmapPaint.colorFilter = rasterColorFilter
   }
 
   /**
@@ -244,85 +249,109 @@ class NumericTextView(context: Context) : View(context), Choreographer.FrameCall
    * every measurement is taken through — it has to match the RenderEffect above, not approximate
    * something else.
    */
-  private fun drawGlyphSoftware(
+  private fun drawRasterSoftware(
     canvas: Canvas,
     sample: NumericRollEngine.GlyphSample,
+    raster: NumericTextRaster,
+    slice: RasterSlice,
     x: Float,
     baseline: Float,
     alpha: Int,
   ) {
-    val left = x - advanceOf(sample.ch) / 2f
+    val source = slice.source
+    val left = x - slice.anchorX
     val y = baseline + sample.offsetY
+    val top = y - raster.baseline
+    val destination = RectF(
+      left,
+      top,
+      left + source.width(),
+      top + source.height(),
+    )
 
-    textPaint.alpha = alpha
-    textPaint.maskFilter =
+    bitmapPaint.alpha = alpha
+    bitmapPaint.colorFilter = rasterColorFilter
+    bitmapPaint.maskFilter =
       if (sample.stable || sample.blurLengthPx < BLUR_MIN_PX) {
         null
       } else {
         val bucket =
-          (sample.blurLengthPx * BLUR_RADIUS_FACTOR * BLUR_STEPS_PER_PX).roundToInt().coerceIn(1, 480)
+          (sample.blurLengthPx * BLUR_RADIUS_FACTOR * BLUR_STEPS_PER_PX)
+            .roundToInt()
+            .coerceIn(1, 480)
         softwareBlurCache.getOrPut(bucket) {
           BlurMaskFilter(bucket / BLUR_STEPS_PER_PX, BlurMaskFilter.Blur.NORMAL)
         }
       }
 
     canvas.save()
-    // Pivoted on the glyph's optical centre, not its baseline. A drum's face turns about its own
-    // middle, and a squash about the baseline would drag every shrinking glyph downwards — an
-    // asymmetry between the pair above the front face and the pair below it that the reference,
-    // which animates a finished raster, cannot have.
     canvas.scale(sample.scaleX, sample.scaleY, x, y + opticalCentre())
-    canvas.drawText(sample.ch, left, y, textPaint)
+    canvas.drawBitmap(raster.bitmap, source, destination, bitmapPaint)
     canvas.restore()
 
-    textPaint.maskFilter = null
-    textPaint.alpha = 255
+    bitmapPaint.maskFilter = null
+    bitmapPaint.alpha = 255
   }
 
   @SuppressLint("NewApi")
-  private fun drawGlyphNode(
+  private fun drawRasterNode(
     canvas: Canvas,
     sample: NumericRollEngine.GlyphSample,
+    raster: NumericTextRaster,
+    slice: RasterSlice,
     centreX: Float,
     baseline: Float,
     alpha: Int,
   ) {
-    val advance = advanceOf(sample.ch)
+    val source = slice.source
     val margin = ceil(textHeightPx * 0.80f)
-    val nodeW = ceil(advance + 2f * margin).toInt()
-    val nodeH = ceil(textHeightPx + 2f * margin).toInt()
-    val idealLeft = centreX - margin - advance / 2f
-    val idealTop = baseline - (margin - fmAscent)
+    val nodeW = source.width() + (2f * margin).toInt()
+    val nodeH = source.height() + (2f * margin).toInt()
+    val idealLeft = centreX - slice.anchorX - margin
+    val idealTop = baseline - raster.baseline - margin
     val baseLeft = floor(idealLeft).toInt()
     val baseTop = floor(idealTop).toInt()
-    val localCX = margin + advance / 2f
-    val localBL = margin - fmAscent
+    val localAnchorX = margin + slice.anchorX
+    val localBaseline = margin + raster.baseline
 
-    val cacheKey = "${paintGeneration}_${numericTextColor}_${sample.key}_${sample.renderId}_${sample.ch}_${nodeW}_${nodeH}"
+    val cacheKey =
+      "${paintGeneration}_${numericTextColor}_${sample.rasterId}_${sample.key}_${sample.renderId}_${nodeW}_${nodeH}"
     activeGlyphNodeKeys.add(cacheKey)
+
     var node = glyphNodeCache[cacheKey]
     if (node == null || !node.hasDisplayList()) {
       node = RenderNode(cacheKey)
       node.setHasOverlappingRendering(false)
       node.setPosition(baseLeft, baseTop, baseLeft + nodeW, baseTop + nodeH)
+
       val recording = node.beginRecording()
-      textPaint.alpha = 255
-      textPaint.maskFilter = null
-      recording.drawText(sample.ch, localCX - advance / 2f, localBL, textPaint)
+      bitmapPaint.alpha = 255
+      bitmapPaint.maskFilter = null
+      bitmapPaint.colorFilter = rasterColorFilter
+      recording.drawBitmap(
+        raster.bitmap,
+        source,
+        RectF(
+          margin,
+          margin,
+          margin + source.width(),
+          margin + source.height(),
+        ),
+        bitmapPaint,
+      )
       node.endRecording()
       glyphNodeCache[cacheKey] = node
     } else {
       node.setPosition(baseLeft, baseTop, baseLeft + nodeW, baseTop + nodeH)
     }
 
-    node.pivotX = localCX
-    node.pivotY = localBL + opticalCentre()
+    node.pivotX = localAnchorX
+    node.pivotY = localBaseline + opticalCentre()
     node.translationX = idealLeft - baseLeft
     node.translationY = sample.offsetY + (idealTop - baseTop)
     node.scaleX = sample.scaleX
     node.scaleY = sample.scaleY
     node.alpha = alpha / 255f
-
     node.setRenderEffect(effectFor(sample.blurLengthPx))
     canvas.drawRenderNode(node)
   }
@@ -356,6 +385,7 @@ class NumericTextView(context: Context) : View(context), Choreographer.FrameCall
     val dt = (frameTimeNanos - lastFrameNanos) / 1_000_000_000f
     lastFrameNanos = frameTimeNanos
     val active = engine.step(dt)
+    prunePreparedTextCache()
     invalidate()
 
     if (active) {
@@ -379,6 +409,7 @@ class NumericTextView(context: Context) : View(context), Choreographer.FrameCall
 
   private fun finishMotion() {
     engine.snapToTarget()
+    prunePreparedTextCache()
     settledText = targetText
     settledValue = numericValue
     targetValue = numericValue
@@ -399,27 +430,33 @@ class NumericTextView(context: Context) : View(context), Choreographer.FrameCall
     if (formatted == targetText && engine.isRunning) return
     if (formatted == settledText && !engine.isRunning) return
 
-    val oldWidth = if (engine.isRunning) engine.targetWidth() else advanceOf(settledText)
-    val newLayout = layoutOf(formatted)
+    val next = preparedTextOf(formatted)
+    val oldWidth = if (engine.isRunning) engine.targetWidth() else lineWidthOf(settledText)
     val direction = resolveDirection(numericValue, if (engine.isRunning) targetValue else settledValue)
 
     if (!engine.isRunning && targetText == settledText) {
-      engine.reset(layoutOf(settledText), settledText, textHeightPx)
+      val current = preparedTextOf(settledText)
+      engine.reset(current.layout, settledText, textHeightPx, current.raster.id)
     }
 
     targetText = formatted
     targetValue = numericValue
     measureOldWidth = oldWidth
-    measureNewWidth = newLayout.firstOrNull()?.totalWidth ?: 0f
+    measureNewWidth = next.raster.lineWidth
 
     if (!shouldAnimate()) {
-      engine.setTarget(newLayout, formatted, direction, textHeightPx, animationDurationMs)
+      engine.setTarget(
+        next.layout, formatted, direction, textHeightPx, animationDurationMs, next.raster.id
+      )
       engine.snapToTarget()
       finishMotion()
       return
     }
 
-    engine.setTarget(newLayout, formatted, direction, textHeightPx, animationDurationMs)
+    engine.setTarget(
+      next.layout, formatted, direction, textHeightPx, animationDurationMs, next.raster.id
+    )
+    prunePreparedTextCache()
     updateContentDescription()
     if (measureNewWidth != measureOldWidth || max(measureOldWidth, measureNewWidth) > measuredWidth - 2f * hHeadroom()) {
       requestLayout()
@@ -433,14 +470,6 @@ class NumericTextView(context: Context) : View(context), Choreographer.FrameCall
     "down" -> -1
     else -> towards.compareTo(from).coerceIn(-1, 1).let { if (it == 0) 1 else it }
   }
-
-  private fun layoutOf(formatted: String): List<KeyedSlot> =
-    TransitionLogic.layoutKeyedSlots(
-      formatted,
-      currentGroupSep,
-      currentDecimalSep,
-      currentMinusSign,
-    ) { advanceOf(it) }
 
   private fun shouldAnimate(): Boolean = when (numericReduceMotion) {
     "always" -> false
@@ -497,7 +526,8 @@ class NumericTextView(context: Context) : View(context), Choreographer.FrameCall
     fmAscent = metrics.ascent
     fmDescent = metrics.descent
     textHeightPx = metrics.descent - metrics.ascent
-    advanceCache.clear()
+    lineGeometryCache.clear()
+    clearPreparedTextCache()
     paintGeneration++
     edgeFadeGradient = null
     edgeFadeMaskPaint = null
@@ -509,7 +539,69 @@ class NumericTextView(context: Context) : View(context), Choreographer.FrameCall
     gaussianEffectCache.clear()
   }
 
-  private fun advanceOf(text: String): Float = advanceCache.getOrPut(text) { textPaint.measureText(text) }
+  private fun preparedTextOf(text: String): PreparedText {
+    val key = PreparedKey(text, currentGroupSep, currentDecimalSep, currentMinusSign)
+    preparedByKey[key]?.let { return it }
+
+    val line = lineGeometryOf(text)
+    val layout = TransitionLogic.layoutKeyedSlots(
+      text,
+      currentGroupSep,
+      currentDecimalSep,
+      currentMinusSign,
+      line,
+    )
+    val raster = NumericTextRasterizer.rasterize(
+      id = nextRasterId++,
+      line = line,
+      slots = layout,
+      lineHeight = textHeightPx,
+      ascent = fmAscent,
+    )
+    val prepared = PreparedText(layout, raster)
+    preparedByKey[key] = prepared
+    preparedById[raster.id] = prepared
+    return prepared
+  }
+
+  private fun clearPreparedTextCache() {
+    preparedByKey.clear()
+    preparedById.clear()
+  }
+
+  private fun prunePreparedTextCache() {
+    if (preparedByKey.size <= RASTER_CACHE_TARGET) return
+
+    val referenced = engine.referencedRasterIds()
+    val iterator = preparedByKey.entries.iterator()
+    while (preparedByKey.size > RASTER_CACHE_TARGET && iterator.hasNext()) {
+      val entry = iterator.next()
+      val id = entry.value.raster.id
+      if (id !in referenced) {
+        preparedById.remove(id)
+        iterator.remove()
+      }
+    }
+  }
+
+  private fun lineGeometryOf(text: String): TextLineGeometry {
+    lineGeometryCache[text]?.let { return it }
+
+    val line = NumericTextTypesetter.typeset(text, textPaint)
+    lineGeometryCache[text] = line
+
+    if (lineGeometryCache.size > 48) {
+      val iterator = lineGeometryCache.entries.iterator()
+      if (iterator.hasNext()) {
+        iterator.next()
+        iterator.remove()
+      }
+    }
+
+    return line
+  }
+
+  private fun lineWidthOf(text: String): Float = preparedTextOf(text).raster.lineWidth
 
   private fun resolveTypeface(): Typeface {
     val weight = NumericTextFonts.weightOf(numericFontWeight)
@@ -553,7 +645,8 @@ class NumericTextView(context: Context) : View(context), Choreographer.FrameCall
       settledText = formatNumber(value)
       targetText = settledText
       hasSettledOnce = true
-      engine.reset(layoutOf(settledText), settledText, textHeightPx)
+      val prepared = preparedTextOf(settledText)
+      engine.reset(prepared.layout, settledText, textHeightPx, prepared.raster.id)
       updateContentDescription()
       requestLayout()
       invalidate()
@@ -604,7 +697,8 @@ class NumericTextView(context: Context) : View(context), Choreographer.FrameCall
     }
     settledText = formatNumber(settledValue)
     targetText = settledText
-    engine.reset(layoutOf(settledText), settledText, textHeightPx)
+    val prepared = preparedTextOf(settledText)
+    engine.reset(prepared.layout, settledText, textHeightPx, prepared.raster.id)
     updateContentDescription()
     requestLayout()
     invalidate()
@@ -615,7 +709,8 @@ class NumericTextView(context: Context) : View(context), Choreographer.FrameCall
     if (next == numericFontSize) return
     numericFontSize = next
     recalcTextPaint()
-    engine.reset(layoutOf(targetText), targetText, textHeightPx)
+    val prepared = preparedTextOf(targetText)
+    engine.reset(prepared.layout, targetText, textHeightPx, prepared.raster.id)
     requestLayout()
     invalidate()
   }
@@ -624,7 +719,8 @@ class NumericTextView(context: Context) : View(context), Choreographer.FrameCall
     if (value == numericFontWeight) return
     numericFontWeight = value
     recalcTextPaint()
-    engine.reset(layoutOf(targetText), targetText, textHeightPx)
+    val prepared = preparedTextOf(targetText)
+    engine.reset(prepared.layout, targetText, textHeightPx, prepared.raster.id)
     requestLayout()
     invalidate()
   }
@@ -633,7 +729,8 @@ class NumericTextView(context: Context) : View(context), Choreographer.FrameCall
     if (value == numericFontFamily) return
     numericFontFamily = value
     recalcTextPaint()
-    engine.reset(layoutOf(targetText), targetText, textHeightPx)
+    val prepared = preparedTextOf(targetText)
+    engine.reset(prepared.layout, targetText, textHeightPx, prepared.raster.id)
     requestLayout()
     invalidate()
   }
@@ -642,11 +739,14 @@ class NumericTextView(context: Context) : View(context), Choreographer.FrameCall
     if (value == numericTextColor) return
     numericTextColor = value
     textPaint.color = value
+    rasterColorFilter = PorterDuffColorFilter(value, PorterDuff.Mode.SRC_IN)
     clearRenderCaches()
     invalidate()
   }
 
   companion object {
+    private const val RASTER_CACHE_TARGET = 12
+
     /** Below this the glyph is drawn sharp — a sub-pixel blur is cost without an effect. */
     private const val BLUR_MIN_PX = 0.75f
 

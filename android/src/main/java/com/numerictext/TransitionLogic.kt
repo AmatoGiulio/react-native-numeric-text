@@ -14,10 +14,19 @@ data class KeyedSlot(
   val char: String,
   val centerFromLeft: Float,
   val totalWidth: Float,
+  val leftFromLeft: Float,
+  val rightFromLeft: Float,
+  val utf16Start: Int,
+  val utf16End: Int,
 )
 
 object TransitionLogic {
-  private data class Token(val text: String, val kind: TokenKind)
+  private data class Token(
+    val text: String,
+    val kind: TokenKind,
+    val utf16Start: Int,
+    val utf16End: Int,
+  )
 
   /** Integer digits keep visual identity from the left; fractions from the decimal point. */
   fun layoutKeyedSlots(
@@ -25,11 +34,11 @@ object TransitionLogic {
     groupSep: Char,
     decimalSep: Char,
     minusSign: Char,
-    measure: (String) -> Float,
+    line: TextLineGeometry,
   ): List<KeyedSlot> {
+    require(line.text == formatted) { "TextLineGeometry must belong to the formatted string" }
+
     val tokens = tokenize(formatted, groupSep, decimalSep, minusSign)
-    val widths = tokens.map { measure(it.text) }
-    val totalWidth = widths.sum()
     val decimalIndex = tokens.indexOfFirst { it.kind == TokenKind.DECIMAL_SEPARATOR }
     val integerEnd = if (decimalIndex >= 0) decimalIndex else tokens.size
 
@@ -41,13 +50,16 @@ object TransitionLogic {
     }
 
     val result = ArrayList<KeyedSlot>(tokens.size)
-    var x = 0f
     var integerPosition = 0
     var fractionalPosition = 0
 
     for (i in tokens.indices) {
       val token = tokens[i]
-      val width = widths[i]
+      val a = line.horizontalAt(token.utf16Start)
+      val b = line.horizontalAt(token.utf16End)
+      val left = minOf(a, b)
+      val right = maxOf(a, b)
+
       val key = when (token.kind) {
         TokenKind.DIGIT ->
           if (decimalIndex >= 0 && i > decimalIndex) {
@@ -66,11 +78,14 @@ object TransitionLogic {
           key = key,
           kind = token.kind,
           char = token.text,
-          centerFromLeft = x + width / 2f,
-          totalWidth = totalWidth,
+          centerFromLeft = (left + right) / 2f,
+          totalWidth = line.totalWidth,
+          leftFromLeft = left,
+          rightFromLeft = right,
+          utf16Start = token.utf16Start,
+          utf16End = token.utf16End,
         )
       )
-      x += width
     }
 
     return result
@@ -83,11 +98,15 @@ object TransitionLogic {
     minusSign: Char,
   ): List<Token> {
     val out = ArrayList<Token>()
+    var utf16Offset = 0
     val iterator = text.codePoints().iterator()
 
     while (iterator.hasNext()) {
       val cp = iterator.next()
       val char = String(Character.toChars(cp))
+      val start = utf16Offset
+      utf16Offset += char.length
+
       val kind = when {
         cp == groupSep.code -> TokenKind.GROUP_SEPARATOR
         cp == decimalSep.code -> TokenKind.DECIMAL_SEPARATOR
@@ -95,7 +114,8 @@ object TransitionLogic {
         Character.isDigit(cp) -> TokenKind.DIGIT
         else -> TokenKind.OTHER
       }
-      out.add(Token(char, kind))
+
+      out.add(Token(char, kind, start, utf16Offset))
     }
 
     return out

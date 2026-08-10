@@ -17,6 +17,7 @@ internal class NumericRollEngine {
     val kind: TokenKind,
     val role: GlyphRole,
     val renderId: Int = 0,
+    val rasterId: Int,
     val x: Float,
     val offsetY: Float,
     val alpha: Float,
@@ -29,7 +30,7 @@ internal class NumericRollEngine {
   companion object {
     private var nextEntryId = 0
 
-    const val BUILD_ID = "STACK-CLEAN-2026-08-07"
+    const val BUILD_ID = "STACK-RASTER-PERF-SAFE-2026-08-10"
 
     private const val STACK_OFFSET = 0.3950f
     private const val STACK_FINAL_SCALE = 0.3984f
@@ -74,9 +75,10 @@ internal class NumericRollEngine {
     val enqueuedAtNanos: Long,
     val dueAtNanos: Long,
     val kind: PendingKind,
+    val rasterId: Int,
   )
 
-  private class Entry(val ch: String, var p: Float) {
+  private class Entry(val ch: String, var p: Float, var rasterId: Int) {
     val id: Int = nextEntryId++
 
     var velocity = 0f
@@ -128,6 +130,7 @@ internal class NumericRollEngine {
   private var lineHeightPx = 1f
   private var durationScale = 1f
   private var lastDirection = 1
+  private var targetRasterId = 0
 
   var targetText: String = ""
     private set
@@ -137,16 +140,17 @@ internal class NumericRollEngine {
 
   fun targetWidth(): Float = targetLayout.firstOrNull()?.totalWidth ?: 0f
 
-  fun reset(layout: List<KeyedSlot>, text: String, lineHeight: Float) {
+  fun reset(layout: List<KeyedSlot>, text: String, lineHeight: Float, rasterId: Int) {
     columns.clear()
     targetLayout = layout
     targetText = text
+    targetRasterId = rasterId
     lineHeightPx = max(1f, lineHeight)
 
     for (slot in layout) {
       val column = Column(slot.key, slot.kind)
       column.charAt[0] = slot.char
-      column.entries.add(Entry(slot.char, 0f).also { it.alpha = 1f })
+      column.entries.add(Entry(slot.char, 0f, rasterId).also { it.alpha = 1f })
       column.x = xRel(slot)
       column.targetX = column.x
       columns[slot.key] = column
@@ -161,6 +165,7 @@ internal class NumericRollEngine {
     direction: Int,
     lineHeight: Float,
     animationDurationMs: Long,
+    rasterId: Int,
   ) {
     lineHeightPx = max(1f, lineHeight)
     durationScale = animationDurationMs.coerceAtLeast(80L) / 320f
@@ -170,6 +175,7 @@ internal class NumericRollEngine {
     val previousByKey = previousSlots.associateBy { it.key }
 
     targetText = text
+    targetRasterId = rasterId
     targetLayout = layout
 
     val eventNanos = System.nanoTime()
@@ -222,6 +228,7 @@ internal class NumericRollEngine {
       stop: Int,
       kind: PendingKind,
       wavePhase: Int,
+      sourceRasterId: Int,
     ) {
       val phase =
         if (changingCount > 0) wavePhase.coerceIn(0, changingCount - 1) else 0
@@ -256,6 +263,7 @@ internal class NumericRollEngine {
           enqueuedAtNanos = eventNanos,
           dueAtNanos = dueAtNanos,
           kind = kind,
+          rasterId = sourceRasterId,
         )
       )
     }
@@ -286,6 +294,7 @@ internal class NumericRollEngine {
           stop = stop,
           kind = PendingKind.ENTER,
           wavePhase = newPhaseByKey[slot.key] ?: 0,
+          sourceRasterId = rasterId,
         )
         continue
       }
@@ -299,7 +308,10 @@ internal class NumericRollEngine {
           stop = next,
           kind = PendingKind.CHANGE,
           wavePhase = newPhaseByKey[slot.key] ?: 0,
+          sourceRasterId = rasterId,
         )
+      } else {
+        bindCurrentRaster(column, slot.char, rasterId)
       }
     }
 
@@ -312,6 +324,7 @@ internal class NumericRollEngine {
         stop = column.goalStop(),
         kind = PendingKind.REMOVE,
         wavePhase = oldPhaseByKey[slot.key] ?: 0,
+        sourceRasterId = -1,
       )
     }
 
@@ -342,7 +355,7 @@ internal class NumericRollEngine {
       column.charAt.keys.retainAll(setOf(column.target))
       column.charAt[column.target] = slot.char
       column.entries.clear()
-      column.entries.add(Entry(slot.char, 0f).also { it.alpha = 1f })
+      column.entries.add(Entry(slot.char, 0f, targetRasterId).also { it.alpha = 1f })
       column.x = xRel(slot)
       column.targetX = column.x
       column.xVelocity = 0f
@@ -409,8 +422,9 @@ internal class NumericRollEngine {
 
           when (pendingStop.kind) {
             PendingKind.REMOVE -> commitRemove(column, commitDir)
-            PendingKind.ENTER -> commitEnter(column, stop, commitDir)
-            PendingKind.CHANGE -> commitChange(column, stop, commitDir, oldDir, wasAtRest)
+            PendingKind.ENTER -> commitEnter(column, stop, commitDir, pendingStop.rasterId)
+            PendingKind.CHANGE ->
+              commitChange(column, stop, commitDir, oldDir, wasAtRest, pendingStop.rasterId)
           }
 
           active = true
@@ -427,6 +441,20 @@ internal class NumericRollEngine {
     return active
   }
 
+  fun referencedRasterIds(): Set<Int> {
+    val ids = LinkedHashSet<Int>()
+    if (targetRasterId > 0) ids.add(targetRasterId)
+    for (column in columns.values) {
+      for (entry in column.entries) {
+        if (entry.rasterId > 0) ids.add(entry.rasterId)
+      }
+      for (pending in column.pending) {
+        if (pending.rasterId > 0) ids.add(pending.rasterId)
+      }
+    }
+    return ids
+  }
+
   fun samples(): List<GlyphSample> {
     val out = ArrayList<GlyphSample>(columns.size * 2)
     for (column in columns.values) emitStack(column, out)
@@ -441,9 +469,9 @@ internal class NumericRollEngine {
     }
   }
 
-  private fun commitEnter(column: Column, stop: Int, direction: Int) {
+  private fun commitEnter(column: Column, stop: Int, direction: Int, rasterId: Int) {
     val ch = column.charAt[stop] ?: return
-    val entry = Entry(ch, incomingAmplitude(direction, column.flipRaw))
+    val entry = Entry(ch, incomingAmplitude(direction, column.flipRaw), rasterId)
     entry.alpha = STRUCTURAL_ENTRY_ALPHA
     column.entries.add(entry)
   }
@@ -454,6 +482,7 @@ internal class NumericRollEngine {
     direction: Int,
     oldDirection: Int?,
     wasAtRest: Boolean,
+    rasterId: Int,
   ) {
     val ch = column.charAt[stop] ?: return
 
@@ -481,14 +510,20 @@ internal class NumericRollEngine {
       reuse.posTarget = 0f
       reuse.alphaTarget = 1f
       reuse.blurTarget = 0f
+      reuse.rasterId = rasterId
       return
     }
 
-    val entry = Entry(ch, incomingAmplitude(direction, column.flipRaw))
+    val entry = Entry(ch, incomingAmplitude(direction, column.flipRaw), rasterId)
     if (column.entries.isEmpty()) {
       entry.alpha = STRUCTURAL_ENTRY_ALPHA
     }
     column.entries.add(entry)
+  }
+
+  private fun bindCurrentRaster(column: Column, ch: String, rasterId: Int) {
+    val current = column.entries.lastOrNull { !it.superseded && it.ch == ch } ?: return
+    current.rasterId = rasterId
   }
 
   private fun supersede(entry: Entry, direction: Int) {
@@ -559,6 +594,7 @@ internal class NumericRollEngine {
             else -> GlyphRole.EXIT
           },
           renderId = entry.id,
+          rasterId = entry.rasterId,
           x = column.x,
           offsetY = effectiveOffset * lineHeightPx,
           alpha = alpha.coerceIn(0f, 1f),
