@@ -2,8 +2,12 @@ package com.numerictext
 
 import java.util.ArrayDeque
 import kotlin.math.abs
+import kotlin.math.cos
+import kotlin.math.exp
 import kotlin.math.max
 import kotlin.math.min
+import kotlin.math.sin
+import kotlin.math.sqrt
 import kotlin.math.tanh
 
 /** Persistent STACK renderer used by numericText on Android. */
@@ -30,15 +34,32 @@ internal class NumericRollEngine {
   companion object {
     private var nextEntryId = 0
 
-    const val BUILD_ID = "STACK-RASTER-PERF-SAFE-2026-08-10"
+    const val BUILD_ID = "APPLE-BLUR-ABSOLUTE-TRIAL-PHASE5C-2026-08-10"
 
+    // Scale transfers directly. The packed Apple translation value 0.59375 is NOT applied here
+    // yet: this STACK already has validated reversal-lane geometry, and multiplying that by 0.59375
+    // would double-count travel during retriggers. Keep the validated baseline until the exact
+    // RenderBox translation coordinate space is mapped.
     private const val STACK_OFFSET = 0.3950f
-    private const val STACK_FINAL_SCALE = 0.3984f
-    private const val STACK_RESPONSE_SECONDS = 0.353f
-    private const val STACK_DAMPING = 0.55f
-    private const val STACK_SLOW_RESPONSE_SECONDS = 0.277f
-    private const val STACK_SLOW_DAMPING = 1.00f
-    private const val STACK_BLUR_FRACTION = 0.42f
+    private const val STACK_FINAL_SCALE = 0.3984375f
+
+    // RenderBox numericText animation 0: near-critical effect/matchMove spring.
+    private const val APPLE_EFFECT_MASS = 1.0f
+    private const val APPLE_EFFECT_STIFFNESS = 344.0f
+    private const val APPLE_EFFECT_DAMPING = 37.0f
+
+    // RenderBox numericText animation 1: underdamped roll/translation spring.
+    private const val APPLE_MOVE_MASS = 2.0f
+    private const val APPLE_MOVE_STIFFNESS = 470.0f
+    private const val APPLE_MOVE_DAMPING = 34.0f
+
+    // Presence keeps the validated independent channel. Blur keeps its validated time evolution.
+    // Phase5c changes only amplitude for a controlled A/B: Apple's packed blur byte is 32; when
+    // the relative-blur option bit is clear, the absolute accessor decodes that as 32 / 4 = 8 pt.
+    // The public numericText preset's option bit is still being verified, so this is a trial, not a
+    // new baseline assumption.
+    private const val STACK_ALPHA_RESPONSE_SECONDS = 0.277f
+    private const val STACK_ALPHA_DAMPING = 1.00f
     private const val STACK_EXIT_BLUR_SPEEDUP = 1.35f
     private const val STACK_CROWD_SPEEDUP = 0.70f
     private const val STACK_ALPHA_CEILING = 1.00f
@@ -58,7 +79,6 @@ internal class NumericRollEngine {
     private const val WAVE_TOTAL_SECONDS = 0.15f
     private const val MAX_DURATION_MULTIPLE = 1.25f
     private const val RESPONSE_SECONDS = 0.30f
-    private const val X_DAMPING_RATIO = 0.90f
 
     private const val POSITION_EPSILON = 0.001f
     private const val VELOCITY_EPSILON = 0.005f
@@ -131,6 +151,7 @@ internal class NumericRollEngine {
   private var durationScale = 1f
   private var lastDirection = 1
   private var targetRasterId = 0
+  private var maxBlurLengthPx = 1f
 
   var targetText: String = ""
     private set
@@ -140,12 +161,19 @@ internal class NumericRollEngine {
 
   fun targetWidth(): Float = targetLayout.firstOrNull()?.totalWidth ?: 0f
 
-  fun reset(layout: List<KeyedSlot>, text: String, lineHeight: Float, rasterId: Int) {
+  fun reset(
+    layout: List<KeyedSlot>,
+    text: String,
+    lineHeight: Float,
+    rasterId: Int,
+    blurLengthPx: Float,
+  ) {
     columns.clear()
     targetLayout = layout
     targetText = text
     targetRasterId = rasterId
     lineHeightPx = max(1f, lineHeight)
+    maxBlurLengthPx = max(0f, blurLengthPx)
 
     for (slot in layout) {
       val column = Column(slot.key, slot.kind)
@@ -166,8 +194,10 @@ internal class NumericRollEngine {
     lineHeight: Float,
     animationDurationMs: Long,
     rasterId: Int,
+    blurLengthPx: Float,
   ) {
     lineHeightPx = max(1f, lineHeight)
+    maxBlurLengthPx = max(0f, blurLengthPx)
     durationScale = animationDurationMs.coerceAtLeast(80L) / 320f
     lastDirection = if (direction < 0) -1 else 1
 
@@ -373,6 +403,7 @@ internal class NumericRollEngine {
       RESPONSE_SECONDS / MAX_DURATION_MULTIPLE,
       RESPONSE_SECONDS * MAX_DURATION_MULTIPLE,
     )
+    val appleTimeScale = response / RESPONSE_SECONDS
 
     val iterator = columns.entries.iterator()
     while (iterator.hasNext()) {
@@ -432,8 +463,8 @@ internal class NumericRollEngine {
       }
 
       if (stepCrowd(column, dt)) active = true
-      if (stepEntries(column, response, dt)) active = true
-      if (stepX(column, response, dt)) active = true
+      if (stepEntries(column, response, appleTimeScale, dt)) active = true
+      if (stepX(column, appleTimeScale, dt)) active = true
     }
 
     if (!active) snapToTarget()
@@ -604,7 +635,7 @@ internal class NumericRollEngine {
             if (settled) {
               0f
             } else {
-              lineHeightPx * STACK_BLUR_FRACTION * entry.b.coerceIn(0f, 1f)
+              maxBlurLengthPx * entry.b.coerceIn(0f, 1f)
             },
           stable = settled,
         )
@@ -643,7 +674,12 @@ internal class NumericRollEngine {
     return phases
   }
 
-  private fun stepEntries(column: Column, response: Float, dt: Float): Boolean {
+  private fun stepEntries(
+    column: Column,
+    response: Float,
+    appleTimeScale: Float,
+    dt: Float,
+  ): Boolean {
     var moving = false
 
     val oneWayCrowd = column.crowd * column.crowdRaw
@@ -653,44 +689,50 @@ internal class NumericRollEngine {
 
     val base = response / RESPONSE_SECONDS
 
-    val fast =
+    val alphaClock =
       (
         2.0 * Math.PI /
-          max(0.05f, STACK_RESPONSE_SECONDS * base / geometryRush)
+          max(0.05f, STACK_ALPHA_RESPONSE_SECONDS * base)
       ).toFloat()
 
-    val slow =
-      (
-        2.0 * Math.PI /
-          max(0.05f, STACK_SLOW_RESPONSE_SECONDS * base)
-      ).toFloat()
-
-    val scale =
-      (
-        2.0 * Math.PI /
-          max(0.05f, STACK_SLOW_RESPONSE_SECONDS * base / geometryRush)
-      ).toFloat()
-
-    val blur =
+    val blurClockBase =
       (
         2.0 * Math.PI /
           max(0.05f, STACK_BLUR_RESPONSE_SECONDS * base)
       ).toFloat()
 
     for (entry in column.entries) {
-      val error = entry.posTarget - entry.p
-      if (abs(error) > POSITION_EPSILON || abs(entry.velocity) > VELOCITY_EPSILON) {
-        entry.velocity +=
-          ((fast * fast * error) - (2f * STACK_DAMPING * fast * entry.velocity)) * dt
-        entry.p += entry.velocity * dt
-        moving = true
-      } else {
-        entry.p = entry.target
+      // Use Apple's actual physical roll spring, solved analytically in O(1). This preserves the
+      // improvement from phase5 without its fixed-substep CPU cost and without changing the
+      // historical event stream that makes continuous hold/retrigger work.
+      val moveScale = appleTimeScale / geometryRush
+      val moveResult = integrateSpringExact(
+        value = entry.p,
+        velocity = entry.velocity,
+        target = entry.posTarget,
+        mass = APPLE_MOVE_MASS,
+        stiffness = APPLE_MOVE_STIFFNESS,
+        damping = APPLE_MOVE_DAMPING,
+        timeScale = moveScale,
+        dt = dt,
+      )
+      entry.p = moveResult.value
+      entry.velocity = moveResult.velocity
+
+      val moveActive =
+        abs(entry.posTarget - entry.p) > POSITION_EPSILON ||
+          abs(entry.velocity) > VELOCITY_EPSILON
+      if (!moveActive) {
+        entry.p = entry.posTarget
         entry.velocity = 0f
+      } else {
+        moving = true
       }
 
+      // Blur deliberately remains its own validated channel. Tying blur to add/remove presence in
+      // phase5 made the visible part of a continuous roll nearly sharp.
       val blurClock =
-        if (entry.superseded) blur * STACK_EXIT_BLUR_SPEEDUP else blur
+        if (entry.superseded) blurClockBase * STACK_EXIT_BLUR_SPEEDUP else blurClockBase
       val bError = entry.blurTarget - entry.b
 
       if (abs(bError) > POSITION_EPSILON || abs(entry.bVelocity) > VELOCITY_EPSILON) {
@@ -715,15 +757,17 @@ internal class NumericRollEngine {
         entry.bVelocity = 0f
       }
 
+      // Presence also remains independent until we can map RenderBox insertion/removal composition
+      // exactly. This keeps the validated overlap normalisation and the "all digits dance" retrigger.
       val aError = entry.alphaTarget - entry.alpha
       if (abs(aError) > POSITION_EPSILON || abs(entry.alphaVelocity) > VELOCITY_EPSILON) {
-        val alphaClock =
-          slow / (1f + (STACK_FLIP_SOFT - 1f) * column.flipRaw)
+        val localAlphaClock =
+          alphaClock / (1f + (STACK_FLIP_SOFT - 1f) * column.flipRaw)
 
         entry.alphaVelocity +=
           (
-            (alphaClock * alphaClock * aError) -
-              (2f * STACK_SLOW_DAMPING * alphaClock * entry.alphaVelocity)
+            (localAlphaClock * localAlphaClock * aError) -
+              (2f * STACK_ALPHA_DAMPING * localAlphaClock * entry.alphaVelocity)
           ) * dt
         entry.alpha += entry.alphaVelocity * dt
         moving = true
@@ -732,18 +776,30 @@ internal class NumericRollEngine {
         entry.alphaVelocity = 0f
       }
 
-      val qError = entry.target - entry.q
-      if (abs(qError) > POSITION_EPSILON || abs(entry.qVelocity) > VELOCITY_EPSILON) {
-        entry.qVelocity +=
-          (
-            (scale * scale * qError) -
-              (2f * STACK_SLOW_DAMPING * scale * entry.qVelocity)
-          ) * dt
-        entry.q += entry.qVelocity * dt
-        moving = true
-      } else {
+      // Scale uses Apple's near-critical effect spring, again solved analytically. q keeps its own
+      // state so size is not forced to share alpha or blur progress.
+      val effectScale = appleTimeScale / geometryRush
+      val scaleResult = integrateSpringExact(
+        value = entry.q,
+        velocity = entry.qVelocity,
+        target = entry.target,
+        mass = APPLE_EFFECT_MASS,
+        stiffness = APPLE_EFFECT_STIFFNESS,
+        damping = APPLE_EFFECT_DAMPING,
+        timeScale = effectScale,
+        dt = dt,
+      )
+      entry.q = scaleResult.value
+      entry.qVelocity = scaleResult.velocity
+
+      val scaleActive =
+        abs(entry.target - entry.q) > POSITION_EPSILON ||
+          abs(entry.qVelocity) > VELOCITY_EPSILON
+      if (!scaleActive) {
         entry.q = entry.target
         entry.qVelocity = 0f
+      } else {
+        moving = true
       }
     }
 
@@ -753,6 +809,76 @@ internal class NumericRollEngine {
     }
 
     return moving
+  }
+
+  private data class SpringResult(val value: Float, val velocity: Float)
+
+  /** Exact solution of m*x'' + c*x' + k*(x-target) = 0 for a constant target over [dt]. */
+  private fun integrateSpringExact(
+    value: Float,
+    velocity: Float,
+    target: Float,
+    mass: Float,
+    stiffness: Float,
+    damping: Float,
+    timeScale: Float,
+    dt: Float,
+  ): SpringResult {
+    val scale = max(1e-4f, timeScale).toDouble()
+    val h = dt.toDouble()
+    if (h <= 0.0) return SpringResult(value, velocity)
+
+    // Scaling time by S is equivalent to k/S^2 and c/S, preserving damping ratio.
+    val m = mass.toDouble()
+    val k = stiffness.toDouble() / (scale * scale)
+    val c = damping.toDouble() / scale
+
+    val y0 = (value - target).toDouble()
+    val v0 = velocity.toDouble()
+    val omega0 = sqrt(k / m)
+    val zeta = c / (2.0 * sqrt(k * m))
+
+    val y: Double
+    val v: Double
+
+    when {
+      zeta < 1.0 - 1e-6 -> {
+        val wd = omega0 * sqrt(1.0 - zeta * zeta)
+        val decay = exp(-zeta * omega0 * h)
+        val a = y0
+        val b = (v0 + zeta * omega0 * y0) / wd
+        val cosT = cos(wd * h)
+        val sinT = sin(wd * h)
+        val shape = a * cosT + b * sinT
+        y = decay * shape
+        v = decay * (
+          -zeta * omega0 * shape +
+            (-a * wd * sinT + b * wd * cosT)
+        )
+      }
+
+      zeta > 1.0 + 1e-6 -> {
+        val root = sqrt(zeta * zeta - 1.0)
+        val r1 = -omega0 * (zeta - root)
+        val r2 = -omega0 * (zeta + root)
+        val c1 = (v0 - r2 * y0) / (r1 - r2)
+        val c2 = y0 - c1
+        val e1 = exp(r1 * h)
+        val e2 = exp(r2 * h)
+        y = c1 * e1 + c2 * e2
+        v = c1 * r1 * e1 + c2 * r2 * e2
+      }
+
+      else -> {
+        val decay = exp(-omega0 * h)
+        val a = y0
+        val b = v0 + omega0 * y0
+        y = decay * (a + b * h)
+        v = decay * (b - omega0 * (a + b * h))
+      }
+    }
+
+    return SpringResult((target + y).toFloat(), v.toFloat())
   }
 
   private fun stepCrowd(column: Column, dt: Float): Boolean {
@@ -773,7 +899,7 @@ internal class NumericRollEngine {
     return true
   }
 
-  private fun stepX(column: Column, response: Float, dt: Float): Boolean {
+  private fun stepX(column: Column, appleTimeScale: Float, dt: Float): Boolean {
     val error = column.targetX - column.x
     if (abs(error) <= 0.1f && abs(column.xVelocity) <= 0.1f) {
       column.x = column.targetX
@@ -781,10 +907,18 @@ internal class NumericRollEngine {
       return false
     }
 
-    val omega = (2.0 * Math.PI / max(0.05f, response)).toFloat()
-    column.xVelocity +=
-      ((omega * omega * error) - (2f * X_DAMPING_RATIO * omega * column.xVelocity)) * dt
-    column.x += column.xVelocity * dt
+    val result = integrateSpringExact(
+      value = column.x,
+      velocity = column.xVelocity,
+      target = column.targetX,
+      mass = APPLE_EFFECT_MASS,
+      stiffness = APPLE_EFFECT_STIFFNESS,
+      damping = APPLE_EFFECT_DAMPING,
+      timeScale = appleTimeScale,
+      dt = dt,
+    )
+    column.x = result.value
+    column.xVelocity = result.velocity
     return true
   }
 

@@ -436,7 +436,7 @@ class NumericTextView(context: Context) : View(context), Choreographer.FrameCall
 
     if (!engine.isRunning && targetText == settledText) {
       val current = preparedTextOf(settledText)
-      engine.reset(current.layout, settledText, textHeightPx, current.raster.id)
+      engine.reset(current.layout, settledText, textHeightPx, current.raster.id, appleBlurLengthPx())
     }
 
     targetText = formatted
@@ -446,7 +446,8 @@ class NumericTextView(context: Context) : View(context), Choreographer.FrameCall
 
     if (!shouldAnimate()) {
       engine.setTarget(
-        next.layout, formatted, direction, textHeightPx, animationDurationMs, next.raster.id
+        next.layout, formatted, direction, textHeightPx, animationDurationMs, next.raster.id,
+        appleBlurLengthPx(),
       )
       engine.snapToTarget()
       finishMotion()
@@ -454,7 +455,8 @@ class NumericTextView(context: Context) : View(context), Choreographer.FrameCall
     }
 
     engine.setTarget(
-      next.layout, formatted, direction, textHeightPx, animationDurationMs, next.raster.id
+      next.layout, formatted, direction, textHeightPx, animationDurationMs, next.raster.id,
+      appleBlurLengthPx(),
     )
     prunePreparedTextCache()
     updateContentDescription()
@@ -464,6 +466,16 @@ class NumericTextView(context: Context) : View(context), Choreographer.FrameCall
     postFrame()
     invalidate()
   }
+
+  /**
+   * Controlled absolute-blur interpretation of Apple's packed byte 32: 32 / 4 = 8 pt.
+   *
+   * The renderer consumes a blur *length* and converts it to Gaussian radius with
+   * BLUR_RADIUS_FACTOR (0.5), so the engine receives twice the target radius. Android density,
+   * not scaledDensity, maps logical screen points without coupling blur to font scaling.
+   */
+  private fun appleBlurLengthPx(): Float =
+    (APPLE_BLUR_RADIUS_DP / BLUR_RADIUS_FACTOR) * resources.displayMetrics.density
 
   private fun resolveDirection(towards: Double, from: Double): Int = when (numericDirection) {
     "up" -> 1
@@ -646,7 +658,7 @@ class NumericTextView(context: Context) : View(context), Choreographer.FrameCall
       targetText = settledText
       hasSettledOnce = true
       val prepared = preparedTextOf(settledText)
-      engine.reset(prepared.layout, settledText, textHeightPx, prepared.raster.id)
+      engine.reset(prepared.layout, settledText, textHeightPx, prepared.raster.id, appleBlurLengthPx())
       updateContentDescription()
       requestLayout()
       invalidate()
@@ -698,7 +710,7 @@ class NumericTextView(context: Context) : View(context), Choreographer.FrameCall
     settledText = formatNumber(settledValue)
     targetText = settledText
     val prepared = preparedTextOf(settledText)
-    engine.reset(prepared.layout, settledText, textHeightPx, prepared.raster.id)
+    engine.reset(prepared.layout, settledText, textHeightPx, prepared.raster.id, appleBlurLengthPx())
     updateContentDescription()
     requestLayout()
     invalidate()
@@ -710,7 +722,7 @@ class NumericTextView(context: Context) : View(context), Choreographer.FrameCall
     numericFontSize = next
     recalcTextPaint()
     val prepared = preparedTextOf(targetText)
-    engine.reset(prepared.layout, targetText, textHeightPx, prepared.raster.id)
+    engine.reset(prepared.layout, targetText, textHeightPx, prepared.raster.id, appleBlurLengthPx())
     requestLayout()
     invalidate()
   }
@@ -720,7 +732,7 @@ class NumericTextView(context: Context) : View(context), Choreographer.FrameCall
     numericFontWeight = value
     recalcTextPaint()
     val prepared = preparedTextOf(targetText)
-    engine.reset(prepared.layout, targetText, textHeightPx, prepared.raster.id)
+    engine.reset(prepared.layout, targetText, textHeightPx, prepared.raster.id, appleBlurLengthPx())
     requestLayout()
     invalidate()
   }
@@ -730,7 +742,7 @@ class NumericTextView(context: Context) : View(context), Choreographer.FrameCall
     numericFontFamily = value
     recalcTextPaint()
     val prepared = preparedTextOf(targetText)
-    engine.reset(prepared.layout, targetText, textHeightPx, prepared.raster.id)
+    engine.reset(prepared.layout, targetText, textHeightPx, prepared.raster.id, appleBlurLengthPx())
     requestLayout()
     invalidate()
   }
@@ -746,6 +758,9 @@ class NumericTextView(context: Context) : View(context), Choreographer.FrameCall
 
   companion object {
     private const val RASTER_CACHE_TARGET = 12
+
+    /** Absolute interpretation under test: packed byte 32 / 4 = 8 pt radius. */
+    private const val APPLE_BLUR_RADIUS_DP = 8f
 
     /** Below this the glyph is drawn sharp — a sub-pixel blur is cost without an effect. */
     private const val BLUR_MIN_PX = 0.75f
