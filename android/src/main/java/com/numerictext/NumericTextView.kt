@@ -468,14 +468,14 @@ class NumericTextView(context: Context) : View(context), Choreographer.FrameCall
   }
 
   /**
-   * Controlled absolute-blur interpretation of Apple's packed byte 32: 32 / 4 = 8 pt.
+   * Apple's numericText blur is relative: packed byte 32 decodes as 32 / 128 = 0.25.
    *
-   * The renderer consumes a blur *length* and converts it to Gaussian radius with
-   * BLUR_RADIUS_FACTOR (0.5), so the engine receives twice the target radius. Android density,
-   * not scaledDensity, maps logical screen points without coupling blur to font scaling.
+   * RenderBox applies that value relative to the text line geometry. Our renderer consumes a blur
+   * length and converts it to Gaussian radius with BLUR_RADIUS_FACTOR (0.5), so feed the engine
+   * the inverse-scaled length required to produce radius = 0.25 * lineHeight.
    */
   private fun appleBlurLengthPx(): Float =
-    (APPLE_BLUR_RADIUS_DP / BLUR_RADIUS_FACTOR) * resources.displayMetrics.density
+    (APPLE_RELATIVE_BLUR * textHeightPx) / BLUR_RADIUS_FACTOR
 
   private fun resolveDirection(towards: Double, from: Double): Int = when (numericDirection) {
     "up" -> 1
@@ -759,8 +759,8 @@ class NumericTextView(context: Context) : View(context), Choreographer.FrameCall
   companion object {
     private const val RASTER_CACHE_TARGET = 12
 
-    /** Absolute interpretation under test: packed byte 32 / 4 = 8 pt radius. */
-    private const val APPLE_BLUR_RADIUS_DP = 8f
+    /** Relative interpretation: packed byte 32 / 128 = 0.25 of the text line height. */
+    private const val APPLE_RELATIVE_BLUR = 0.25f
 
     /** Below this the glyph is drawn sharp — a sub-pixel blur is cost without an effect. */
     private const val BLUR_MIN_PX = 0.75f

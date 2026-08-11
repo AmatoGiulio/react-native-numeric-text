@@ -34,7 +34,7 @@ internal class NumericRollEngine {
   companion object {
     private var nextEntryId = 0
 
-    const val BUILD_ID = "APPLE-BLUR-ABSOLUTE-TRIAL-PHASE5C-2026-08-10"
+    const val BUILD_ID = "APPLE-BLUR-RELATIVE-PHASE5D-2026-08-10"
 
     // Scale transfers directly. The packed Apple translation value 0.59375 is NOT applied here
     // yet: this STACK already has validated reversal-lane geometry, and multiplying that by 0.59375
@@ -54,10 +54,8 @@ internal class NumericRollEngine {
     private const val APPLE_MOVE_DAMPING = 34.0f
 
     // Presence keeps the validated independent channel. Blur keeps its validated time evolution.
-    // Phase5c changes only amplitude for a controlled A/B: Apple's packed blur byte is 32; when
-    // the relative-blur option bit is clear, the absolute accessor decodes that as 32 / 4 = 8 pt.
-    // The public numericText preset's option bit is still being verified, so this is a trial, not a
-    // new baseline assumption.
+    // Phase5d changes only blur amplitude semantics: Apple's packed blur byte 32 is interpreted as
+    // relative blur 32 / 128 = 0.25, with the View mapping that fraction to text line height.
     private const val STACK_ALPHA_RESPONSE_SECONDS = 0.277f
     private const val STACK_ALPHA_DAMPING = 1.00f
     private const val STACK_EXIT_BLUR_SPEEDUP = 1.35f
