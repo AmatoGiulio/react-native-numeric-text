@@ -34,7 +34,7 @@ internal class NumericRollEngine {
   companion object {
     private var nextEntryId = 0
 
-    const val BUILD_ID = "APPLE-BLUR-RELATIVE-PHASE5D-2026-08-10"
+    const val BUILD_ID = "V0.1-RC3-RELEASE-SURFACE-2026-08-11"
 
     // Scale transfers directly. The packed Apple translation value 0.59375 is NOT applied here
     // yet: this STACK already has validated reversal-lane geometry, and multiplying that by 0.59375

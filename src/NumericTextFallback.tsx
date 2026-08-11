@@ -5,12 +5,9 @@ import type { NumericTextProps } from './types';
 /**
  * The number, formatted, with no animation.
  *
- * Used on every platform without a native renderer — web, and iOS until its native view is more
- * than a placeholder. It formats identically to the native path so a snapshot or a web render
- * matches what a phone eventually draws; only the transition is missing.
- *
- * This lives in its own file rather than in `NumericTextView.tsx` because the native entry point
- * needs it too, and `./NumericTextView` resolves back to `NumericTextView.native.tsx` there.
+ * Used on platforms without a native renderer (currently web). It formats identically to the
+ * native path so snapshots and web renders keep the same number formatting; only the transition is
+ * missing.
  */
 function NumericTextFallbackImpl({
   value,

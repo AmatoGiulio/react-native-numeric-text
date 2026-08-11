@@ -112,8 +112,6 @@ export function Lab({ onOpenShowcase }: LabProps) {
             minimumFractionDigits={0}
             maximumFractionDigits={3}
             style={styles.number}
-            debugEngine="stack"
-            debugTransitionStrategy="per_glyph"
           />
         )}
       </View>

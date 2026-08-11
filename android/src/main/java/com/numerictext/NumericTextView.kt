@@ -145,11 +145,15 @@ class NumericTextView(context: Context) : View(context), Choreographer.FrameCall
     super.onAttachedToWindow()
     NumericTextFrameRecorder.configure(this)
     recalcFormatter()
-    if (engine.isRunning) postFrame()
+    if (engine.isRunning) {
+      beginAnimationRenderPath()
+      postFrame()
+    }
   }
 
   override fun onDetachedFromWindow() {
     stopFrames()
+    endAnimationRenderPath()
     super.onDetachedFromWindow()
   }
   private var edgeFadeGradient: LinearGradient? = null
@@ -210,7 +214,7 @@ class NumericTextView(context: Context) : View(context), Choreographer.FrameCall
   private fun drawRolling(canvas: Canvas) {
     val baseline = baselineY(height / 2f)
     val centreX = width / 2f
-    val hardwareNodes = Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && canvas.isHardwareAccelerated
+    val hardwareNodes = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && canvas.isHardwareAccelerated
 
     val ordered = engine.samples().sortedBy { it.role.ordinal }
 
@@ -409,6 +413,7 @@ class NumericTextView(context: Context) : View(context), Choreographer.FrameCall
 
   private fun finishMotion() {
     engine.snapToTarget()
+    endAnimationRenderPath()
     prunePreparedTextCache()
     settledText = targetText
     settledValue = numericValue
@@ -458,6 +463,7 @@ class NumericTextView(context: Context) : View(context), Choreographer.FrameCall
       next.layout, formatted, direction, textHeightPx, animationDurationMs, next.raster.id,
       appleBlurLengthPx(),
     )
+    beginAnimationRenderPath()
     prunePreparedTextCache()
     updateContentDescription()
     if (measureNewWidth != measureOldWidth || max(measureOldWidth, measureNewWidth) > measuredWidth - 2f * hHeadroom()) {
@@ -476,6 +482,26 @@ class NumericTextView(context: Context) : View(context), Choreographer.FrameCall
    */
   private fun appleBlurLengthPx(): Float =
     (APPLE_RELATIVE_BLUR * textHeightPx) / BLUR_RADIUS_FACTOR
+
+  /**
+   * Android's hardware Canvas does not support Paint.setMaskFilter(), while RenderEffect only
+   * exists from API 31. During animation on older Android releases, render this small custom View
+   * through a software layer so the existing BlurMaskFilter path produces the same isotropic blur.
+   *
+   * The layer is enabled only for the lifetime of the animation and never performs pixel readback
+   * or per-frame bitmap allocation in our code. API 31+ stays on the RenderNode/RenderEffect path.
+   */
+  private fun beginAnimationRenderPath() {
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S && layerType != LAYER_TYPE_SOFTWARE) {
+      setLayerType(LAYER_TYPE_SOFTWARE, null)
+    }
+  }
+
+  private fun endAnimationRenderPath() {
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S && layerType == LAYER_TYPE_SOFTWARE) {
+      setLayerType(LAYER_TYPE_NONE, null)
+    }
+  }
 
   private fun resolveDirection(towards: Double, from: Double): Int = when (numericDirection) {
     "up" -> 1
@@ -671,8 +697,6 @@ class NumericTextView(context: Context) : View(context), Choreographer.FrameCall
   fun setDirection(value: String) { numericDirection = value }
   fun setAnimationDuration(value: Double) { animationDurationMs = value.toLong().coerceAtLeast(80L) }
   fun setReduceMotion(value: String) { numericReduceMotion = value }
-  fun setDebugTransitionStrategy(@Suppress("UNUSED_PARAMETER") value: String) = Unit
-  fun setDebugManualProgress(@Suppress("UNUSED_PARAMETER") value: Float) = Unit
 
   fun setLocale(value: String) {
     if (value == numericLocale) return

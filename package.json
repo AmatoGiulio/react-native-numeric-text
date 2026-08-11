@@ -17,15 +17,15 @@
     "lib",
     "android",
     "ios",
-    "cpp",
     "*.podspec",
-    "react-native.config.js",
     "!ios/build",
     "!android/build",
+    "!android/.gradle",
     "!android/gradle",
     "!android/gradlew",
     "!android/gradlew.bat",
     "!android/local.properties",
+    "!android/src/test",
     "!**/__tests__",
     "!**/__fixtures__",
     "!**/__mocks__",
@@ -35,15 +35,21 @@
     "example": "yarn workspace react-native-numeric-text-example",
     "clean": "del-cli lib",
     "prepare": "bob build",
+    "prepublishOnly": "yarn check",
     "typecheck": "tsc",
     "lint": "eslint \"**/*.{js,ts,tsx}\"",
     "test": "jest",
-    "release": "release-it --only-version"
+    "release": "release-it --only-version",
+    "check": "yarn typecheck && yarn lint && yarn test"
   },
   "keywords": [
     "react-native",
     "ios",
-    "android"
+    "android",
+    "animation",
+    "numeric-text",
+    "fabric",
+    "swiftui"
   ],
   "repository": {
     "type": "git",
@@ -116,7 +122,7 @@
     "type": "all",
     "jsSrcsDir": "src",
     "android": {
-      "javaPackageName": "com.amatostudios.numerictext"
+      "javaPackageName": "com.numerictext"
     },
     "ios": {
       "components": {
@@ -131,7 +137,8 @@
     "singleQuote": true,
     "tabWidth": 2,
     "trailingComma": "es5",
-    "useTabs": false
+    "useTabs": false,
+    "endOfLine": "lf"
   },
   "jest": {
     "preset": "@react-native/jest-preset",
@@ -169,6 +176,9 @@
           "name": "angular"
         }
       }
+    },
+    "hooks": {
+      "before:init": "yarn check"
     }
   },
   "create-react-native-library": {

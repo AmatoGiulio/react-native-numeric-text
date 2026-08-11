@@ -14,7 +14,7 @@ Pod::Spec.new do |s|
   # The renderer is SwiftUI (ios/NumericTextSwiftUIHost.swift); the Fabric view is ObjC++ and
   # reaches it through the generated NumericText-Swift.h.
   s.swift_version = "5.0"
-  s.source       = { :git => "https://github.com/AmatoGiulio/react-native-numeric-text.git", :tag => "#{s.version}" }
+  s.source       = { :git => "https://github.com/AmatoGiulio/react-native-numeric-text.git", :tag => "v#{s.version}" }
 
   s.source_files = "ios/**/*.{h,m,mm,swift,cpp}"
   s.private_header_files = "ios/**/*.h"

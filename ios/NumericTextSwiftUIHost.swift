@@ -75,10 +75,10 @@ public final class NumericTextSwiftUIHost: UIView {
       minimumFractionDigits: minimumFractionDigits,
       maximumFractionDigits: maximumFractionDigits
     )
-    model.fontSize = fontSize > 0 ? fontSize : 17
+    model.fontSize = fontSize > 0 ? fontSize : 48
     model.weight = Self.weight(from: fontWeight)
     model.fontFamily = fontFamily
-    model.color = textColor.map(Color.init(uiColor:)) ?? .primary
+    model.color = textColor.map(Color.init(uiColor:)) ?? .black
 
     model.countsDown = Self.countsDown(
       direction: direction,
@@ -178,10 +178,10 @@ private final class NumericTextModel: ObservableObject {
   @Published var value: Double = 0
   @Published var countsDown: Bool = false
   @Published var animates: Bool = false
-  @Published var fontSize: CGFloat = 17
+  @Published var fontSize: CGFloat = 48
   @Published var weight: Font.Weight = .regular
   @Published var fontFamily: String?
-  @Published var color: Color = .primary
+  @Published var color: Color = .black
 }
 
 private struct NumericTextRoot: View {

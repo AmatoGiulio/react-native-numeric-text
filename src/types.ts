@@ -23,7 +23,10 @@ export type NumericTextProps = {
    */
   direction?: 'automatic' | 'up' | 'down';
 
-  /** Nominal duration in ms. The springs settle on their own, so this scales rather than clamps. */
+  /**
+   * Android only. Nominal duration in ms; scales the springs rather than clamping them to an
+   * exact time. SwiftUI owns the animation timing on iOS.
+   */
   animationDuration?: number;
 
   /**
@@ -41,26 +44,10 @@ export type NumericTextProps = {
 
   /**
    * `fontSize`, `fontWeight`, `fontFamily` and `color` are read out and handed to the native
-   * renderer, which draws the glyphs itself; everything else applies to the view as usual.
+   * renderer, which draws the glyphs itself; everything else applies to the view as usual. When
+   * omitted, native font size defaults to 48 and color to black.
    */
   style?: StyleProp<TextStyle>;
 
   testID?: string;
-};
-
-/**
- * Knobs the example app uses to drive the renderer by hand while comparing it against the
- * reference. Not part of the supported surface — they can change or vanish in any release.
- *
- * @internal
- */
-export type NumericTextDebugProps = {
-  debugTransitionStrategy?: 'whole_run' | 'changed_run' | 'per_glyph';
-  debugManualProgress?: number;
-  /**
-   * Android only. Which engine draws a column: `drum` is the roll model, `stack` is the stack of
-   * independent transitions. Global rather than per-view, and `auto` leaves whatever the frame
-   * recorder's marker file decided so the measuring rig is unaffected.
-   */
-  debugEngine?: 'auto' | 'drum' | 'stack';
 };

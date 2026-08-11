@@ -85,22 +85,6 @@ class NumericTextViewManager : SimpleViewManager<NumericTextView>(),
     view?.setTextColor(color ?: android.graphics.Color.BLACK)
   }
 
-  @ReactProp(name = "debugTransitionStrategy")
-  override fun setDebugTransitionStrategy(view: NumericTextView?, strategy: String?) {
-    view?.setDebugTransitionStrategy(strategy ?: "")
-  }
-
-  @ReactProp(name = "debugManualProgress")
-  override fun setDebugManualProgress(view: NumericTextView?, progress: Double) {
-    view?.setDebugManualProgress(progress.toFloat())
-  }
-
-
-  @ReactProp(name = "debugEngine")
-  override fun setDebugEngine(view: NumericTextView?, engine: String?) {
-    // Kept for the generated RN interface. STACK is the only runtime engine.
-    view?.invalidate()
-  }
 
   companion object {
     const val NAME = "NumericTextView"

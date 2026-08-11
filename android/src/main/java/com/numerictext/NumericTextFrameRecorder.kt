@@ -1,5 +1,6 @@
 package com.numerictext
 
+import android.content.pm.ApplicationInfo
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.view.View
@@ -22,7 +23,7 @@ import org.json.JSONObject
  * happens inside `onDraw`, so what is recorded is exactly what was drawn, on the frame it was
  * drawn, with no possibility of sampling a state one tick early or late.
  *
- * Switched on by creating a marker file, so toggling it needs no rebuild:
+ * Debug builds only. Switched on by creating a marker file, so toggling it needs no rebuild:
  *
  *     adb shell touch /sdcard/Android/data/<pkg>/files/numerictext-record.on
  *     adb pull /sdcard/Android/data/<pkg>/files/numerictext-record
@@ -85,6 +86,7 @@ object NumericTextFrameRecorder {
   private var host: View? = null
 
   private fun enabled(view: View): Boolean {
+    if ((view.context.applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) == 0) return false
     if (!checkedEnabled) {
       checkedEnabled = true
       val dir = view.context.getExternalFilesDir(null)

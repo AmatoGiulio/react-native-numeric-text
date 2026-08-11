@@ -2,9 +2,7 @@ import { memo, useEffect, useRef, useState } from 'react';
 import NumericTextViewNativeComponent from './NumericTextViewNativeComponent';
 import { measureBox, widest, type Box } from './measureBox';
 import { resolveTextStyle } from './resolveTextStyle';
-import type { NumericTextDebugProps, NumericTextProps } from './types';
-
-type Props = NumericTextProps & NumericTextDebugProps;
+import type { NumericTextProps } from './types';
 
 /**
  * One component, one prop shape, two native renderers.
@@ -30,10 +28,7 @@ function NumericTextViewImpl({
   useGrouping = true,
   style,
   testID,
-  debugTransitionStrategy,
-  debugManualProgress,
-  debugEngine,
-}: Props) {
+}: NumericTextProps) {
   const text = resolveTextStyle(style);
 
   const formatted = value.toLocaleString(locale, {
@@ -61,13 +56,6 @@ function NumericTextViewImpl({
       fontFamily={text.fontFamily}
       textColor={text.textColor}
       testID={testID}
-      debugTransitionStrategy={debugTransitionStrategy}
-      debugEngine={debugEngine}
-      debugManualProgress={
-        typeof debugManualProgress === 'number'
-          ? debugManualProgress
-          : undefined
-      }
       style={[style, box]}
     />
   );

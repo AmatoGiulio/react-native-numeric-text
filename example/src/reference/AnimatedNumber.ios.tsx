@@ -8,7 +8,7 @@ import {
   monospacedDigit,
 } from '@expo/ui/swift-ui/modifiers';
 import { useState } from 'react';
-import { Dimensions } from 'react-native';
+import { Dimensions, StyleSheet } from 'react-native';
 
 export type AnimatedNumberProps = {
   value: number;
@@ -32,7 +32,7 @@ export function AnimatedNumber({ value, size = 84 }: AnimatedNumberProps) {
 
   return (
     <Host
-      style={{ width: HOST_WIDTH, height: 120 }}
+      style={styles.host}
       onLayoutContent={(e) =>
         console.log('[AnimatedNumber] host content size', e.nativeEvent)
       }
@@ -51,3 +51,10 @@ export function AnimatedNumber({ value, size = 84 }: AnimatedNumberProps) {
     </Host>
   );
 }
+
+const styles = StyleSheet.create({
+  host: {
+    width: HOST_WIDTH,
+    height: 120,
+  },
+});
