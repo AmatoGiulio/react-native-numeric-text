@@ -2,35 +2,45 @@ import { useCallback, useEffect, useRef } from 'react';
 
 export type Step = { value: number; hold: number };
 
-function ramp(from: number, to: number, hold: number): Step[] {
-  return Array.from({ length: Math.abs(to - from) + 1 }, (_, index) => ({
-    value: from + Math.sign(to - from) * index,
-    hold,
-  }));
-}
-
-/** A continuous 15-second tour of the library's main transition cases. */
+/** A focused 10-second promo sequence: scale, structural changes, rollback and retriggers. */
 export const SHOWCASE_SEQUENCE: Step[] = [
-  { value: 1984, hold: 1000 },
-  { value: 1985, hold: 550 },
-  { value: 1986, hold: 550 },
-  { value: 1987, hold: 700 },
-  { value: 1999, hold: 700 },
-  { value: 2000, hold: 1000 },
-  { value: 999, hold: 800 },
-  { value: 1000, hold: 900 },
-  { value: 999, hold: 900 },
-  { value: 10, hold: 700 },
-  { value: 9, hold: 700 },
-  { value: 0, hold: 700 },
-  { value: -1, hold: 800 },
-  { value: 0, hold: 700 },
-  { value: 1, hold: 700 },
-  { value: 9.8, hold: 700 },
-  { value: 9.9, hold: 500 },
-  { value: 10, hold: 900 },
-  ...ramp(101, 110, 100),
-  { value: 1984, hold: 500 },
+  // Scala iniziale: tre incrementi singoli, facili da leggere.
+  { value: 1992, hold: 460 },
+  { value: 1993, hold: 450 },
+  { value: 1994, hold: 450 },
+  // Cambi strutturali netti, come nella sequenza Lab.
+  { value: 99, hold: 800 },
+  { value: 100, hold: 800 },
+  { value: 1, hold: 800 },
+  // Discesa lenta: -1, -1, -1, -1, -1.
+  { value: 0, hold: 650 },
+  { value: -1, hold: 550 },
+  { value: -2, hold: 450 },
+  { value: -3, hold: 350 },
+  { value: -4, hold: 300 },
+  // Contro-trigger a 60 ms: la struttura si interrompe e lascia la coda delle due cifre.
+  { value: 1000, hold: 400 },
+  { value: 999, hold: 360 },
+  { value: 1000, hold: 360 },
+
+  // Press-and-hold simulato: +123 continuo, con intervalli sempre più brevi.
+  { value: 1123, hold: 360 },
+  { value: 1246, hold: 300 },
+  { value: 1369, hold: 240 },
+  { value: 1492, hold: 180 },
+  { value: 1615, hold: 150 },
+  { value: 1738, hold: 120 },
+  { value: 1861, hold: 100 },
+  { value: 1984, hold: 80 },
+  { value: 2107, hold: 60 },
+  { value: 2230, hold: 60 },
+  { value: 2353, hold: 60 },
+  { value: 2476, hold: 60 },
+  // Coda di rientro: il rollback rallenta e chiude sul valore iniziale.
+  { value: 2353, hold: 120 },
+  { value: 2230, hold: 140 },
+  { value: 2107, hold: 180 },
+  { value: 1992, hold: 660 },
 ];
 
 function scheduleOnFrames(
