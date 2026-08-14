@@ -1,29 +1,20 @@
 import type { NumericTextFormat, NumericTextProps } from './types';
 
 /**
- * One description of "what this number should read as", shared by the three places that have to
- * agree on it: the web fallback, the JS width estimate, and the props handed to the native
- * renderers.
- *
- * The native renderers do the real formatting, because the string that is drawn has to be
- * produced where it is drawn: the transition animates the structure of a formatted number, not a
- * string handed over ready-made. But the layout box is estimated in JS from a string JS formats
- * itself, so the two must resolve the same options from the same props. Everything that decides
- * the shape of the number therefore lives here rather than being spelled out again per platform.
+ * One description of "what this number should read as", shared by the web fallback, the JS width
+ * estimate, and the props handed to the native renderers.
  */
 
-/**
- * The value a digit bound carries to native when the caller did not give one.
- *
- * A bound is a digit count, so it is never negative and -1 cannot be mistaken for a real one. The
- * renderer needs the difference: "0 fraction digits" and "however many this currency uses" are
- * different instructions, and an absent prop means the second.
- */
 export const DIGITS_UNSET = -1;
-
 export const DEFAULT_LOCALE = 'en-US';
 
-/** The props that describe the number rather than the motion or the typography. */
+const MIN_INTEGER_DIGITS = 1;
+const MAX_INTEGER_DIGITS = 21;
+const MIN_FRACTION_DIGITS = 0;
+const MAX_FRACTION_DIGITS = 100;
+const MIN_SIGNIFICANT_DIGITS = 1;
+const MAX_SIGNIFICANT_DIGITS = 21;
+
 type FormatProps = Pick<
   NumericTextProps,
   | 'format'
@@ -33,7 +24,6 @@ type FormatProps = Pick<
   | 'maximumFractionDigits'
 >;
 
-/** The flat scalars the native prop surface carries. `Intl` shapes are not codegen shapes. */
 export type NativeFormatProps = {
   numberStyle: string;
   currency: string;
@@ -47,13 +37,6 @@ export type NativeFormatProps = {
   maximumSignificantDigits: number;
 };
 
-/**
- * The single format the whole component works from.
- *
- * The top-level shorthands are folded in first and [FormatProps.format] is laid over them, so a
- * component can say `currency="USD"` for the common case and still reach for the full options
- * object without the two contradicting each other.
- */
 export function resolveFormat(props: FormatProps): NumericTextFormat {
   const {
     format,
@@ -80,60 +63,138 @@ export function resolveFormat(props: FormatProps): NumericTextFormat {
 }
 
 /**
- * Whether [format] asks for money.
+ * Canonicalizes the public format before any formatter sees it.
  *
- * `style: 'currency'` without a code is not money, it is a mistake. `Intl` throws on it; the
- * renderers cannot, so both they and this treat it as a plain number.
+ * Native prop setters cannot throw the way `Intl.NumberFormat` can. Letting each platform decide
+ * what to do with an invalid digit bound therefore creates a much worse failure mode than a bad
+ * string: JS can measure a short fallback while native draws tens or hundreds of digits. We keep
+ * this component non-throwing, but clamp the numeric options to ECMA-402's supported ranges and
+ * hand the exact same values to JS, Android and iOS.
+ *
+ * `currencyDisplay: 'name'` is intentionally not part of this first contract. Localized names can
+ * change spelling with the value (`dollar`/`dollars`) and the current transition engine treats an
+ * affix as stable text. Until mutable affixes have their own transition semantics, a runtime
+ * `name` value degrades to `symbol` rather than exposing a platform-dependent animation.
  */
+export function normalizeFormat(format: NumericTextFormat): NumericTextFormat {
+  const currency = normalizeCurrency(format.currency);
+  const style =
+    format.style === 'currency' && currency
+      ? 'currency'
+      : format.style === 'percent'
+        ? 'percent'
+        : 'decimal';
+
+  const currencyDisplay = format.currencyDisplay === 'code' ? 'code' : 'symbol';
+  const currencySign =
+    currencyDisplay === 'symbol' && format.currencySign === 'accounting'
+      ? 'accounting'
+      : 'standard';
+
+  const [minimumFractionDigits, maximumFractionDigits] = normalizeBounds(
+    format.minimumFractionDigits,
+    format.maximumFractionDigits,
+    MIN_FRACTION_DIGITS,
+    MAX_FRACTION_DIGITS
+  );
+  const [minimumSignificantDigits, maximumSignificantDigits] = normalizeBounds(
+    format.minimumSignificantDigits,
+    format.maximumSignificantDigits,
+    MIN_SIGNIFICANT_DIGITS,
+    MAX_SIGNIFICANT_DIGITS
+  );
+
+  return {
+    style,
+    ...(style === 'currency' ? { currency } : {}),
+    ...(style === 'currency' ? { currencyDisplay, currencySign } : {}),
+    useGrouping: format.useGrouping ?? true,
+    ...defined(
+      'minimumIntegerDigits',
+      normalizeDigitBound(
+        format.minimumIntegerDigits,
+        MIN_INTEGER_DIGITS,
+        MAX_INTEGER_DIGITS
+      )
+    ),
+    ...defined('minimumFractionDigits', minimumFractionDigits),
+    ...defined('maximumFractionDigits', maximumFractionDigits),
+    ...defined('minimumSignificantDigits', minimumSignificantDigits),
+    ...defined('maximumSignificantDigits', maximumSignificantDigits),
+  };
+}
+
+function normalizeCurrency(value: string | undefined): string | undefined {
+  if (!value || !/^[A-Za-z]{3}$/.test(value)) return undefined;
+  return value.toUpperCase();
+}
+
+function normalizeBounds(
+  minValue: number | undefined,
+  maxValue: number | undefined,
+  lower: number,
+  upper: number
+): [number | undefined, number | undefined] {
+  const min = normalizeDigitBound(minValue, lower, upper);
+  let max = normalizeDigitBound(maxValue, lower, upper);
+  if (min !== undefined && max !== undefined && max < min) max = min;
+  return [min, max];
+}
+
+function normalizeDigitBound(
+  value: number | undefined,
+  lower: number,
+  upper: number
+): number | undefined {
+  if (value === undefined || !Number.isFinite(value)) return undefined;
+  return Math.min(upper, Math.max(lower, Math.floor(value)));
+}
+
+function defined<K extends keyof NumericTextFormat>(
+  key: K,
+  value: NumericTextFormat[K] | undefined
+): Pick<NumericTextFormat, K> | Record<never, never> {
+  return value === undefined ? {} : ({ [key]: value } as Pick<NumericTextFormat, K>);
+}
+
 function isCurrency(format: NumericTextFormat): boolean {
   return format.style === 'currency' && !!format.currency;
 }
 
-/**
- * [format] as `Intl.NumberFormat` options.
- *
- * A digit bound is passed through rather than defaulted, so `Intl` applies its own rule: 0..3
- * digits for a plain number, 0 for a percentage, and the currency's own count for money. Both
- * native renderers implement that same rule, which is what keeps a JS-measured box the size of a
- * natively drawn number.
- *
- * The one thing not passed through is a maximum below its minimum. `Intl` throws on that pair;
- * the native formatters silently clamp, and a formatter that throws inside a render is worse than
- * a number carrying one more decimal than was asked for.
- */
 export function intlOptions(
   format: NumericTextFormat
 ): Intl.NumberFormatOptions {
+  const normalized = normalizeFormat(format);
   const options: Intl.NumberFormatOptions = {
-    useGrouping: format.useGrouping ?? true,
+    useGrouping: normalized.useGrouping,
   };
 
-  if (isCurrency(format)) {
+  if (isCurrency(normalized)) {
     options.style = 'currency';
-    options.currency = format.currency;
-    options.currencyDisplay = format.currencyDisplay ?? 'symbol';
-    options.currencySign = format.currencySign ?? 'standard';
-  } else if (format.style === 'percent') {
+    options.currency = normalized.currency;
+    options.currencyDisplay = normalized.currencyDisplay;
+    options.currencySign = normalized.currencySign;
+  } else if (normalized.style === 'percent') {
     options.style = 'percent';
   }
 
-  if (format.minimumIntegerDigits !== undefined) {
-    options.minimumIntegerDigits = format.minimumIntegerDigits;
+  if (normalized.minimumIntegerDigits !== undefined) {
+    options.minimumIntegerDigits = normalized.minimumIntegerDigits;
   }
 
   assignBounds(
     options,
     'minimumSignificantDigits',
     'maximumSignificantDigits',
-    format.minimumSignificantDigits,
-    format.maximumSignificantDigits
+    normalized.minimumSignificantDigits,
+    normalized.maximumSignificantDigits
   );
   assignBounds(
     options,
     'minimumFractionDigits',
     'maximumFractionDigits',
-    format.minimumFractionDigits,
-    format.maximumFractionDigits
+    normalized.minimumFractionDigits,
+    normalized.maximumFractionDigits
   );
 
   return options;
@@ -147,70 +208,56 @@ function assignBounds(
   max: number | undefined
 ): void {
   if (min !== undefined) options[minKey] = min;
-  if (max !== undefined) {
-    options[maxKey] = min === undefined ? max : Math.max(min, max);
-  }
+  if (max !== undefined) options[maxKey] = max;
 }
 
-/**
- * [format] as the flat props the native renderers read. Absent bounds become [DIGITS_UNSET] so
- * each platform can apply the same default rule rather than being handed a guess made in JS.
- */
 export function nativeFormatProps(
   format: NumericTextFormat
 ): NativeFormatProps {
-  const currency = isCurrency(format);
+  const normalized = normalizeFormat(format);
+  const currency = isCurrency(normalized);
   return {
     numberStyle: currency
       ? 'currency'
-      : format.style === 'percent'
+      : normalized.style === 'percent'
         ? 'percent'
         : 'decimal',
-    currency: currency ? format.currency! : '',
-    currencyDisplay: format.currencyDisplay ?? 'symbol',
-    currencySign: format.currencySign ?? 'standard',
-    useGrouping: format.useGrouping ?? true,
-    minimumIntegerDigits: format.minimumIntegerDigits ?? DIGITS_UNSET,
-    minimumFractionDigits: format.minimumFractionDigits ?? DIGITS_UNSET,
-    maximumFractionDigits: format.maximumFractionDigits ?? DIGITS_UNSET,
-    minimumSignificantDigits: format.minimumSignificantDigits ?? DIGITS_UNSET,
-    maximumSignificantDigits: format.maximumSignificantDigits ?? DIGITS_UNSET,
+    currency: currency ? normalized.currency! : '',
+    currencyDisplay: normalized.currencyDisplay ?? 'symbol',
+    currencySign: normalized.currencySign ?? 'standard',
+    useGrouping: normalized.useGrouping ?? true,
+    minimumIntegerDigits: normalized.minimumIntegerDigits ?? DIGITS_UNSET,
+    minimumFractionDigits: normalized.minimumFractionDigits ?? DIGITS_UNSET,
+    maximumFractionDigits: normalized.maximumFractionDigits ?? DIGITS_UNSET,
+    minimumSignificantDigits:
+      normalized.minimumSignificantDigits ?? DIGITS_UNSET,
+    maximumSignificantDigits:
+      normalized.maximumSignificantDigits ?? DIGITS_UNSET,
   };
 }
 
-/**
- * [value] as the number the renderer will draw.
- *
- * Falls back to plain formatting when the options are rejected, which happens for an unknown
- * currency code and on a JS engine built without the full `Intl` data. Neither is worth throwing
- * out of a render: the native side formats the number that is actually shown, and this string
- * only has to be close enough to size the box.
- */
 export function formatNumber(
   value: number,
   locale: string,
   format: NumericTextFormat,
   trailingDecimalSeparator = false
 ): string {
+  const normalized = normalizeFormat(format);
   let text: string;
   try {
-    text = value.toLocaleString(locale, intlOptions(format));
+    text = value.toLocaleString(locale, intlOptions(normalized));
   } catch {
-    text = value.toLocaleString(locale);
+    try {
+      text = value.toLocaleString(locale);
+    } catch {
+      text = value.toLocaleString(DEFAULT_LOCALE);
+    }
   }
   return trailingDecimalSeparator
-    ? withTrailingSeparator(text, decimalSeparatorFor(locale, format))
+    ? withTrailingSeparator(text, decimalSeparatorFor(locale, normalized))
     : text;
 }
 
-/**
- * The decimal mark this locale and format would use.
- *
- * Read from the formatter rather than from a table, because a currency format may use a different
- * mark from a plain number in the same locale. A probe value with one forced fraction digit is the
- * only way to make `formatToParts` emit the mark when the format itself asks for none, which is
- * exactly the case this is needed for.
- */
 function decimalSeparatorFor(
   locale: string,
   format: NumericTextFormat
@@ -229,13 +276,6 @@ function decimalSeparatorFor(
   }
 }
 
-/**
- * [text] with [mark] after its last digit, unless it already carries one.
- *
- * After the last *digit*, not at the end of the string: `de-DE` writes `1.234 €`, and a mark
- * appended blindly would land beyond the currency symbol. `\p{Nd}` rather than `0-9` because a
- * locale may format in Arabic-Indic or Devanagari digits.
- */
 function withTrailingSeparator(text: string, mark: string): string {
   if (text.includes(mark)) return text;
 
