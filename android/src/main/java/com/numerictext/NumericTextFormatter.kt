@@ -5,17 +5,12 @@ import android.icu.text.DecimalFormat
 import android.icu.text.DecimalFormatSymbols
 import android.icu.text.NumberFormat
 import android.icu.util.Currency
+import java.text.AttributedCharacterIterator
 import java.util.Locale
 
 /** A digit bound the caller left out, so the format applies its own default. */
 const val DIGITS_UNSET = -1
 
-/**
- * The formatting props, exactly as `src/numberFormat.ts` resolved them.
- *
- * They arrive one at a time from the view manager, so the spec is a value the view can copy with
- * one field changed and hand back to [NumericTextFormatter.of].
- */
 internal data class NumericFormatSpec(
   val locale: String = "en-US",
   val numberStyle: String = "decimal",
@@ -31,18 +26,31 @@ internal data class NumericFormatSpec(
   val trailingDecimalSeparator: Boolean = false,
 )
 
+/** Semantic roles supplied by ICU rather than inferred from the rendered character. */
+internal enum class NumericFieldKind {
+  INTEGER,
+  FRACTION,
+  GROUP_SEPARATOR,
+  DECIMAL_SEPARATOR,
+  SIGN,
+}
+
+/** UTF-16 range carrying one numeric role. Everything not covered by one is an affix/literal. */
+internal data class NumericSemanticSpan(
+  val start: Int,
+  val end: Int,
+  val kind: NumericFieldKind,
+)
+
 /**
- * Formats the number, and reports the marks the transition has to key on.
+ * Formats the number and preserves ICU's semantic fields for the transition tokenizer.
  *
- * `android.icu` rather than `java.text` throughout. The ISO-code, currency-name and accounting
- * forms are ICU styles with no `java.text` equivalent at this library's minimum SDK, and mixing
- * the two packages would leave the separators read from one formatter and the string produced by
- * another. Android's `java.text` delegates here anyway, so the plain decimal case is unchanged.
- *
- * The separators matter as much as the string. `TransitionLogic` splits the formatted line on
- * them, and a currency format may use the locale's *monetary* decimal mark rather than its
- * ordinary one; keying on the wrong character turns the fraction digits into unkeyed punctuation
- * and the decimal boundary stops holding still under a roll.
+ * A localized currency affix is arbitrary text. It may itself contain '.', ',' or '-' (`B/.`,
+ * `د.إ.`, `US-Dollar`), so comparing characters to DecimalFormatSymbols cannot tell whether a
+ * punctuation mark belongs to the number or to its affix. `formatToCharacterIterator` can: ICU
+ * labels the actual integer/fraction/group/decimal/sign ranges and leaves currency prose outside
+ * those roles. The formatted string is cached together with those ranges and consumed by
+ * TransitionLogic when that exact line is rasterized.
  */
 internal class NumericTextFormatter private constructor(
   private val format: NumberFormat,
@@ -50,35 +58,89 @@ internal class NumericTextFormatter private constructor(
   val groupingSeparator: Char,
   val decimalSeparator: Char,
   val minusSign: Char,
-  /**
-   * Every character this formatter can put on screen, for the bundled font's coverage check. It
-   * is produced by formatting rather than by listing, so a currency symbol, an ISO code's letters
-   * and an accounting form's parentheses are all included without enumerating them.
-   */
   val glyphProbe: String,
 ) {
+  private val semanticsByText = LinkedHashMap<String, List<NumericSemanticSpan>>(16, 0.75f, true)
 
-  /**
-   * The formatted number, with the decimal mark held after the last digit when the caller asked
-   * for it and the format produced none.
-   *
-   * After the last *digit*, not at the end of the string: `de-DE` writes `1.234 €`, and a mark
-   * appended blindly would land beyond the currency symbol.
-   */
   fun format(value: Double): String {
-    val text = format.format(value)
-    if (!trailing || text.indexOf(decimalSeparator) >= 0) return text
+    val raw = format.format(value)
+    val spans = semanticSpansFor(value)
+
+    if (!trailing || spans.any { it.kind == NumericFieldKind.DECIMAL_SEPARATOR }) {
+      remember(raw, spans)
+      return raw
+    }
 
     var end = -1
     var i = 0
-    while (i < text.length) {
-      val cp = text.codePointAt(i)
+    while (i < raw.length) {
+      val cp = raw.codePointAt(i)
       val width = Character.charCount(cp)
       if (Character.isDigit(cp)) end = i + width
       i += width
     }
-    return if (end < 0) text + decimalSeparator
-    else text.substring(0, end) + decimalSeparator + text.substring(end)
+
+    val insertion = if (end < 0) raw.length else end
+    val text = raw.substring(0, insertion) + decimalSeparator + raw.substring(insertion)
+    val shifted = ArrayList<NumericSemanticSpan>(spans.size + 1)
+    for (span in spans) {
+      shifted.add(
+        when {
+          span.end <= insertion -> span
+          span.start >= insertion -> span.copy(start = span.start + 1, end = span.end + 1)
+          else -> span.copy(end = span.end + 1)
+        }
+      )
+    }
+    shifted.add(
+      NumericSemanticSpan(
+        start = insertion,
+        end = insertion + 1,
+        kind = NumericFieldKind.DECIMAL_SEPARATOR,
+      )
+    )
+    remember(text, shifted.sortedBy { it.start })
+    return text
+  }
+
+  fun semanticSpans(text: String): List<NumericSemanticSpan>? = semanticsByText[text]
+
+  private fun semanticSpansFor(value: Double): List<NumericSemanticSpan> = try {
+    val iterator = format.formatToCharacterIterator(value)
+    val spans = ArrayList<NumericSemanticSpan>()
+    var index = iterator.beginIndex
+    while (index < iterator.endIndex) {
+      iterator.setIndex(index)
+      val end = iterator.runLimit
+      fieldKind(iterator.attributes)?.let { spans.add(NumericSemanticSpan(index, end, it)) }
+      index = end
+    }
+    spans
+  } catch (_: RuntimeException) {
+    emptyList()
+  }
+
+  private fun fieldKind(
+    attributes: Map<AttributedCharacterIterator.Attribute, Any>,
+  ): NumericFieldKind? = when {
+    attributes.containsKey(NumberFormat.Field.SIGN) -> NumericFieldKind.SIGN
+    attributes.containsKey(NumberFormat.Field.DECIMAL_SEPARATOR) ->
+      NumericFieldKind.DECIMAL_SEPARATOR
+    attributes.containsKey(NumberFormat.Field.GROUPING_SEPARATOR) ->
+      NumericFieldKind.GROUP_SEPARATOR
+    attributes.containsKey(NumberFormat.Field.FRACTION) -> NumericFieldKind.FRACTION
+    attributes.containsKey(NumberFormat.Field.INTEGER) -> NumericFieldKind.INTEGER
+    else -> null
+  }
+
+  private fun remember(text: String, spans: List<NumericSemanticSpan>) {
+    semanticsByText[text] = spans
+    while (semanticsByText.size > 32) {
+      val iterator = semanticsByText.entries.iterator()
+      if (!iterator.hasNext()) break
+      iterator.next()
+      iterator.remove()
+    }
   }
 
   companion object {
@@ -90,10 +152,6 @@ internal class NumericTextFormatter private constructor(
       val format = NumberFormat.getInstance(locale, styleOf(spec, money))
       if (money) format.currency = currency
       format.isGroupingUsed = spec.useGrouping
-
-      // Intl rounds halves away from zero; ICU and Foundation both default to half-even. Follow
-      // Intl, so `2.5` at zero decimals reads as `3` on Android, on iOS, and on the web fallback
-      // rather than as `3`, `2`, `2`.
       format.roundingMode = BigDecimal.ROUND_HALF_UP
 
       if (spec.minimumIntegerDigits >= 0) {
@@ -120,21 +178,10 @@ internal class NumericTextFormatter private constructor(
         else NumberFormat.NUMBERSTYLE
       spec.currencyDisplay == "code" -> NumberFormat.ISOCURRENCYSTYLE
       spec.currencyDisplay == "name" -> NumberFormat.PLURALCURRENCYSTYLE
-      // Accounting is a distinct CLDR pattern, so it is a style rather than a modifier, and it
-      // only exists alongside the symbol. `code` and `name` above therefore win over it.
       spec.currencySign == "accounting" -> NumberFormat.ACCOUNTINGCURRENCYSTYLE
       else -> NumberFormat.CURRENCYSTYLE
     }
 
-    /**
-     * ECMA-402's rule for resolving digit bounds, so the three implementations of this component
-     * round the same number to the same string.
-     *
-     * Significant digits win over fraction digits when either bound is given. Otherwise a bound
-     * that was left out is filled from the style: 0 and 3 for a plain number, 0 and 0 for a
-     * percentage, and the currency's own count twice over for money, which is what makes `USD`
-     * show `1.50` and `JPY` show `150` without either being asked for.
-     */
     private fun applyDigitBounds(
       format: NumberFormat,
       spec: NumericFormatSpec,
@@ -159,8 +206,6 @@ internal class NumericTextFormatter private constructor(
         spec.numberStyle == "percent" -> 0
         else -> 3
       }
-      // A plain number is the only style that may drop a trailing zero, so it is the only one
-      // whose minimum differs from its maximum.
       val defaultMin = if (money || spec.numberStyle == "percent") defaultMax else 0
 
       val (min, max) =
@@ -170,19 +215,10 @@ internal class NumericTextFormatter private constructor(
           defaultMin,
           defaultMax,
         )
-
-      // Maximum first: ICU pulls the minimum down to meet a lower maximum, and the pair here is
-      // already ordered, so setting it this way round never disturbs the other bound.
       format.maximumFractionDigits = max
       format.minimumFractionDigits = min
     }
 
-    /**
-     * A given bound with the other one filled in, never crossed.
-     *
-     * `Intl` throws when a caller gives a maximum below a minimum. This clamps instead: a number
-     * with one decimal more than was asked for beats a formatter that refuses to draw.
-     */
     private fun boundsOf(
       min: Int,
       max: Int,
@@ -195,7 +231,6 @@ internal class NumericTextFormatter private constructor(
       else -> defaultMin to defaultMax
     }
 
-    /** The formatter's own symbols where it has them, so the marks belong to the string drawn. */
     private fun symbolsOf(format: NumberFormat, locale: Locale): DecimalFormatSymbols =
       (format as? DecimalFormat)?.decimalFormatSymbols
         ?: DecimalFormatSymbols.getInstance(locale)
@@ -211,7 +246,6 @@ internal class NumericTextFormatter private constructor(
       append(symbols.monetaryGroupingSeparator)
       append(symbols.monetaryDecimalSeparator)
       append(symbols.minusSign)
-      // A negative and a zero between them carry the sign, the affix and any accounting bracket.
       append(runCatching { format.format(-1234.5) }.getOrDefault(""))
       append(runCatching { format.format(0.0) }.getOrDefault(""))
     }
