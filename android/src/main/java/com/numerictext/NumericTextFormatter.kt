@@ -65,8 +65,8 @@ internal class NumericTextFormatter private constructor(
     val raw = format.format(value)
     val spans = semanticSpansFor(value)
 
-    if (!trailing || spans.any { it.kind == NumericFieldKind.DECIMAL_SEPARATOR }) {
-      remember(raw, spans)
+    if (!trailing || spans?.any { it.kind == NumericFieldKind.DECIMAL_SEPARATOR } == true) {
+      if (spans != null) remember(raw, spans)
       return raw
     }
 
@@ -81,28 +81,30 @@ internal class NumericTextFormatter private constructor(
 
     val insertion = if (end < 0) raw.length else end
     val text = raw.substring(0, insertion) + decimalSeparator + raw.substring(insertion)
-    val shifted = ArrayList<NumericSemanticSpan>(spans.size + 1)
-    for (span in spans) {
+    if (spans != null) {
+      val shifted = ArrayList<NumericSemanticSpan>(spans.size + 1)
+      for (span in spans) {
+        shifted.add(
+          when {
+            span.end <= insertion -> span
+            span.start >= insertion -> span.copy(start = span.start + 1, end = span.end + 1)
+            else -> span.copy(end = span.end + 1)
+          }
+        )
+      }
       shifted.add(
-        when {
-          span.end <= insertion -> span
-          span.start >= insertion -> span.copy(start = span.start + 1, end = span.end + 1)
-          else -> span.copy(end = span.end + 1)
-        }
+        NumericSemanticSpan(
+          start = insertion,
+          end = insertion + 1,
+          kind = NumericFieldKind.DECIMAL_SEPARATOR,
+        )
       )
+      remember(text, shifted.sortedBy { it.start })
     }
-    shifted.add(
-      NumericSemanticSpan(
-        start = insertion,
-        end = insertion + 1,
-        kind = NumericFieldKind.DECIMAL_SEPARATOR,
-      )
-    )
-    remember(text, shifted.sortedBy { it.start })
     return text
   }
 
-  private fun semanticSpansFor(value: Double): List<NumericSemanticSpan> = try {
+  private fun semanticSpansFor(value: Double): List<NumericSemanticSpan>? = try {
     val iterator = format.formatToCharacterIterator(value)
     val spans = ArrayList<NumericSemanticSpan>()
     var index = iterator.beginIndex
@@ -112,9 +114,9 @@ internal class NumericTextFormatter private constructor(
       fieldKind(iterator.attributes)?.let { spans.add(NumericSemanticSpan(index, end, it)) }
       index = end
     }
-    spans
+    spans.takeIf { it.any { span -> span.kind == NumericFieldKind.INTEGER || span.kind == NumericFieldKind.FRACTION } }
   } catch (_: RuntimeException) {
-    emptyList()
+    null
   }
 
   private fun fieldKind(
@@ -140,10 +142,6 @@ internal class NumericTextFormatter private constructor(
   companion object {
     private val semantics = LinkedHashMap<NumericSemanticKey, List<NumericSemanticSpan>>(64, 0.75f, true)
 
-    /**
-     * TransitionLogic already receives the formatter's three structural marks, so this key keeps
-     * semantic caches from crossing locale/format contexts while avoiding another view-level prop.
-     */
     fun semanticSpans(
       text: String,
       groupingSeparator: Char,
