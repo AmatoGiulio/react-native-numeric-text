@@ -154,7 +154,9 @@ function defined<K extends keyof NumericTextFormat>(
   key: K,
   value: NumericTextFormat[K] | undefined
 ): Pick<NumericTextFormat, K> | Record<never, never> {
-  return value === undefined ? {} : ({ [key]: value } as Pick<NumericTextFormat, K>);
+  return value === undefined
+    ? {}
+    : ({ [key]: value } as Pick<NumericTextFormat, K>);
 }
 
 function isCurrency(format: NumericTextFormat): boolean {
