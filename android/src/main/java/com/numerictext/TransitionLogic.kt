@@ -40,9 +40,9 @@ object TransitionLogic {
    * Integer digits keep visual identity from the left; fractions from the decimal point; anything
    * outside the number keeps it from whichever end of the number it sits against.
    *
-   * When [semanticSpans] is present it is the source of truth. A currency affix is arbitrary text
-   * and may itself contain '.', ',' or '-'; ICU knows whether those characters are a real numeric
-   * separator/sign or just currency prose, whereas character equality cannot know that.
+   * ICU semantic fields are the source of truth when available. A currency affix is arbitrary text
+   * and may itself contain '.', ',' or '-'; character equality cannot tell whether those marks are
+   * numeric structure or currency prose.
    */
   fun layoutKeyedSlots(
     formatted: String,
@@ -54,8 +54,14 @@ object TransitionLogic {
   ): List<KeyedSlot> {
     require(line.text == formatted) { "TextLineGeometry must belong to the formatted string" }
 
+    val semantics = semanticSpans ?: NumericTextFormatter.semanticSpans(
+      formatted,
+      groupSep,
+      decimalSep,
+      minusSign,
+    )
     val tokens =
-      if (semanticSpans != null) tokenizeSemantically(formatted, semanticSpans)
+      if (semantics != null) tokenizeSemantically(formatted, semantics)
       else tokenizeFallback(formatted, groupSep, decimalSep, minusSign)
     val firstDigit = tokens.indexOfFirst { it.kind == TokenKind.DIGIT }
     val lastDigit = tokens.indexOfLast { it.kind == TokenKind.DIGIT }
@@ -134,11 +140,7 @@ object TransitionLogic {
     )
   }
 
-  /**
-   * Defensive path for tests or a formatter that failed to supply fields. It deliberately limits
-   * structural punctuation to the digit run, so an affix punctuation mark still cannot steal DEC,
-   * GROUP or SIGN. Production currency/percent formatting uses [tokenizeSemantically].
-   */
+  /** Defensive path if ICU failed to provide fields. */
   private fun tokenizeFallback(
     text: String,
     groupSep: Char,
