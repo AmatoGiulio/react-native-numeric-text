@@ -68,15 +68,15 @@ const PRESETS: readonly Preset[] = [
       currency: 'USD',
       currencyDisplay: 'code',
     },
-    values: [-1234.5, 1234.5],
+    values: [-999.99, 1000],
     note: 'stable ISO-code affix + sign change',
   },
   {
     label: 'Percent',
     locale: 'en-US',
     format: { style: 'percent' },
-    values: [0.099, 0.1],
-    note: 'value is multiplied by 100 before display',
+    values: [9.99, 10],
+    note: 'x100 display + grouping carry around 1,000%',
   },
   {
     label: 'JPY zero digits',
@@ -89,8 +89,8 @@ const PRESETS: readonly Preset[] = [
     label: 'BHD three digits',
     locale: 'en-US',
     format: { style: 'currency', currency: 'BHD' },
-    values: [9.999, 10],
-    note: 'currency default keeps three fraction digits',
+    values: [999.99, 1000],
+    note: 'three default fraction digits + grouping carry',
   },
 ];
 
@@ -112,8 +112,7 @@ export function FormatLab() {
   const selectPreset = useCallback(
     (presetIndex: number) => {
       clearBurst();
-      // Change format and value in one React update. Structural format changes should commit as one
-      // atomic snap; subsequent A/B and burst changes exercise the numeric transition itself.
+      // Change format and value in one React update so Android receives one logical transaction.
       setState({ presetIndex, side: 1 });
     },
     [clearBurst]
