@@ -1,6 +1,7 @@
 import { StatusBar } from 'expo-status-bar';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
+  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -18,6 +19,13 @@ type Preset = {
   format: NumericTextFormat;
   values: readonly [number, number];
   note: string;
+};
+
+type GtStep = {
+  presetIndex: number;
+  side: 0 | 1;
+  hold: number;
+  label: string;
 };
 
 const PRESETS: readonly Preset[] = [
@@ -96,38 +104,83 @@ const PRESETS: readonly Preset[] = [
 
 const BURST_INTERVAL_MS = 85;
 
+// One tap produces the same event stream on iOS and Android. Long holds expose settled states;
+// 85 ms runs exercise retriggering while the previous numeric transition is still in flight.
+const GT_SEQUENCE: readonly GtStep[] = [
+  { presetIndex: 1, side: 0, hold: 650, label: 'EUR A' },
+  { presetIndex: 1, side: 1, hold: 850, label: 'EUR B' },
+  { presetIndex: 1, side: 0, hold: 850, label: 'EUR A return' },
+
+  { presetIndex: 2, side: 0, hold: 650, label: 'PAB A' },
+  { presetIndex: 2, side: 1, hold: 850, label: 'PAB B' },
+  { presetIndex: 2, side: 0, hold: BURST_INTERVAL_MS, label: 'PAB burst 1' },
+  { presetIndex: 2, side: 1, hold: BURST_INTERVAL_MS, label: 'PAB burst 2' },
+  { presetIndex: 2, side: 0, hold: BURST_INTERVAL_MS, label: 'PAB burst 3' },
+  { presetIndex: 2, side: 1, hold: 950, label: 'PAB burst settle' },
+
+  { presetIndex: 3, side: 0, hold: 650, label: 'AED A' },
+  { presetIndex: 3, side: 1, hold: 850, label: 'AED B' },
+  { presetIndex: 3, side: 0, hold: BURST_INTERVAL_MS, label: 'AED burst 1' },
+  { presetIndex: 3, side: 1, hold: BURST_INTERVAL_MS, label: 'AED burst 2' },
+  { presetIndex: 3, side: 0, hold: BURST_INTERVAL_MS, label: 'AED burst 3' },
+  { presetIndex: 3, side: 1, hold: 950, label: 'AED burst settle' },
+
+  { presetIndex: 4, side: 0, hold: 650, label: 'Accounting negative' },
+  { presetIndex: 4, side: 1, hold: 950, label: 'Accounting positive' },
+  { presetIndex: 5, side: 0, hold: 650, label: 'USD code negative' },
+  { presetIndex: 5, side: 1, hold: 950, label: 'USD code positive' },
+  { presetIndex: 6, side: 0, hold: 650, label: 'Percent A' },
+  { presetIndex: 6, side: 1, hold: 950, label: 'Percent B' },
+  { presetIndex: 7, side: 0, hold: 650, label: 'JPY A' },
+  { presetIndex: 7, side: 1, hold: 950, label: 'JPY B' },
+  { presetIndex: 8, side: 0, hold: 650, label: 'BHD A' },
+  { presetIndex: 8, side: 1, hold: 1100, label: 'BHD B' },
+];
+
 export function FormatLab() {
   const [state, setState] = useState(() => ({ presetIndex: 0, side: 0 as 0 | 1 }));
+  const [gtStepIndex, setGtStepIndex] = useState<number | null>(null);
   const timers = useRef<ReturnType<typeof setTimeout>[]>([]);
   const preset = PRESETS[state.presetIndex]!;
   const value = preset.values[state.side];
+  const gtStep = gtStepIndex == null ? null : GT_SEQUENCE[gtStepIndex];
 
-  const clearBurst = useCallback(() => {
+  const clearTimers = useCallback(() => {
     for (const timer of timers.current) clearTimeout(timer);
     timers.current = [];
   }, []);
 
-  useEffect(() => clearBurst, [clearBurst]);
+  const cancelGtRun = useCallback(() => {
+    clearTimers();
+    setGtStepIndex(null);
+  }, [clearTimers]);
+
+  useEffect(
+    () => () => {
+      for (const timer of timers.current) clearTimeout(timer);
+    },
+    []
+  );
 
   const selectPreset = useCallback(
     (presetIndex: number) => {
-      clearBurst();
+      cancelGtRun();
       // Change format and value in one React update so Android receives one logical transaction.
       setState({ presetIndex, side: 1 });
     },
-    [clearBurst]
+    [cancelGtRun]
   );
 
   const setSide = useCallback(
     (side: 0 | 1) => {
-      clearBurst();
+      cancelGtRun();
       setState((current) => ({ ...current, side }));
     },
-    [clearBurst]
+    [cancelGtRun]
   );
 
   const burst = useCallback(() => {
-    clearBurst();
+    cancelGtRun();
     const sequence: readonly (0 | 1)[] = [1, 0, 1, 0, 1];
     sequence.forEach((side, index) => {
       timers.current.push(
@@ -136,15 +189,38 @@ export function FormatLab() {
         }, index * BURST_INTERVAL_MS)
       );
     });
-  }, [clearBurst]);
+  }, [cancelGtRun]);
 
   const nextPresetAndValue = useCallback(() => {
-    clearBurst();
+    cancelGtRun();
     setState((current) => ({
       presetIndex: (current.presetIndex + 1) % PRESETS.length,
       side: current.side === 0 ? 1 : 0,
     }));
-  }, [clearBurst]);
+  }, [cancelGtRun]);
+
+  const runGtSequence = useCallback(() => {
+    clearTimers();
+
+    const first = GT_SEQUENCE[0]!;
+    setGtStepIndex(0);
+    setState({ presetIndex: first.presetIndex, side: first.side });
+
+    let elapsed = 0;
+    for (let index = 1; index < GT_SEQUENCE.length; index += 1) {
+      elapsed += GT_SEQUENCE[index - 1]!.hold;
+      const step = GT_SEQUENCE[index]!;
+      timers.current.push(
+        setTimeout(() => {
+          setGtStepIndex(index);
+          setState({ presetIndex: step.presetIndex, side: step.side });
+        }, elapsed)
+      );
+    }
+
+    elapsed += GT_SEQUENCE[GT_SEQUENCE.length - 1]!.hold;
+    timers.current.push(setTimeout(() => setGtStepIndex(null), elapsed));
+  }, [clearTimers]);
 
   return (
     <View style={styles.screen}>
@@ -155,6 +231,14 @@ export function FormatLab() {
         <Text style={styles.meta}>
           {preset.locale} · {preset.note}
         </Text>
+        {gtStep ? (
+          <Text style={styles.gtMarker}>
+            GT {String(gtStepIndex! + 1).padStart(2, '0')}/{GT_SEQUENCE.length} ·{' '}
+            {Platform.OS} · {gtStep.label}
+          </Text>
+        ) : (
+          <Text style={styles.gtMarker}>manual · {Platform.OS}</Text>
+        )}
         <NumericText
           value={value}
           locale={preset.locale}
@@ -170,6 +254,7 @@ export function FormatLab() {
         <Action label="B" onPress={() => setSide(1)} />
         <Action label="BURST" onPress={burst} />
         <Action label="NEXT + VALUE" onPress={nextPresetAndValue} />
+        <Action label="GT RUN" onPress={runGtSequence} />
       </View>
 
       <ScrollView
@@ -229,10 +314,10 @@ const styles = StyleSheet.create({
     backgroundColor: '#fbfbf9',
   },
   readout: {
-    minHeight: 260,
+    minHeight: 280,
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 10,
+    gap: 9,
   },
   title: {
     color: INK,
@@ -243,6 +328,12 @@ const styles = StyleSheet.create({
     maxWidth: 420,
     color: '#6c6c72',
     fontSize: 13,
+    textAlign: 'center',
+  },
+  gtMarker: {
+    color: '#8b8b91',
+    fontSize: 11,
+    fontVariant: ['tabular-nums'],
     textAlign: 'center',
   },
   number: {
