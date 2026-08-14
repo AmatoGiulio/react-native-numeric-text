@@ -14,6 +14,7 @@ class NumericTextViewManager : SimpleViewManager<NumericTextView>(),
   NumericTextViewManagerInterface<NumericTextView> {
   private val mDelegate: ViewManagerDelegate<NumericTextView>
   private val pendingByView = WeakHashMap<NumericTextView, PendingProps>()
+  private val committedFormatByView = WeakHashMap<NumericTextView, NumericFormatSpec>()
 
   init {
     mDelegate = NumericTextViewManagerDelegate(this)
@@ -32,10 +33,13 @@ class NumericTextViewManager : SimpleViewManager<NumericTextView>(),
    * value. Applying locale/currency/digit options one-by-one lets intermediate formats retarget the
    * persistent glyph stack, so an affix from the previous format can survive into the next one.
    *
-   * Stage the whole React transaction here and commit it once from onAfterUpdateTransaction. A
-   * format change is structural rather than numeric: the whole transaction is settled with motion
-   * disabled, including a simultaneous value change. Only value-only transactions are allowed to
-   * roll.
+   * Fabric may also invoke formatting setters during a transaction where their effective values did
+   * not change. Therefore "a formatting setter ran" is not enough to classify the transaction as a
+   * structural format change. We stage the props, resolve one final NumericFormatSpec against the
+   * last committed spec, and compare the two complete values.
+   *
+   * Real format changes settle atomically with motion disabled, including a simultaneous value
+   * change. Transactions whose resolved format is unchanged keep normal numeric rolling.
    */
   private fun pending(view: NumericTextView?): PendingProps? {
     if (view == null) return null
@@ -145,7 +149,9 @@ class NumericTextViewManager : SimpleViewManager<NumericTextView>(),
   override fun onAfterUpdateTransaction(view: NumericTextView) {
     super.onAfterUpdateTransaction(view)
     val props = pendingByView.remove(view) ?: return
-    val formatChanged = props.hasFormatProps()
+    val previousFormat = committedFormatByView[view] ?: NumericFormatSpec()
+    val finalFormat = props.resolveFormat(previousFormat)
+    val formatChanged = finalFormat != previousFormat
     val finalReduceMotion = props.reduceMotion ?: view.numericReduceMotion
 
     props.direction?.let(view::setDirection)
@@ -156,34 +162,58 @@ class NumericTextViewManager : SimpleViewManager<NumericTextView>(),
     props.textColor?.let(view::setTextColor)
 
     if (formatChanged) {
-      // A format change changes the identity of the whole rendered string. Keep motion disabled
-      // through the value assignment as well: otherwise the old numeric value is reinterpreted in
-      // the new domain (for example 1234.5 -> 123450%) and then animated to the new value.
+      // A real format change changes the identity of the whole rendered string. Keep motion disabled
+      // through the value assignment as well: otherwise the old numeric value can be reinterpreted
+      // in the new domain (for example 1234.5 -> 123450%) and animated to the new value.
       view.setReduceMotion("always")
-      props.locale?.let(view::setLocale)
-      props.numberStyle?.let(view::setNumberStyle)
-      props.currency?.let(view::setCurrency)
-      props.currencyDisplay?.let(view::setCurrencyDisplay)
-      props.currencySign?.let(view::setCurrencySign)
-      props.useGrouping?.let(view::setUseGrouping)
-      props.trailingDecimalSeparator?.let(view::setTrailingDecimalSeparator)
-      props.minimumIntegerDigits?.let(view::setMinimumIntegerDigits)
-      props.minimumFractionDigits?.let(view::setMinimumFractionDigits)
-      props.maximumFractionDigits?.let(view::setMaximumFractionDigits)
-      props.minimumSignificantDigits?.let(view::setMinimumSignificantDigits)
-      props.maximumSignificantDigits?.let(view::setMaximumSignificantDigits)
+      applyFormatDiff(view, previousFormat, finalFormat)
       props.value?.let(view::setValue)
       view.setReduceMotion(finalReduceMotion)
-      return
+    } else {
+      props.reduceMotion?.let(view::setReduceMotion)
+      // The formatter is unchanged, so a value update is a genuine numeric transition.
+      props.value?.let(view::setValue)
     }
 
-    props.reduceMotion?.let(view::setReduceMotion)
-    // Value-only updates preserve the formatter and are the only transactions that should roll.
-    props.value?.let(view::setValue)
+    committedFormatByView[view] = finalFormat
+  }
+
+  private fun applyFormatDiff(
+    view: NumericTextView,
+    previous: NumericFormatSpec,
+    next: NumericFormatSpec,
+  ) {
+    if (next.locale != previous.locale) view.setLocale(next.locale)
+    if (next.numberStyle != previous.numberStyle) view.setNumberStyle(next.numberStyle)
+    if (next.currency != previous.currency) view.setCurrency(next.currency)
+    if (next.currencyDisplay != previous.currencyDisplay) {
+      view.setCurrencyDisplay(next.currencyDisplay)
+    }
+    if (next.currencySign != previous.currencySign) view.setCurrencySign(next.currencySign)
+    if (next.useGrouping != previous.useGrouping) view.setUseGrouping(next.useGrouping)
+    if (next.trailingDecimalSeparator != previous.trailingDecimalSeparator) {
+      view.setTrailingDecimalSeparator(next.trailingDecimalSeparator)
+    }
+    if (next.minimumIntegerDigits != previous.minimumIntegerDigits) {
+      view.setMinimumIntegerDigits(next.minimumIntegerDigits)
+    }
+    if (next.minimumFractionDigits != previous.minimumFractionDigits) {
+      view.setMinimumFractionDigits(next.minimumFractionDigits)
+    }
+    if (next.maximumFractionDigits != previous.maximumFractionDigits) {
+      view.setMaximumFractionDigits(next.maximumFractionDigits)
+    }
+    if (next.minimumSignificantDigits != previous.minimumSignificantDigits) {
+      view.setMinimumSignificantDigits(next.minimumSignificantDigits)
+    }
+    if (next.maximumSignificantDigits != previous.maximumSignificantDigits) {
+      view.setMaximumSignificantDigits(next.maximumSignificantDigits)
+    }
   }
 
   override fun onDropViewInstance(view: NumericTextView) {
     pendingByView.remove(view)
+    committedFormatByView.remove(view)
     super.onDropViewInstance(view)
   }
 
@@ -209,19 +239,20 @@ class NumericTextViewManager : SimpleViewManager<NumericTextView>(),
     var fontFamily: String? = null,
     var textColor: Int? = null,
   ) {
-    fun hasFormatProps(): Boolean =
-      locale != null ||
-        numberStyle != null ||
-        currency != null ||
-        currencyDisplay != null ||
-        currencySign != null ||
-        useGrouping != null ||
-        trailingDecimalSeparator != null ||
-        minimumIntegerDigits != null ||
-        minimumFractionDigits != null ||
-        maximumFractionDigits != null ||
-        minimumSignificantDigits != null ||
-        maximumSignificantDigits != null
+    fun resolveFormat(base: NumericFormatSpec): NumericFormatSpec = base.copy(
+      locale = locale ?: base.locale,
+      numberStyle = numberStyle ?: base.numberStyle,
+      currency = currency ?: base.currency,
+      currencyDisplay = currencyDisplay ?: base.currencyDisplay,
+      currencySign = currencySign ?: base.currencySign,
+      useGrouping = useGrouping ?: base.useGrouping,
+      minimumIntegerDigits = minimumIntegerDigits ?: base.minimumIntegerDigits,
+      minimumFractionDigits = minimumFractionDigits ?: base.minimumFractionDigits,
+      maximumFractionDigits = maximumFractionDigits ?: base.maximumFractionDigits,
+      minimumSignificantDigits = minimumSignificantDigits ?: base.minimumSignificantDigits,
+      maximumSignificantDigits = maximumSignificantDigits ?: base.maximumSignificantDigits,
+      trailingDecimalSeparator = trailingDecimalSeparator ?: base.trailingDecimalSeparator,
+    )
   }
 
   companion object {
