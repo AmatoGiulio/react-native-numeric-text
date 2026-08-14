@@ -15,6 +15,7 @@ class NumericTextViewManager : SimpleViewManager<NumericTextView>(),
   private val mDelegate: ViewManagerDelegate<NumericTextView>
   private val pendingByView = WeakHashMap<NumericTextView, PendingProps>()
   private val committedFormatByView = WeakHashMap<NumericTextView, NumericFormatSpec>()
+  private val committedValueByView = WeakHashMap<NumericTextView, Double>()
 
   init {
     mDelegate = NumericTextViewManagerDelegate(this)
@@ -38,8 +39,9 @@ class NumericTextViewManager : SimpleViewManager<NumericTextView>(),
    * structural format change. We stage the props, resolve one final NumericFormatSpec against the
    * last committed spec, and compare the two complete values.
    *
-   * Real format changes settle atomically with motion disabled, including a simultaneous value
-   * change. Transactions whose resolved format is unchanged keep normal numeric rolling.
+   * A real format change is applied atomically with motion disabled. If the same React transaction
+   * also changes value, the structural switch is followed by one ordinary numeric roll under the
+   * final formatter. This keeps affixes/locales atomic without turning NEXT + VALUE into a pop.
    */
   private fun pending(view: NumericTextView?): PendingProps? {
     if (view == null) return null
@@ -152,6 +154,8 @@ class NumericTextViewManager : SimpleViewManager<NumericTextView>(),
     val previousFormat = committedFormatByView[view] ?: NumericFormatSpec()
     val finalFormat = props.resolveFormat(previousFormat)
     val formatChanged = finalFormat != previousFormat
+    val previousValue = committedValueByView[view]
+    val finalValue = props.value ?: previousValue
     val finalReduceMotion = props.reduceMotion ?: view.numericReduceMotion
 
     props.direction?.let(view::setDirection)
@@ -162,13 +166,23 @@ class NumericTextViewManager : SimpleViewManager<NumericTextView>(),
     props.textColor?.let(view::setTextColor)
 
     if (formatChanged) {
-      // A real format change changes the identity of the whole rendered string. Keep motion disabled
-      // through the value assignment as well: otherwise the old numeric value can be reinterpreted
-      // in the new domain (for example 1234.5 -> 123450%) and animated to the new value.
+      // First commit only the structural formatter change. Every intermediate setter is forced to
+      // settle, so no half-old currency/locale can leak into the persistent glyph stack.
       view.setReduceMotion("always")
       applyFormatDiff(view, previousFormat, finalFormat)
-      props.value?.let(view::setValue)
-      view.setReduceMotion(finalReduceMotion)
+
+      if (previousValue != null && finalValue != null && finalValue != previousValue) {
+        // Preserve the displayed numeric magnitude when the style changes scale. Percent is the
+        // only public style that rescales its raw value (x100). This avoids rebasing 1234.5 as
+        // 123450% merely because the next preset is percent.
+        val rebasedValue = rebaseValue(previousValue, previousFormat, finalFormat)
+        view.setValue(rebasedValue)
+        view.setReduceMotion(finalReduceMotion)
+        view.setValue(finalValue)
+      } else {
+        props.value?.let(view::setValue)
+        view.setReduceMotion(finalReduceMotion)
+      }
     } else {
       props.reduceMotion?.let(view::setReduceMotion)
       // The formatter is unchanged, so a value update is a genuine numeric transition.
@@ -176,6 +190,17 @@ class NumericTextViewManager : SimpleViewManager<NumericTextView>(),
     }
 
     committedFormatByView[view] = finalFormat
+    finalValue?.let { committedValueByView[view] = it }
+  }
+
+  private fun rebaseValue(
+    value: Double,
+    previous: NumericFormatSpec,
+    next: NumericFormatSpec,
+  ): Double {
+    val previousScale = if (previous.numberStyle == "percent") 100.0 else 1.0
+    val nextScale = if (next.numberStyle == "percent") 100.0 else 1.0
+    return value * previousScale / nextScale
   }
 
   private fun applyFormatDiff(
@@ -214,6 +239,7 @@ class NumericTextViewManager : SimpleViewManager<NumericTextView>(),
   override fun onDropViewInstance(view: NumericTextView) {
     pendingByView.remove(view)
     committedFormatByView.remove(view)
+    committedValueByView.remove(view)
     super.onDropViewInstance(view)
   }
 
