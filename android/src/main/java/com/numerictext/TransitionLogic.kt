@@ -83,10 +83,7 @@ object TransitionLogic {
 
     for (i in tokens.indices) {
       val token = tokens[i]
-      val a = line.horizontalAt(token.utf16Start)
-      val b = line.horizontalAt(token.utf16End)
-      val left = minOf(a, b)
-      val right = maxOf(a, b)
+      val (left, right) = line.visualBounds(token.utf16Start, token.utf16End)
 
       val key = when (token.kind) {
         TokenKind.DIGIT ->
