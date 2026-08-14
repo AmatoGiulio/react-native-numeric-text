@@ -21,6 +21,10 @@ class TransitionLogicTest {
 
   private fun keyMap(text: String): Map<String, String> = keyed(text).associate { it.key to it.char }
 
+  private fun assertUniqueKeys(slots: List<KeyedSlot>) {
+    assertEquals(slots.size, slots.map { it.key }.toSet().size)
+  }
+
   @Test
   fun integerDigits_areAnchoredFromTheLeft() {
     assertEquals(
@@ -71,8 +75,6 @@ class TransitionLogicTest {
 
   @Test
   fun currencySymbol_keepsItsKeyWhenTheNumberGrowsADigit() {
-    // The whole point of keying an affix from the digits rather than from the string: `$` has to
-    // stay one column that slides left, not die at offset 0 and be reborn at offset 0.
     assertEquals("$", keyMap("\$999")["P0"])
     assertEquals("$", keyMap("\$1,000")["P0"])
   }
@@ -94,7 +96,6 @@ class TransitionLogicTest {
 
   @Test
   fun trailingSymbol_isKeyedFromTheEndOfTheNumber() {
-    // de-DE writes the symbol after the number, with a no-break space between.
     val small = TransitionLogic.layoutKeyedSlots("999,00\u00A0€", '.', ',', '-', line("999,00\u00A0€"))
       .associate { it.key to it.char }
     val large =
@@ -119,6 +120,45 @@ class TransitionLogicTest {
     assertEquals(" ", letters["X0"])
     assertEquals("U", letters["X1"])
     assertEquals("s", letters["X10"])
+  }
+
+  @Test
+  fun punctuationInsideCurrencyPrefix_isNotNumericStructure() {
+    val text = "B/. 1,234.50"
+    val slots = keyed(text)
+    val map = slots.associate { it.key to it.char }
+
+    assertUniqueKeys(slots)
+    assertEquals(".", map["P1"])
+    assertEquals("/", map["P2"])
+    assertEquals("B", map["P3"])
+    assertEquals(",", map["G3"])
+    assertEquals(".", map["DEC"])
+    assertEquals("1", map["I0"])
+    assertEquals("5", map["F0"])
+  }
+
+  @Test
+  fun punctuationInsideCurrencySuffix_isNotNumericStructure() {
+    val text = "1,234.50 د.إ."
+    val slots = keyed(text)
+    val map = slots.associate { it.key to it.char }
+
+    assertUniqueKeys(slots)
+    assertEquals(".", map["DEC"])
+    assertEquals(1, slots.count { it.kind == TokenKind.DECIMAL_SEPARATOR })
+    assertEquals(2, slots.count { it.char == "." && it.kind == TokenKind.OTHER })
+  }
+
+  @Test
+  fun hyphenInsideCurrencyName_isNotTheNumericSign() {
+    val text = "-1,00 US-Dollar"
+    val slots = TransitionLogic.layoutKeyedSlots(text, '.', ',', '-', line(text))
+
+    assertUniqueKeys(slots)
+    assertEquals(1, slots.count { it.kind == TokenKind.SIGN })
+    assertEquals("-", slots.single { it.kind == TokenKind.SIGN }.char)
+    assertEquals(1, slots.count { it.char == "-" && it.kind == TokenKind.OTHER })
   }
 
   @Test
