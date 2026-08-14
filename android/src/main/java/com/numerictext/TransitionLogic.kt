@@ -44,7 +44,7 @@ object TransitionLogic {
    * and may itself contain '.', ',' or '-'; character equality cannot tell whether those marks are
    * numeric structure or currency prose.
    */
-  fun layoutKeyedSlots(
+  internal fun layoutKeyedSlots(
     formatted: String,
     groupSep: Char,
     decimalSep: Char,
