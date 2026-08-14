@@ -40,12 +40,9 @@ object TransitionLogic {
    * Integer digits keep visual identity from the left; fractions from the decimal point; anything
    * outside the number keeps it from whichever end of the number it sits against.
    *
-   * Affixes are deliberately excluded from numeric punctuation. A currency symbol or localized
-   * currency name is arbitrary text: `B/. 1,234.50`, `د.إ. ١٬٢٣٤٫٥٠` and `1,00 US-Dollar` all
-   * contain characters that can also be a locale's decimal/group/sign character. Classifying those
-   * by character value alone creates duplicate DEC/S keys and can make the rasterizer overwrite a
-   * real numeric slice. Structural punctuation is therefore recognized only inside the digit run;
-   * a sign must sit outside it and must not be a hyphen joining two letters.
+   * When [semanticSpans] is present it is the source of truth. A currency affix is arbitrary text
+   * and may itself contain '.', ',' or '-'; ICU knows whether those characters are a real numeric
+   * separator/sign or just currency prose, whereas character equality cannot know that.
    */
   fun layoutKeyedSlots(
     formatted: String,
@@ -53,10 +50,13 @@ object TransitionLogic {
     decimalSep: Char,
     minusSign: Char,
     line: TextLineGeometry,
+    semanticSpans: List<NumericSemanticSpan>? = null,
   ): List<KeyedSlot> {
     require(line.text == formatted) { "TextLineGeometry must belong to the formatted string" }
 
-    val tokens = tokenize(formatted, groupSep, decimalSep, minusSign)
+    val tokens =
+      if (semanticSpans != null) tokenizeSemantically(formatted, semanticSpans)
+      else tokenizeFallback(formatted, groupSep, decimalSep, minusSign)
     val firstDigit = tokens.indexOfFirst { it.kind == TokenKind.DIGIT }
     val lastDigit = tokens.indexOfLast { it.kind == TokenKind.DIGIT }
 
@@ -80,11 +80,8 @@ object TransitionLogic {
 
       val key = when (token.kind) {
         TokenKind.DIGIT ->
-          if (token.fractional) {
-            "F${fractionalPosition++}"
-          } else {
-            "I${integerPosition++}"
-          }
+          if (token.fractional) "F${fractionalPosition++}"
+          else "I${integerPosition++}"
         TokenKind.GROUP_SEPARATOR -> "G${integerDigitsToRight[i]}"
         TokenKind.DECIMAL_SEPARATOR -> "DEC"
         TokenKind.SIGN -> "S"
@@ -109,21 +106,40 @@ object TransitionLogic {
     return result
   }
 
-  /**
-   * A key for a token outside the digits, counted outwards from the nearest end of the number.
-   *
-   * `P0` is the character immediately before the first digit and `X0` the one immediately after
-   * the last, so `$1.00` and `($1.00)` agree that `$` is `P0` and disagree only about the bracket
-   * that `($1.00)` also has. A token with no digits to sit against, which a formatter should never
-   * produce, falls back to its position in the string.
-   */
   private fun affixKey(index: Int, firstDigit: Int, lastDigit: Int): String = when {
     firstDigit >= 0 && index < firstDigit -> "P${firstDigit - index - 1}"
     lastDigit >= 0 && index > lastDigit -> "X${index - lastDigit - 1}"
     else -> "O$index"
   }
 
-  private fun tokenize(
+  private fun tokenizeSemantically(
+    text: String,
+    spans: List<NumericSemanticSpan>,
+  ): List<Token> = rawTokens(text).map { raw ->
+    val span = spans.firstOrNull { raw.utf16Start >= it.start && raw.utf16End <= it.end }
+    val kind = when (span?.kind) {
+      NumericFieldKind.INTEGER, NumericFieldKind.FRACTION ->
+        if (Character.isDigit(raw.codePoint)) TokenKind.DIGIT else TokenKind.OTHER
+      NumericFieldKind.GROUP_SEPARATOR -> TokenKind.GROUP_SEPARATOR
+      NumericFieldKind.DECIMAL_SEPARATOR -> TokenKind.DECIMAL_SEPARATOR
+      NumericFieldKind.SIGN -> TokenKind.SIGN
+      null -> TokenKind.OTHER
+    }
+    Token(
+      text = raw.text,
+      kind = kind,
+      fractional = span?.kind == NumericFieldKind.FRACTION,
+      utf16Start = raw.utf16Start,
+      utf16End = raw.utf16End,
+    )
+  }
+
+  /**
+   * Defensive path for tests or a formatter that failed to supply fields. It deliberately limits
+   * structural punctuation to the digit run, so an affix punctuation mark still cannot steal DEC,
+   * GROUP or SIGN. Production currency/percent formatting uses [tokenizeSemantically].
+   */
+  private fun tokenizeFallback(
     text: String,
     groupSep: Char,
     decimalSep: Char,
@@ -134,10 +150,6 @@ object TransitionLogic {
 
     val firstDigit = raw.indexOfFirst { Character.isDigit(it.codePoint) }
     val lastDigit = raw.indexOfLast { Character.isDigit(it.codePoint) }
-
-    // A real decimal separator is either between the first and last digit, or immediately after
-    // the last digit for `trailingDecimalSeparator`. Choosing from the digit run means a dot in a
-    // prefix such as Panama's `B/.` can never become DEC.
     val decimalIndex = when {
       firstDigit < 0 -> -1
       else -> {
@@ -150,7 +162,6 @@ object TransitionLogic {
           ?: -1
       }
     }
-
     val integerEnd = if (decimalIndex >= 0) decimalIndex else lastDigit + 1
 
     return raw.mapIndexed { index, token ->
@@ -165,8 +176,8 @@ object TransitionLogic {
           token.codePoint == groupSep.code &&
           hasDigitBefore(raw, index, firstDigit) &&
           hasDigitAfter(raw, index, integerEnd) -> TokenKind.GROUP_SEPARATOR
-        token.codePoint == minusSign.code &&
-          isSignPosition(raw, index, firstDigit, lastDigit) -> TokenKind.SIGN
+        token.codePoint == minusSign.code && isSignPosition(raw, index, firstDigit, lastDigit) ->
+          TokenKind.SIGN
         else -> TokenKind.OTHER
       }
 
@@ -184,7 +195,6 @@ object TransitionLogic {
     val out = ArrayList<RawToken>()
     var utf16Offset = 0
     val iterator = text.codePoints().iterator()
-
     while (iterator.hasNext()) {
       val cp = iterator.next()
       val char = String(Character.toChars(cp))
@@ -218,10 +228,6 @@ object TransitionLogic {
     lastDigit: Int,
   ): Boolean {
     if (firstDigit < 0 || (index in firstDigit..lastDigit)) return false
-
-    // A localized currency name can contain a hyphen (`US-Dollar`). That is prose, not the
-    // number's sign. A real sign can sit next to a currency symbol or bidi mark, so only reject the
-    // unmistakable letter-hyphen-letter case.
     val before = raw.getOrNull(index - 1)?.codePoint
     val after = raw.getOrNull(index + 1)?.codePoint
     return !(before != null && after != null && Character.isLetter(before) && Character.isLetter(after))
