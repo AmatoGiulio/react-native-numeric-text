@@ -8,7 +8,6 @@ import android.icu.util.Currency
 import java.text.AttributedCharacterIterator
 import java.util.Locale
 
-/** A digit bound the caller left out, so the format applies its own default. */
 const val DIGITS_UNSET = -1
 
 internal data class NumericFormatSpec(
@@ -26,7 +25,6 @@ internal data class NumericFormatSpec(
   val trailingDecimalSeparator: Boolean = false,
 )
 
-/** Semantic roles supplied by ICU rather than inferred from the rendered character. */
 internal enum class NumericFieldKind {
   INTEGER,
   FRACTION,
@@ -35,22 +33,25 @@ internal enum class NumericFieldKind {
   SIGN,
 }
 
-/** UTF-16 range carrying one numeric role. Everything not covered by one is an affix/literal. */
 internal data class NumericSemanticSpan(
   val start: Int,
   val end: Int,
   val kind: NumericFieldKind,
 )
 
+private data class NumericSemanticKey(
+  val text: String,
+  val groupingSeparator: Char,
+  val decimalSeparator: Char,
+  val minusSign: Char,
+)
+
 /**
  * Formats the number and preserves ICU's semantic fields for the transition tokenizer.
  *
- * A localized currency affix is arbitrary text. It may itself contain '.', ',' or '-' (`B/.`,
- * `د.إ.`, `US-Dollar`), so comparing characters to DecimalFormatSymbols cannot tell whether a
- * punctuation mark belongs to the number or to its affix. `formatToCharacterIterator` can: ICU
- * labels the actual integer/fraction/group/decimal/sign ranges and leaves currency prose outside
- * those roles. The formatted string is cached together with those ranges and consumed by
- * TransitionLogic when that exact line is rasterized.
+ * Currency affixes are arbitrary localized text and can themselves contain '.', ',' or '-'. ICU's
+ * `formatToCharacterIterator` labels the actual numeric ranges, so punctuation inside `B/.`,
+ * `د.إ.` or `US-Dollar` stays an affix instead of stealing DEC/GROUP/SIGN keys.
  */
 internal class NumericTextFormatter private constructor(
   private val format: NumberFormat,
@@ -60,8 +61,6 @@ internal class NumericTextFormatter private constructor(
   val minusSign: Char,
   val glyphProbe: String,
 ) {
-  private val semanticsByText = LinkedHashMap<String, List<NumericSemanticSpan>>(16, 0.75f, true)
-
   fun format(value: Double): String {
     val raw = format.format(value)
     val spans = semanticSpansFor(value)
@@ -103,8 +102,6 @@ internal class NumericTextFormatter private constructor(
     return text
   }
 
-  fun semanticSpans(text: String): List<NumericSemanticSpan>? = semanticsByText[text]
-
   private fun semanticSpansFor(value: Double): List<NumericSemanticSpan> = try {
     val iterator = format.formatToCharacterIterator(value)
     val spans = ArrayList<NumericSemanticSpan>()
@@ -134,16 +131,41 @@ internal class NumericTextFormatter private constructor(
   }
 
   private fun remember(text: String, spans: List<NumericSemanticSpan>) {
-    semanticsByText[text] = spans
-    while (semanticsByText.size > 32) {
-      val iterator = semanticsByText.entries.iterator()
-      if (!iterator.hasNext()) break
-      iterator.next()
-      iterator.remove()
-    }
+    rememberSemantics(
+      NumericSemanticKey(text, groupingSeparator, decimalSeparator, minusSign),
+      spans,
+    )
   }
 
   companion object {
+    private val semantics = LinkedHashMap<NumericSemanticKey, List<NumericSemanticSpan>>(64, 0.75f, true)
+
+    /**
+     * TransitionLogic already receives the formatter's three structural marks, so this key keeps
+     * semantic caches from crossing locale/format contexts while avoiding another view-level prop.
+     */
+    fun semanticSpans(
+      text: String,
+      groupingSeparator: Char,
+      decimalSeparator: Char,
+      minusSign: Char,
+    ): List<NumericSemanticSpan>? = synchronized(semantics) {
+      semantics[NumericSemanticKey(text, groupingSeparator, decimalSeparator, minusSign)]
+    }
+
+    private fun rememberSemantics(
+      key: NumericSemanticKey,
+      spans: List<NumericSemanticSpan>,
+    ) = synchronized(semantics) {
+      semantics[key] = spans
+      while (semantics.size > 128) {
+        val iterator = semantics.entries.iterator()
+        if (!iterator.hasNext()) break
+        iterator.next()
+        iterator.remove()
+      }
+    }
+
     fun of(spec: NumericFormatSpec): NumericTextFormatter {
       val locale = localeOf(spec.locale)
       val currency = currencyOf(spec.currency)
