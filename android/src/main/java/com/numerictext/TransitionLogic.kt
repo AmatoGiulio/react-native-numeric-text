@@ -43,6 +43,10 @@ object TransitionLogic {
    * ICU semantic fields are the source of truth when available. A currency affix is arbitrary text
    * and may itself contain '.', ',' or '-'; character equality cannot tell whether those marks are
    * numeric structure or currency prose.
+   *
+   * Structural keys include their actual glyph. Position alone is not identity: P0:$ and P0:EUR are
+   * different structural elements even if they occupy the same logical slot. Without that suffix a
+   * format change could bind a new raster to a column that still owned the old glyph.
    */
   internal fun layoutKeyedSlots(
     formatted: String,
@@ -88,10 +92,10 @@ object TransitionLogic {
         TokenKind.DIGIT ->
           if (token.fractional) "F${fractionalPosition++}"
           else "I${integerPosition++}"
-        TokenKind.GROUP_SEPARATOR -> "G${integerDigitsToRight[i]}"
-        TokenKind.DECIMAL_SEPARATOR -> "DEC"
-        TokenKind.SIGN -> "S"
-        TokenKind.OTHER -> affixKey(i, firstDigit, lastDigit)
+        TokenKind.GROUP_SEPARATOR -> structuralKey("G${integerDigitsToRight[i]}", token.text)
+        TokenKind.DECIMAL_SEPARATOR -> structuralKey("DEC", token.text)
+        TokenKind.SIGN -> structuralKey("S", token.text)
+        TokenKind.OTHER -> structuralKey(affixKey(i, firstDigit, lastDigit), token.text)
       }
 
       result.add(
@@ -111,6 +115,8 @@ object TransitionLogic {
 
     return result
   }
+
+  private fun structuralKey(base: String, glyph: String): String = "$base:$glyph"
 
   private fun affixKey(index: Int, firstDigit: Int, lastDigit: Int): String = when {
     firstDigit >= 0 && index < firstDigit -> "P${firstDigit - index - 1}"
