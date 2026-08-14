@@ -21,9 +21,17 @@ data class KeyedSlot(
 )
 
 object TransitionLogic {
+  private data class RawToken(
+    val text: String,
+    val codePoint: Int,
+    val utf16Start: Int,
+    val utf16End: Int,
+  )
+
   private data class Token(
     val text: String,
     val kind: TokenKind,
+    val fractional: Boolean,
     val utf16Start: Int,
     val utf16End: Int,
   )
@@ -32,10 +40,12 @@ object TransitionLogic {
    * Integer digits keep visual identity from the left; fractions from the decimal point; anything
    * outside the number keeps it from whichever end of the number it sits against.
    *
-   * That last rule is what a currency needs. A symbol, an ISO code, a percent sign or an
-   * accounting bracket is keyed by its distance from the digits rather than by its offset in the
-   * string, so `$999` -> `$1,000` moves one `$` sideways instead of killing it and being born
-   * again a digit-width to the left, and `999 €` -> `1.000 €` does the same for a suffix.
+   * Affixes are deliberately excluded from numeric punctuation. A currency symbol or localized
+   * currency name is arbitrary text: `B/. 1,234.50`, `د.إ. ١٬٢٣٤٫٥٠` and `1,00 US-Dollar` all
+   * contain characters that can also be a locale's decimal/group/sign character. Classifying those
+   * by character value alone creates duplicate DEC/S keys and can make the rasterizer overwrite a
+   * real numeric slice. Structural punctuation is therefore recognized only inside the digit run;
+   * a sign must sit outside it and must not be a hyphen joining two letters.
    */
   fun layoutKeyedSlots(
     formatted: String,
@@ -47,16 +57,14 @@ object TransitionLogic {
     require(line.text == formatted) { "TextLineGeometry must belong to the formatted string" }
 
     val tokens = tokenize(formatted, groupSep, decimalSep, minusSign)
-    val decimalIndex = tokens.indexOfFirst { it.kind == TokenKind.DECIMAL_SEPARATOR }
-    val integerEnd = if (decimalIndex >= 0) decimalIndex else tokens.size
     val firstDigit = tokens.indexOfFirst { it.kind == TokenKind.DIGIT }
     val lastDigit = tokens.indexOfLast { it.kind == TokenKind.DIGIT }
 
     val integerDigitsToRight = IntArray(tokens.size)
     var digitsToRight = 0
-    for (i in integerEnd - 1 downTo 0) {
+    for (i in tokens.indices.reversed()) {
       integerDigitsToRight[i] = digitsToRight
-      if (tokens[i].kind == TokenKind.DIGIT) digitsToRight += 1
+      if (tokens[i].kind == TokenKind.DIGIT && !tokens[i].fractional) digitsToRight += 1
     }
 
     val result = ArrayList<KeyedSlot>(tokens.size)
@@ -72,7 +80,7 @@ object TransitionLogic {
 
       val key = when (token.kind) {
         TokenKind.DIGIT ->
-          if (decimalIndex >= 0 && i > decimalIndex) {
+          if (token.fractional) {
             "F${fractionalPosition++}"
           } else {
             "I${integerPosition++}"
@@ -121,7 +129,59 @@ object TransitionLogic {
     decimalSep: Char,
     minusSign: Char,
   ): List<Token> {
-    val out = ArrayList<Token>()
+    val raw = rawTokens(text)
+    if (raw.isEmpty()) return emptyList()
+
+    val firstDigit = raw.indexOfFirst { Character.isDigit(it.codePoint) }
+    val lastDigit = raw.indexOfLast { Character.isDigit(it.codePoint) }
+
+    // A real decimal separator is either between the first and last digit, or immediately after
+    // the last digit for `trailingDecimalSeparator`. Choosing from the digit run means a dot in a
+    // prefix such as Panama's `B/.` can never become DEC.
+    val decimalIndex = when {
+      firstDigit < 0 -> -1
+      else -> {
+        val between =
+          (firstDigit + 1 until lastDigit)
+            .lastOrNull { raw[it].codePoint == decimalSep.code }
+        between
+          ?: (lastDigit + 1)
+            .takeIf { it < raw.size && raw[it].codePoint == decimalSep.code }
+          ?: -1
+      }
+    }
+
+    val integerEnd = if (decimalIndex >= 0) decimalIndex else lastDigit + 1
+
+    return raw.mapIndexed { index, token ->
+      val digit = Character.isDigit(token.codePoint)
+      val fractional = digit && decimalIndex >= 0 && index > decimalIndex
+      val kind = when {
+        digit -> TokenKind.DIGIT
+        index == decimalIndex -> TokenKind.DECIMAL_SEPARATOR
+        firstDigit >= 0 &&
+          index > firstDigit &&
+          index < integerEnd &&
+          token.codePoint == groupSep.code &&
+          hasDigitBefore(raw, index, firstDigit) &&
+          hasDigitAfter(raw, index, integerEnd) -> TokenKind.GROUP_SEPARATOR
+        token.codePoint == minusSign.code &&
+          isSignPosition(raw, index, firstDigit, lastDigit) -> TokenKind.SIGN
+        else -> TokenKind.OTHER
+      }
+
+      Token(
+        text = token.text,
+        kind = kind,
+        fractional = fractional,
+        utf16Start = token.utf16Start,
+        utf16End = token.utf16End,
+      )
+    }
+  }
+
+  private fun rawTokens(text: String): List<RawToken> {
+    val out = ArrayList<RawToken>()
     var utf16Offset = 0
     val iterator = text.codePoints().iterator()
 
@@ -130,18 +190,43 @@ object TransitionLogic {
       val char = String(Character.toChars(cp))
       val start = utf16Offset
       utf16Offset += char.length
-
-      val kind = when {
-        cp == groupSep.code -> TokenKind.GROUP_SEPARATOR
-        cp == decimalSep.code -> TokenKind.DECIMAL_SEPARATOR
-        cp == minusSign.code -> TokenKind.SIGN
-        Character.isDigit(cp) -> TokenKind.DIGIT
-        else -> TokenKind.OTHER
-      }
-
-      out.add(Token(char, kind, start, utf16Offset))
+      out.add(RawToken(char, cp, start, utf16Offset))
     }
-
     return out
   }
+
+  private fun hasDigitBefore(raw: List<RawToken>, index: Int, lowerBound: Int): Boolean {
+    for (i in index - 1 downTo lowerBound) {
+      if (Character.isDigit(raw[i].codePoint)) return true
+      if (!isDirectionalMark(raw[i].codePoint)) return false
+    }
+    return false
+  }
+
+  private fun hasDigitAfter(raw: List<RawToken>, index: Int, upperBound: Int): Boolean {
+    for (i in index + 1 until upperBound) {
+      if (Character.isDigit(raw[i].codePoint)) return true
+      if (!isDirectionalMark(raw[i].codePoint)) return false
+    }
+    return false
+  }
+
+  private fun isSignPosition(
+    raw: List<RawToken>,
+    index: Int,
+    firstDigit: Int,
+    lastDigit: Int,
+  ): Boolean {
+    if (firstDigit < 0 || (index in firstDigit..lastDigit)) return false
+
+    // A localized currency name can contain a hyphen (`US-Dollar`). That is prose, not the
+    // number's sign. A real sign can sit next to a currency symbol or bidi mark, so only reject the
+    // unmistakable letter-hyphen-letter case.
+    val before = raw.getOrNull(index - 1)?.codePoint
+    val after = raw.getOrNull(index + 1)?.codePoint
+    return !(before != null && after != null && Character.isLetter(before) && Character.isLetter(after))
+  }
+
+  private fun isDirectionalMark(codePoint: Int): Boolean =
+    codePoint == 0x061C || codePoint == 0x200E || codePoint == 0x200F
 }
