@@ -24,6 +24,27 @@ describe('widthInEm', () => {
     expect(widthInEm('-1')).toBeGreaterThan(widthInEm('1'));
     expect(widthInEm('−1')).toBe(widthInEm('-1'));
   });
+
+  it('charges a currency symbol as a glyph rather than as punctuation', () => {
+    // `$` measures 0.6064 em in the bundled Regular and a comma 0.2541. Charging the first at the
+    // second's width under-reserves the box by most of a digit, which the headroom cannot absorb
+    // once a format carries several of them.
+    for (const symbol of ['$', '€', '£', '¥', '₹', '%']) {
+      expect(widthInEm(symbol)).toBeGreaterThan(widthInEm(','));
+    }
+  });
+
+  it('charges the letters of a code or a name', () => {
+    expect(widthInEm('US dollars')).toBeGreaterThan(9 * widthInEm(','));
+  });
+
+  it('keeps the spaces a locale groups with narrow', () => {
+    // fr-FR groups with a narrow no-break space and puts a no-break space before the symbol.
+    // Charging either as a glyph would reserve most of a digit for a gap.
+    for (const space of ['\u00a0', '\u2007', '\u2008', '\u2009', '\u202f']) {
+      expect(widthInEm(space)).toBe(widthInEm(','));
+    }
+  });
 });
 
 describe('measureBox', () => {

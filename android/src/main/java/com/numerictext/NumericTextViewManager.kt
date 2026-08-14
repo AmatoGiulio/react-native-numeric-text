@@ -45,9 +45,39 @@ class NumericTextViewManager : SimpleViewManager<NumericTextView>(),
     view?.setAnimationDuration(value)
   }
 
+  @ReactProp(name = "reduceMotion")
+  override fun setReduceMotion(view: NumericTextView?, mode: String?) {
+    view?.setReduceMotion(mode ?: "system")
+  }
+
+  @ReactProp(name = "numberStyle")
+  override fun setNumberStyle(view: NumericTextView?, value: String?) {
+    view?.setNumberStyle(value ?: "decimal")
+  }
+
+  @ReactProp(name = "currency")
+  override fun setCurrency(view: NumericTextView?, value: String?) {
+    view?.setCurrency(value ?: "")
+  }
+
+  @ReactProp(name = "currencyDisplay")
+  override fun setCurrencyDisplay(view: NumericTextView?, value: String?) {
+    view?.setCurrencyDisplay(value ?: "symbol")
+  }
+
+  @ReactProp(name = "currencySign")
+  override fun setCurrencySign(view: NumericTextView?, value: String?) {
+    view?.setCurrencySign(value ?: "standard")
+  }
+
   @ReactProp(name = "useGrouping")
   override fun setUseGrouping(view: NumericTextView?, value: Boolean) {
     view?.setUseGrouping(value)
+  }
+
+  @ReactProp(name = "minimumIntegerDigits")
+  override fun setMinimumIntegerDigits(view: NumericTextView?, value: Int) {
+    view?.setMinimumIntegerDigits(value)
   }
 
   @ReactProp(name = "minimumFractionDigits")
@@ -60,9 +90,14 @@ class NumericTextViewManager : SimpleViewManager<NumericTextView>(),
     view?.setMaximumFractionDigits(value)
   }
 
-  @ReactProp(name = "reduceMotion")
-  override fun setReduceMotion(view: NumericTextView?, mode: String?) {
-    view?.setReduceMotion(mode ?: "system")
+  @ReactProp(name = "minimumSignificantDigits")
+  override fun setMinimumSignificantDigits(view: NumericTextView?, value: Int) {
+    view?.setMinimumSignificantDigits(value)
+  }
+
+  @ReactProp(name = "maximumSignificantDigits")
+  override fun setMaximumSignificantDigits(view: NumericTextView?, value: Int) {
+    view?.setMaximumSignificantDigits(value)
   }
 
   @ReactProp(name = "fontSize")

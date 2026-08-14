@@ -1,6 +1,12 @@
 import { memo, useEffect, useRef, useState } from 'react';
 import NumericTextViewNativeComponent from './NumericTextViewNativeComponent';
 import { measureBox, widest, type Box } from './measureBox';
+import {
+  DEFAULT_LOCALE,
+  formatNumber,
+  nativeFormatProps,
+  resolveFormat,
+} from './numberFormat';
 import { resolveTextStyle } from './resolveTextStyle';
 import type { NumericTextProps } from './types';
 
@@ -16,26 +22,27 @@ import type { NumericTextProps } from './types';
  * `animationDuration` reaches Android only; SwiftUI's numeric transition is a spring with no
  * duration to set. Both sides otherwise read the same props, including the text properties pulled
  * out of `style` — each renderer draws its own glyphs, so it needs them as props.
+ *
+ * Formatting is props too, not a finished string. The renderers animate the structure of a
+ * formatted number: which digit is which, where the decimal mark sits, which side the currency
+ * symbol is on. Each renderer therefore formats it natively, and JS only reproduces the result to
+ * size the box.
  */
-function NumericTextViewImpl({
-  value,
-  locale = 'en-US',
-  direction = 'automatic',
-  animationDuration = 80,
-  reduceMotion = 'system',
-  minimumFractionDigits = 0,
-  maximumFractionDigits = 3,
-  useGrouping = true,
-  style,
-  testID,
-}: NumericTextProps) {
-  const text = resolveTextStyle(style);
+function NumericTextViewImpl(props: NumericTextProps) {
+  const {
+    value,
+    locale = DEFAULT_LOCALE,
+    direction = 'automatic',
+    animationDuration = 80,
+    reduceMotion = 'system',
+    style,
+    testID,
+  } = props;
 
-  const formatted = value.toLocaleString(locale, {
-    minimumFractionDigits,
-    maximumFractionDigits,
-    useGrouping,
-  });
+  const text = resolveTextStyle(style);
+  const format = resolveFormat(props);
+
+  const formatted = formatNumber(value, locale, format);
   const box = useShrinkHeldBox(
     measureBox(formatted, text.fontSize),
     Math.max(animationDuration, 500) + 400
@@ -47,10 +54,8 @@ function NumericTextViewImpl({
       direction={direction}
       locale={locale}
       animationDuration={animationDuration}
-      useGrouping={useGrouping}
-      minimumFractionDigits={minimumFractionDigits}
-      maximumFractionDigits={maximumFractionDigits}
       reduceMotion={reduceMotion}
+      {...nativeFormatProps(format)}
       fontSize={text.fontSize}
       fontWeight={text.fontWeight}
       fontFamily={text.fontFamily}

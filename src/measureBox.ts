@@ -8,13 +8,25 @@
  *
  * The estimate is per character rather than a flat average because the bundled font's tabular
  * digits and its separators differ by more than a factor of two, and a four-digit grouped number
- * is a quarter separator by character count.
+ * is a quarter separator by character count. Once a number can carry a currency (`$1,234.56`,
+ * `1.234,56 €`, `1,234.56 US dollars`) the spread is wider still, so symbols and letters are
+ * charged separately from punctuation rather than being lumped in with the comma.
  */
 
 /** Advance widths as a fraction of font size, from the bundled Sunghyun Sans with `tnum` on. */
 const DIGIT_EM = 0.6167;
 const SEPARATOR_EM = 0.2541;
 const SIGN_EM = 0.36;
+
+/**
+ * Currency symbols, the percent sign, and the letters of an ISO code or a currency name.
+ *
+ * One estimate covers all of them because they land close together in this face and because the
+ * box is a minimum with headroom on top: `$` measures near a digit, `%` slightly wider, and a
+ * lower-case letter narrower. Over-charging a letter costs a few pixels of reserved width;
+ * under-charging one clips `US dollars`.
+ */
+const GLYPH_EM = 0.62;
 
 /** Room for the transition's own overspill: a dying glyph drifts outward and carries a blur halo. */
 const HEADROOM_EM = 0.5;
@@ -36,10 +48,43 @@ export function widthInEm(formatted: string): number {
   for (const ch of formatted) {
     if (ch >= '0' && ch <= '9') em += DIGIT_EM;
     else if (ch === '-' || ch === '−' || ch === '+') em += SIGN_EM;
-    else em += SEPARATOR_EM;
+    else if (isNarrow(ch)) em += SEPARATOR_EM;
+    else em += GLYPH_EM;
   }
   return em;
 }
+
+/**
+ * Whether [ch] is punctuation or a space rather than something with ink to spare.
+ *
+ * The separators a formatter emits are few and known: the comma, the stop, the apostrophe forms,
+ * the middle dot, the Arabic marks, and the several fixed-width spaces a French or Swiss locale
+ * groups with. They are therefore listed rather than derived. Anything else in a formatted number is a
+ * digit, a sign, or a symbol or letter that carries a currency, and those are charged as glyphs.
+ */
+function isNarrow(ch: string): boolean {
+  return NARROW.has(ch);
+}
+
+const NARROW = new Set([
+  ',',
+  '.',
+  "'",
+  '’', // right single quote, the Swiss grouping separator
+  '·', // middle dot
+  '٫', // Arabic decimal separator
+  '٬', // Arabic thousands separator
+  '，', // fullwidth comma
+  '．', // fullwidth stop
+  '(',
+  ')',
+  ' ',
+  ' ', // no-break space
+  ' ', // figure space
+  ' ', // punctuation space
+  ' ', // thin space
+  ' ', // narrow no-break space
+]);
 
 export function measureBox(
   formatted: string,

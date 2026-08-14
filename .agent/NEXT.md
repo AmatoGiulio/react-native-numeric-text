@@ -624,6 +624,24 @@ shrinking a glyph and dimming it are the same act.
 **Measure before hypothesising, replicate before chasing.** Two burst defects were reported from
 one run each and both turned out to be in the *other* direction once replicated three times.
 
+**Formatting is now three implementations of one rule, and they have to stay in step.**
+`src/numberFormat.ts` resolves the `format` prop; `NumericTextFormatter.kt` and the `FormatSpec`
+half of `NumericTextSwiftUIHost.swift` each reproduce it natively. All three implement ECMA-402's
+digit-bound rule and round half-away-from-zero, which is `Intl`'s default and neither platform's.
+Changing one without the other two makes the two renderers draw different numbers, and the JS
+width estimate size a box for a third.
+
+The transition side of that is the affix key in `TransitionLogic`: a currency symbol, a percent
+sign and an accounting bracket are keyed by distance from the digits (`P0` inward from the left,
+`X0` inward from the right), so they survive the number gaining or losing a digit. Keyed by string
+offset, which is what `O$i` did, a `$` dies and is reborn on every carry.
+
+Verified so far: 39 JS unit tests, 25 Kotlin unit tests, `compileDebugKotlin`, `swiftc -typecheck`
+in both configurations, a full `xcodebuild` of the example, and both renderers driven by hand on a
+simulator through every format. **Not** verified against a recording: no ground-truth run has been
+taken with a currency format, so the affix's motion during a carry is reasoned-about rather than
+measured. That is the first thing to do if the affix ever looks wrong.
+
 ## Next, in order
 
 The drum is **done and kept** and did not do what it was expected to do: it halved the single

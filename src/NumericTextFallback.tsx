@@ -1,5 +1,6 @@
 import { memo } from 'react';
 import { Text } from 'react-native';
+import { DEFAULT_LOCALE, formatNumber, resolveFormat } from './numberFormat';
 import type { NumericTextProps } from './types';
 
 /**
@@ -9,20 +10,10 @@ import type { NumericTextProps } from './types';
  * native path so snapshots and web renders keep the same number formatting; only the transition is
  * missing.
  */
-function NumericTextFallbackImpl({
-  value,
-  locale = 'en-US',
-  minimumFractionDigits = 0,
-  maximumFractionDigits = 3,
-  useGrouping = true,
-  style,
-  testID,
-}: NumericTextProps) {
-  const formatted = value.toLocaleString(locale, {
-    minimumFractionDigits,
-    maximumFractionDigits,
-    useGrouping,
-  });
+function NumericTextFallbackImpl(props: NumericTextProps) {
+  const { value, locale = DEFAULT_LOCALE, style, testID } = props;
+  const formatted = formatNumber(value, locale, resolveFormat(props));
+
   return (
     <Text style={style} testID={testID}>
       {formatted}
