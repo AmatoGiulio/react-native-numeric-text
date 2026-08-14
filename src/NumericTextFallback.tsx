@@ -11,8 +11,19 @@ import type { NumericTextProps } from './types';
  * missing.
  */
 function NumericTextFallbackImpl(props: NumericTextProps) {
-  const { value, locale = DEFAULT_LOCALE, style, testID } = props;
-  const formatted = formatNumber(value, locale, resolveFormat(props));
+  const {
+    value,
+    locale = DEFAULT_LOCALE,
+    trailingDecimalSeparator = false,
+    style,
+    testID,
+  } = props;
+  const formatted = formatNumber(
+    value,
+    locale,
+    resolveFormat(props),
+    trailingDecimalSeparator
+  );
 
   return (
     <Text style={style} testID={testID}>

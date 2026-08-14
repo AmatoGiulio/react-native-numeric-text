@@ -189,11 +189,59 @@ export function nativeFormatProps(
 export function formatNumber(
   value: number,
   locale: string,
+  format: NumericTextFormat,
+  trailingDecimalSeparator = false
+): string {
+  let text: string;
+  try {
+    text = value.toLocaleString(locale, intlOptions(format));
+  } catch {
+    text = value.toLocaleString(locale);
+  }
+  return trailingDecimalSeparator
+    ? withTrailingSeparator(text, decimalSeparatorFor(locale, format))
+    : text;
+}
+
+/**
+ * The decimal mark this locale and format would use.
+ *
+ * Read from the formatter rather than from a table, because a currency format may use a different
+ * mark from a plain number in the same locale. A probe value with one forced fraction digit is the
+ * only way to make `formatToParts` emit the mark when the format itself asks for none, which is
+ * exactly the case this is needed for.
+ */
+function decimalSeparatorFor(
+  locale: string,
   format: NumericTextFormat
 ): string {
   try {
-    return value.toLocaleString(locale, intlOptions(format));
+    const probe: Intl.NumberFormatOptions = { ...intlOptions(format) };
+    delete probe.minimumSignificantDigits;
+    delete probe.maximumSignificantDigits;
+    probe.minimumFractionDigits = 1;
+    probe.maximumFractionDigits = 1;
+
+    const parts = new Intl.NumberFormat(locale, probe).formatToParts(1.1);
+    return parts.find((part) => part.type === 'decimal')?.value ?? '.';
   } catch {
-    return value.toLocaleString(locale);
+    return '.';
   }
+}
+
+/**
+ * [text] with [mark] after its last digit, unless it already carries one.
+ *
+ * After the last *digit*, not at the end of the string: `de-DE` writes `1.234 €`, and a mark
+ * appended blindly would land beyond the currency symbol. `\p{Nd}` rather than `0-9` because a
+ * locale may format in Arabic-Indic or Devanagari digits.
+ */
+function withTrailingSeparator(text: string, mark: string): string {
+  if (text.includes(mark)) return text;
+
+  let end = -1;
+  for (const match of text.matchAll(/\p{Nd}/gu)) {
+    end = match.index + match[0].length;
+  }
+  return end < 0 ? text + mark : text.slice(0, end) + mark + text.slice(end);
 }

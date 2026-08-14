@@ -187,6 +187,26 @@ Set `minimumFractionDigits` to hold a fixed number of decimals through a change 
 <NumericText value={price} format={{ minimumFractionDigits: 2, maximumFractionDigits: 2 }} />
 ```
 
+### Amount fields, and the decimal you are still typing
+
+`value` is a number, and a number cannot hold `7.`. Someone typing `7`, `.`, `5` produces the values 7, 7, 7.5, so between the second and third keystroke the mark they typed has nowhere to live. `trailingDecimalSeparator` gives it one:
+
+```tsx
+const [raw, setRaw] = useState('');
+
+<NumericText
+  value={Number(raw) || 0}
+  currency="USD"
+  trailingDecimalSeparator={raw.endsWith('.')}
+/>
+```
+
+The mark becomes a real column: the locale's own character, the same font, the same baseline, keyed as `DEC`, and already in place when the first fraction digit is born beside it. It is a no-op once a fraction digit arrives or when the format already prints a mark, so pairing it with `minimumFractionDigits` is safe. It goes after the last digit rather than at the end of the string, so `de-DE` gives `1.234, €` and not `1.234 €,`.
+
+Do not reach for a sibling `<Text>` holding a `.` instead. It cannot be made to line up: this view reserves half an em of headroom for the transition's overspill and centres the number inside it, so the distance from the last digit to the right edge of the view is not fixed, and it moves with the value and with the font.
+
+### Rounding
+
 Rounding is half-away-from-zero on both platforms and on web: `2.5` at zero decimals reads as `3` everywhere. That is `Intl`'s default and neither platform's (`NumberFormatter` and ICU both round half-to-even left alone), so it is set explicitly rather than exposed as an option. Two renderers disagreeing about the number they draw is a bug, not a preference.
 
 ## Direction
@@ -224,6 +244,7 @@ During rapid updates, automatic direction is resolved against the value the rend
 | `locale` | `string` | `'en-US'` | BCP-47 locale used for native number formatting. |
 | `format` | `NumericTextFormat` | `{}` | How to shape the number. See below. |
 | `currency` | `string` | none | Shorthand for `format={{ style: 'currency', currency }}`. `format` wins where the two overlap. |
+| `trailingDecimalSeparator` | `boolean` | `false` | Draws the decimal mark after the last digit when no fraction digit follows it yet. For amount fields; see above. |
 | `direction` | `'automatic' \| 'up' \| 'down'` | `'automatic'` | Direction of the numeric transition. |
 | `animationDuration` | `number` | `80` | Android only. Nominal timing input used to scale the native transition; it is not a hard duration clamp. |
 | `reduceMotion` | `'system' \| 'always' \| 'never'` | `'system'` | Accessibility behaviour for motion. |

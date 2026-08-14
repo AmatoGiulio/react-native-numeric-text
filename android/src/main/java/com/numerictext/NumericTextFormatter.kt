@@ -28,6 +28,7 @@ internal data class NumericFormatSpec(
   val maximumFractionDigits: Int = DIGITS_UNSET,
   val minimumSignificantDigits: Int = DIGITS_UNSET,
   val maximumSignificantDigits: Int = DIGITS_UNSET,
+  val trailingDecimalSeparator: Boolean = false,
 )
 
 /**
@@ -45,6 +46,7 @@ internal data class NumericFormatSpec(
  */
 internal class NumericTextFormatter private constructor(
   private val format: NumberFormat,
+  private val trailing: Boolean,
   val groupingSeparator: Char,
   val decimalSeparator: Char,
   val minusSign: Char,
@@ -56,7 +58,28 @@ internal class NumericTextFormatter private constructor(
   val glyphProbe: String,
 ) {
 
-  fun format(value: Double): String = format.format(value)
+  /**
+   * The formatted number, with the decimal mark held after the last digit when the caller asked
+   * for it and the format produced none.
+   *
+   * After the last *digit*, not at the end of the string: `de-DE` writes `1.234 €`, and a mark
+   * appended blindly would land beyond the currency symbol.
+   */
+  fun format(value: Double): String {
+    val text = format.format(value)
+    if (!trailing || text.indexOf(decimalSeparator) >= 0) return text
+
+    var end = -1
+    var i = 0
+    while (i < text.length) {
+      val cp = text.codePointAt(i)
+      val width = Character.charCount(cp)
+      if (Character.isDigit(cp)) end = i + width
+      i += width
+    }
+    return if (end < 0) text + decimalSeparator
+    else text.substring(0, end) + decimalSeparator + text.substring(end)
+  }
 
   companion object {
     fun of(spec: NumericFormatSpec): NumericTextFormatter {
@@ -81,6 +104,7 @@ internal class NumericTextFormatter private constructor(
       val symbols = symbolsOf(format, locale)
       return NumericTextFormatter(
         format = format,
+        trailing = spec.trailingDecimalSeparator,
         groupingSeparator =
           if (money) symbols.monetaryGroupingSeparator else symbols.groupingSeparator,
         decimalSeparator =

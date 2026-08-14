@@ -112,6 +112,30 @@ export type NumericTextProps = {
   currency?: string;
 
   /**
+   * Draws the decimal mark after the last digit even though no fraction digit follows it yet.
+   *
+   * This exists for one case, and it is the case every amount field hits: `value` is a number, and
+   * a number cannot hold `7.`. Someone typing `7`, `.`, `5` produces the values 7, 7, 7.5, so the
+   * mark they typed has nowhere to live until the digit after it arrives, and the field either
+   * swallows the keystroke or grows a second `.` of its own beside the component. A sibling `Text`
+   * cannot be made to line up: this view reserves half an em of headroom for the transition's
+   * overspill and centres the number inside it, so the gap to the right of the last digit is not a
+   * fixed distance, and it moves with the value and the font.
+   *
+   * Set this from the raw input instead, and the mark becomes a real column: same font, same
+   * baseline, keyed as `DEC`, and already in place when the first fraction digit is born beside it.
+   *
+   * ```tsx
+   * <NumericText value={parsed} trailingDecimalSeparator={raw.endsWith('.')} />
+   * ```
+   *
+   * It is a no-op whenever the number already has a decimal mark, so pairing it with
+   * `minimumFractionDigits` is safe. The mark is the locale's own, and it is placed after the last
+   * digit rather than at the end of the string, so a trailing currency symbol stays outside it.
+   */
+  trailingDecimalSeparator?: boolean;
+
+  /**
    * Which way digits roll. `'automatic'` rolls up when the value grows and down when it shrinks,
    * which is what SwiftUI does; the other two force a direction regardless of the value.
    */

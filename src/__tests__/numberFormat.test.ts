@@ -117,6 +117,50 @@ describe('formatNumber', () => {
   });
 });
 
+describe('formatNumber, trailing decimal separator', () => {
+  // `value` is a number and a number cannot hold `7.`, so typing 7 . 5 produces 7, 7, 7.5. The
+  // flag is what gives the mark somewhere to live between the second and third keystroke.
+  it('holds the mark after the last digit when nothing follows it yet', () => {
+    expect(formatNumber(7, 'en-US', {}, true)).toBe('7.');
+  });
+
+  it('is a no-op once a fraction digit arrives', () => {
+    expect(formatNumber(7.5, 'en-US', {}, true)).toBe('7.5');
+  });
+
+  it('is a no-op when the format already prints a mark', () => {
+    const fixed = { minimumFractionDigits: 2, maximumFractionDigits: 2 };
+    expect(formatNumber(7, 'en-US', fixed, true)).toBe('7.00');
+  });
+
+  it('uses the locale mark, not a full stop', () => {
+    expect(formatNumber(1234, 'de-DE', {}, true)).toBe('1.234,');
+  });
+
+  it('goes after the last digit rather than at the end of the string', () => {
+    // de-DE writes the symbol last. Appending blindly would put the mark beyond the euro sign.
+    const euro = resolveFormat({ currency: 'EUR' });
+    const zeroDecimals = {
+      ...euro,
+      minimumFractionDigits: 0,
+      maximumFractionDigits: 0,
+    };
+    expect(formatNumber(1234, 'de-DE', zeroDecimals, true)).toBe('1.234, €');
+  });
+
+  it('keeps a leading currency symbol outside the mark', () => {
+    const usd = {
+      ...resolveFormat({ currency: 'USD' }),
+      maximumFractionDigits: 0,
+    };
+    expect(formatNumber(7, 'en-US', usd, true)).toBe('$7.');
+  });
+
+  it('does nothing when the flag is off, which is the default', () => {
+    expect(formatNumber(7, 'en-US', {})).toBe('7');
+  });
+});
+
 describe('intlOptions', () => {
   it('never asks for a maximum below its minimum', () => {
     // Intl throws on that pair; the native formatters clamp. Clamping here keeps a bad prop from

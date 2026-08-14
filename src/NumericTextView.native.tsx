@@ -35,6 +35,7 @@ function NumericTextViewImpl(props: NumericTextProps) {
     direction = 'automatic',
     animationDuration = 80,
     reduceMotion = 'system',
+    trailingDecimalSeparator = false,
     style,
     testID,
   } = props;
@@ -42,7 +43,12 @@ function NumericTextViewImpl(props: NumericTextProps) {
   const text = resolveTextStyle(style);
   const format = resolveFormat(props);
 
-  const formatted = formatNumber(value, locale, format);
+  const formatted = formatNumber(
+    value,
+    locale,
+    format,
+    trailingDecimalSeparator
+  );
   const box = useShrinkHeldBox(
     measureBox(formatted, text.fontSize),
     Math.max(animationDuration, 500) + 400
@@ -56,6 +62,7 @@ function NumericTextViewImpl(props: NumericTextProps) {
       animationDuration={animationDuration}
       reduceMotion={reduceMotion}
       {...nativeFormatProps(format)}
+      trailingDecimalSeparator={trailingDecimalSeparator}
       fontSize={text.fontSize}
       fontWeight={text.fontWeight}
       fontFamily={text.fontFamily}

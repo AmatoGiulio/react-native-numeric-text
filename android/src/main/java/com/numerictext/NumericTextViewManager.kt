@@ -75,6 +75,11 @@ class NumericTextViewManager : SimpleViewManager<NumericTextView>(),
     view?.setUseGrouping(value)
   }
 
+  @ReactProp(name = "trailingDecimalSeparator")
+  override fun setTrailingDecimalSeparator(view: NumericTextView?, value: Boolean) {
+    view?.setTrailingDecimalSeparator(value)
+  }
+
   @ReactProp(name = "minimumIntegerDigits")
   override fun setMinimumIntegerDigits(view: NumericTextView?, value: Int) {
     view?.setMinimumIntegerDigits(value)

@@ -19,6 +19,7 @@ interface NativeProps extends ViewProps {
   readonly currencyDisplay?: string;
   readonly currencySign?: string;
   readonly useGrouping?: boolean;
+  readonly trailingDecimalSeparator?: boolean;
   /** A digit count, or -1 for "the format's own default"; see `DIGITS_UNSET`. */
   readonly minimumIntegerDigits?: Int32;
   readonly minimumFractionDigits?: Int32;

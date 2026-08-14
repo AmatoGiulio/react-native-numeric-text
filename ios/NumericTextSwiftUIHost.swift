@@ -67,7 +67,7 @@ public final class NumericTextSwiftUIHost: UIView {
    * everything the component exposes, and Objective-C spells every argument out.
    */
   // swiftlint:disable:next function_parameter_count
-  @objc(applyFormatWithLocale:numberStyle:currency:currencyDisplay:currencySign:useGrouping:minimumIntegerDigits:minimumFractionDigits:maximumFractionDigits:minimumSignificantDigits:maximumSignificantDigits:)
+  @objc(applyFormatWithLocale:numberStyle:currency:currencyDisplay:currencySign:useGrouping:minimumIntegerDigits:minimumFractionDigits:maximumFractionDigits:minimumSignificantDigits:maximumSignificantDigits:trailingDecimalSeparator:)
   public func applyFormat(
     locale: String,
     numberStyle: String,
@@ -79,7 +79,8 @@ public final class NumericTextSwiftUIHost: UIView {
     minimumFractionDigits: Int,
     maximumFractionDigits: Int,
     minimumSignificantDigits: Int,
-    maximumSignificantDigits: Int
+    maximumSignificantDigits: Int,
+    trailingDecimalSeparator: Bool
   ) {
     let next = FormatSpec(
       locale: locale,
@@ -92,7 +93,8 @@ public final class NumericTextSwiftUIHost: UIView {
       minimumFractionDigits: minimumFractionDigits,
       maximumFractionDigits: maximumFractionDigits,
       minimumSignificantDigits: minimumSignificantDigits,
-      maximumSignificantDigits: maximumSignificantDigits
+      maximumSignificantDigits: maximumSignificantDigits,
+      trailingDecimalSeparator: trailingDecimalSeparator
     )
     guard next != formatSpec else { return }
     formatSpec = next
@@ -110,7 +112,11 @@ public final class NumericTextSwiftUIHost: UIView {
     fontFamily: String?,
     textColor: UIColor?
   ) {
-    model.text = formatter.string(from: NSNumber(value: value)) ?? String(value)
+    model.text = Self.text(
+      value,
+      formatter: formatter,
+      trailingDecimalSeparator: formatSpec.trailingDecimalSeparator
+    )
     model.fontSize = fontSize > 0 ? fontSize : 48
     model.weight = Self.weight(from: fontWeight)
     model.fontFamily = fontFamily
@@ -203,6 +209,36 @@ public final class NumericTextSwiftUIHost: UIView {
     var maximumFractionDigits: Int = -1
     var minimumSignificantDigits: Int = -1
     var maximumSignificantDigits: Int = -1
+    var trailingDecimalSeparator: Bool = false
+  }
+
+  /**
+   * The formatted number, with the decimal mark held after the last digit when the caller asked
+   * for it and the format produced none.
+   *
+   * After the last *digit*, not at the end of the string: `de-DE` writes `1.234 €`, and a mark
+   * appended blindly would land beyond the currency symbol.
+   */
+  private static func text(
+    _ value: Double,
+    formatter: NumberFormatter,
+    trailingDecimalSeparator: Bool
+  ) -> String {
+    let formatted = formatter.string(from: NSNumber(value: value)) ?? String(value)
+    guard trailingDecimalSeparator else { return formatted }
+
+    // A currency format may use a different mark from a plain number in the same locale, so ask
+    // the formatter for the one belonging to the style it is actually in.
+    let money = formatter.numberStyle != .decimal && formatter.numberStyle != .percent
+    let mark =
+      (money ? formatter.currencyDecimalSeparator : formatter.decimalSeparator) ?? "."
+    guard !formatted.contains(mark) else { return formatted }
+
+    guard let lastDigit = formatted.lastIndex(where: { $0.isNumber }) else {
+      return formatted + mark
+    }
+    let after = formatted.index(after: lastDigit)
+    return String(formatted[..<after]) + mark + String(formatted[after...])
   }
 
   private static func makeFormatter(_ spec: FormatSpec) -> NumberFormatter {
