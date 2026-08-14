@@ -70,6 +70,58 @@ class TransitionLogicTest {
   }
 
   @Test
+  fun currencySymbol_keepsItsKeyWhenTheNumberGrowsADigit() {
+    // The whole point of keying an affix from the digits rather than from the string: `$` has to
+    // stay one column that slides left, not die at offset 0 and be reborn at offset 0.
+    assertEquals("$", keyMap("\$999")["P0"])
+    assertEquals("$", keyMap("\$1,000")["P0"])
+  }
+
+  @Test
+  fun currencySymbol_keepsItsKeyAcrossASignChange() {
+    assertEquals("$", keyMap("\$1.00")["P0"])
+    assertEquals("$", keyMap("-\$1.00")["P0"])
+    assertEquals("-", keyMap("-\$1.00")["S"])
+  }
+
+  @Test
+  fun accountingBrackets_sitOutsideTheSymbol() {
+    val accounting = keyMap("(\$1.00)")
+    assertEquals("$", accounting["P0"])
+    assertEquals("(", accounting["P1"])
+    assertEquals(")", accounting["X0"])
+  }
+
+  @Test
+  fun trailingSymbol_isKeyedFromTheEndOfTheNumber() {
+    // de-DE writes the symbol after the number, with a no-break space between.
+    val small = TransitionLogic.layoutKeyedSlots("999,00\u00A0€", '.', ',', '-', line("999,00\u00A0€"))
+      .associate { it.key to it.char }
+    val large =
+      TransitionLogic.layoutKeyedSlots("1.000,00\u00A0€", '.', ',', '-', line("1.000,00\u00A0€"))
+        .associate { it.key to it.char }
+
+    assertEquals("€", small["X1"])
+    assertEquals("€", large["X1"])
+    assertEquals("\u00A0", small["X0"])
+    assertEquals("\u00A0", large["X0"])
+  }
+
+  @Test
+  fun percentSign_isKeyedFromTheEndOfTheNumber() {
+    assertEquals("%", keyMap("9%")["X0"])
+    assertEquals("%", keyMap("99%")["X0"])
+  }
+
+  @Test
+  fun currencyName_keysEachLetterOutwardFromTheNumber() {
+    val letters = keyMap("1.00 US dollars")
+    assertEquals(" ", letters["X0"])
+    assertEquals("U", letters["X1"])
+    assertEquals("s", letters["X10"])
+  }
+
+  @Test
   fun tokenBoundsComeFromTheFullLineGeometry() {
     val slots = keyed("1,000")
     val comma = slots.first { it.key == "G3" }

@@ -28,7 +28,15 @@ object TransitionLogic {
     val utf16End: Int,
   )
 
-  /** Integer digits keep visual identity from the left; fractions from the decimal point. */
+  /**
+   * Integer digits keep visual identity from the left; fractions from the decimal point; anything
+   * outside the number keeps it from whichever end of the number it sits against.
+   *
+   * That last rule is what a currency needs. A symbol, an ISO code, a percent sign or an
+   * accounting bracket is keyed by its distance from the digits rather than by its offset in the
+   * string, so `$999` -> `$1,000` moves one `$` sideways instead of killing it and being born
+   * again a digit-width to the left, and `999 €` -> `1.000 €` does the same for a suffix.
+   */
   fun layoutKeyedSlots(
     formatted: String,
     groupSep: Char,
@@ -41,6 +49,8 @@ object TransitionLogic {
     val tokens = tokenize(formatted, groupSep, decimalSep, minusSign)
     val decimalIndex = tokens.indexOfFirst { it.kind == TokenKind.DECIMAL_SEPARATOR }
     val integerEnd = if (decimalIndex >= 0) decimalIndex else tokens.size
+    val firstDigit = tokens.indexOfFirst { it.kind == TokenKind.DIGIT }
+    val lastDigit = tokens.indexOfLast { it.kind == TokenKind.DIGIT }
 
     val integerDigitsToRight = IntArray(tokens.size)
     var digitsToRight = 0
@@ -70,7 +80,7 @@ object TransitionLogic {
         TokenKind.GROUP_SEPARATOR -> "G${integerDigitsToRight[i]}"
         TokenKind.DECIMAL_SEPARATOR -> "DEC"
         TokenKind.SIGN -> "S"
-        TokenKind.OTHER -> "O$i"
+        TokenKind.OTHER -> affixKey(i, firstDigit, lastDigit)
       }
 
       result.add(
@@ -89,6 +99,20 @@ object TransitionLogic {
     }
 
     return result
+  }
+
+  /**
+   * A key for a token outside the digits, counted outwards from the nearest end of the number.
+   *
+   * `P0` is the character immediately before the first digit and `X0` the one immediately after
+   * the last, so `$1.00` and `($1.00)` agree that `$` is `P0` and disagree only about the bracket
+   * that `($1.00)` also has. A token with no digits to sit against, which a formatter should never
+   * produce, falls back to its position in the string.
+   */
+  private fun affixKey(index: Int, firstDigit: Int, lastDigit: Int): String = when {
+    firstDigit >= 0 && index < firstDigit -> "P${firstDigit - index - 1}"
+    lastDigit >= 0 && index > lastDigit -> "X${index - lastDigit - 1}"
+    else -> "O$index"
   }
 
   private fun tokenize(
