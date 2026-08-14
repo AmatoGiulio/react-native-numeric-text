@@ -57,7 +57,7 @@ class SemanticTokenizationTest {
     assertUniqueKeys(slots)
     assertEquals(1, slots.count { it.kind == TokenKind.DECIMAL_SEPARATOR })
     assertEquals(1, slots.count { it.char == "." && it.kind == TokenKind.OTHER })
-    assertEquals(",", slots.single { it.key == "G3" }.char)
+    assertEquals(",", slots.single { it.key == "G3:," }.char)
   }
 
   @Test
