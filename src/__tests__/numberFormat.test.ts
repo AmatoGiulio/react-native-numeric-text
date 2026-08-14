@@ -37,14 +37,18 @@ describe('resolveFormat', () => {
 
 describe('normalizeFormat', () => {
   it('normalizes a currency code before both JS and native see it', () => {
-    expect(normalizeFormat({ style: 'currency', currency: 'usd' })).toMatchObject({
+    expect(
+      normalizeFormat({ style: 'currency', currency: 'usd' })
+    ).toMatchObject({
       style: 'currency',
       currency: 'USD',
     });
   });
 
   it('drops a malformed currency code instead of letting platforms disagree', () => {
-    expect(normalizeFormat({ style: 'currency', currency: 'NOPE' })).toMatchObject({
+    expect(
+      normalizeFormat({ style: 'currency', currency: 'NOPE' })
+    ).toMatchObject({
       style: 'decimal',
     });
   });
@@ -192,9 +196,9 @@ describe('intlOptions', () => {
     expect(intlOptions({ maximumFractionDigits: 1 })).not.toHaveProperty(
       'minimumFractionDigits'
     );
-    expect(intlOptions({ maximumFractionDigits: 1 }).maximumFractionDigits).toBe(
-      1
-    );
+    expect(
+      intlOptions({ maximumFractionDigits: 1 }).maximumFractionDigits
+    ).toBe(1);
   });
 });
 
