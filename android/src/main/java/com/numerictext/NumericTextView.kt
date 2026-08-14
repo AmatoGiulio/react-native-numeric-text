@@ -25,6 +25,7 @@ import kotlin.math.ceil
 import kotlin.math.floor
 import kotlin.math.max
 import kotlin.math.roundToInt
+
 /**
  * Android numericText renderer. The complete formatted line is shaped and rasterized once, then
  * persistent STACK entries animate keyed slices of that immutable raster.
@@ -47,6 +48,7 @@ class NumericTextView(context: Context) : View(context), Choreographer.FrameCall
   private var settledText: String = "0"
   private var targetText: String = "0"
   private var hasSettledOnce = false
+  private var formatTransitionPending = false
 
   /** Everything about the shape of the number, as `src/numberFormat.ts` resolved it. */
   private var formatSpec = NumericFormatSpec()
@@ -126,22 +128,20 @@ class NumericTextView(context: Context) : View(context), Choreographer.FrameCall
     ceil(lineWidthOf(text) + 2f * hHeadroom() + paddingLeft + paddingRight).toInt()
 
   override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
-  val h = textHeightPx
-  val contentWidth = if (engine.isRunning) max(measureOldWidth, measureNewWidth)
-  else lineWidthOf(settledText.ifEmpty { "0" })
-  
-  val dw = ceil(contentWidth + 2f * hHeadroom() + paddingLeft + paddingRight).toInt()
-  
+    val h = textHeightPx
+    val contentWidth = if (engine.isRunning) max(measureOldWidth, measureNewWidth)
+    else lineWidthOf(settledText.ifEmpty { "0" })
+
+    val dw = ceil(contentWidth + 2f * hHeadroom() + paddingLeft + paddingRight).toInt()
+
     val vHeadroom = h * 1.2f
-  val dh = ceil(h + 2f * vHeadroom + paddingTop + paddingBottom).toInt()
-  
-  setMeasuredDimension(
-    resolveSize(maxOf(dw, suggestedMinimumWidth), widthMeasureSpec),
-    resolveSize(maxOf(dh, suggestedMinimumHeight), heightMeasureSpec),
-  )
-}
+    val dh = ceil(h + 2f * vHeadroom + paddingTop + paddingBottom).toInt()
 
-
+    setMeasuredDimension(
+      resolveSize(maxOf(dw, suggestedMinimumWidth), widthMeasureSpec),
+      resolveSize(maxOf(dh, suggestedMinimumHeight), heightMeasureSpec),
+    )
+  }
 
   override fun onAttachedToWindow() {
     super.onAttachedToWindow()
@@ -157,6 +157,7 @@ class NumericTextView(context: Context) : View(context), Choreographer.FrameCall
     endAnimationRenderPath()
     super.onDetachedFromWindow()
   }
+
   private var edgeFadeGradient: LinearGradient? = null
   private var edgeFadeMaskPaint: Paint? = null
   private val softwareBlurCache = HashMap<Int, BlurMaskFilter>()
@@ -361,7 +362,6 @@ class NumericTextView(context: Context) : View(context), Choreographer.FrameCall
     canvas.drawRenderNode(node)
   }
 
-
   @SuppressLint("NewApi")
   private fun effectFor(lengthPx: Float): RenderEffect? {
     if (lengthPx < BLUR_MIN_PX) return null
@@ -433,14 +433,18 @@ class NumericTextView(context: Context) : View(context), Choreographer.FrameCall
 
   private fun startOrRetarget() {
     val formatted = formatNumber(numericValue)
-    if (formatted == targetText && engine.isRunning) return
-    if (formatted == settledText && !engine.isRunning) return
+    if (!formatTransitionPending) {
+      if (formatted == targetText && engine.isRunning) return
+      if (formatted == settledText && !engine.isRunning) return
+    }
 
     val next = preparedTextOf(formatted)
-    val oldWidth = if (engine.isRunning) engine.targetWidth() else lineWidthOf(settledText)
+    val oldWidth =
+      if (engine.isRunning || formatTransitionPending) engine.targetWidth()
+      else lineWidthOf(settledText)
     val direction = resolveDirection(numericValue, if (engine.isRunning) targetValue else settledValue)
 
-    if (!engine.isRunning && targetText == settledText) {
+    if (!engine.isRunning && targetText == settledText && !formatTransitionPending) {
       val current = preparedTextOf(settledText)
       engine.reset(current.layout, settledText, textHeightPx, current.raster.id, appleBlurLengthPx())
     }
@@ -455,6 +459,7 @@ class NumericTextView(context: Context) : View(context), Choreographer.FrameCall
         next.layout, formatted, direction, textHeightPx, animationDurationMs, next.raster.id,
         appleBlurLengthPx(),
       )
+      formatTransitionPending = false
       engine.snapToTarget()
       finishMotion()
       return
@@ -464,6 +469,7 @@ class NumericTextView(context: Context) : View(context), Choreographer.FrameCall
       next.layout, formatted, direction, textHeightPx, animationDurationMs, next.raster.id,
       appleBlurLengthPx(),
     )
+    formatTransitionPending = false
     beginAnimationRenderPath()
     prunePreparedTextCache()
     updateContentDescription()
@@ -523,31 +529,43 @@ class NumericTextView(context: Context) : View(context), Choreographer.FrameCall
   /**
    * Rebuilds the formatter after a formatting prop changed, and re-checks the typeface with it.
    *
-   * The second half is what a currency needs. The bundled face is a subset, and which glyphs the
-   * view is about to need depends on the format as much as on the locale: `USD` in `en-US` wants
-   * `$`, `currencyDisplay: 'name'` wants a run of letters, and the accounting form wants brackets.
-   * Re-resolving the typeface here keeps the fallback to the system font a decision about the
-   * characters that will actually be drawn. It is compared before it is applied because
-   * `recalcTextPaint` throws away every cached raster, which is far too expensive to do on a prop
-   * update that did not change the answer.
+   * During a simultaneous format + value transaction the old raster must remain addressable until
+   * the new target has been installed. A formatter may change the selected typeface (for example
+   * when moving into an Arabic currency), so that preservation has to survive recalcTextPaint too.
    */
-  private fun recalcFormatter() {
+  private fun recalcFormatter(preservePreparedRasters: Boolean = false) {
     formatter = NumericTextFormatter.of(formatSpec)
-    if (textPaint.typeface != resolveTypeface()) recalcTextPaint()
+    if (textPaint.typeface != resolveTypeface()) {
+      recalcTextPaint(preservePreparedRasters)
+    }
   }
 
   private fun formatNumber(value: Double): String = formatter.format(value)
+
+  internal fun setFormatSpec(value: NumericFormatSpec, deferReformat: Boolean) {
+    if (value == formatSpec) return
+    formatSpec = value
+    recalcFormatter(preservePreparedRasters = deferReformat)
+
+    if (deferReformat) {
+      // Key lookups from now on belong to the final formatter, while preparedById still owns the
+      // immutable old raster referenced by the engine.
+      preparedByKey.clear()
+      formatTransitionPending = true
+    } else {
+      formatTransitionPending = false
+      reformatAtRest()
+    }
+  }
 
   /** Applies [change] to the formatting props, and reformats if it changed anything. */
   private fun updateFormat(change: (NumericFormatSpec) -> NumericFormatSpec) {
     val next = change(formatSpec)
     if (next == formatSpec) return
-    formatSpec = next
-    recalcFormatter()
-    reformatAtRest()
+    setFormatSpec(next, deferReformat = false)
   }
 
-  private fun recalcTextPaint() {
+  private fun recalcTextPaint(preservePreparedRasters: Boolean = false) {
     textPaint.color = numericTextColor
     textPaint.textSize = numericFontSize * resources.displayMetrics.scaledDensity
     textPaint.isAntiAlias = true
@@ -559,7 +577,7 @@ class NumericTextView(context: Context) : View(context), Choreographer.FrameCall
     fmDescent = metrics.descent
     textHeightPx = metrics.descent - metrics.ascent
     lineGeometryCache.clear()
-    clearPreparedTextCache()
+    if (preservePreparedRasters) preparedByKey.clear() else clearPreparedTextCache()
     paintGeneration++
     edgeFadeGradient = null
     edgeFadeMaskPaint = null
@@ -602,18 +620,21 @@ class NumericTextView(context: Context) : View(context), Choreographer.FrameCall
   }
 
   private fun prunePreparedTextCache() {
-    if (preparedByKey.size <= RASTER_CACHE_TARGET) return
-
     val referenced = engine.referencedRasterIds()
-    val iterator = preparedByKey.entries.iterator()
-    while (preparedByKey.size > RASTER_CACHE_TARGET && iterator.hasNext()) {
-      val entry = iterator.next()
-      val id = entry.value.raster.id
-      if (id !in referenced) {
-        preparedById.remove(id)
-        iterator.remove()
+
+    if (preparedByKey.size > RASTER_CACHE_TARGET) {
+      val iterator = preparedByKey.entries.iterator()
+      while (preparedByKey.size > RASTER_CACHE_TARGET && iterator.hasNext()) {
+        val entry = iterator.next()
+        val id = entry.value.raster.id
+        if (id !in referenced) iterator.remove()
       }
     }
+
+    val keepIds = HashSet<Int>(preparedByKey.size + referenced.size)
+    for (prepared in preparedByKey.values) keepIds.add(prepared.raster.id)
+    keepIds.addAll(referenced)
+    preparedById.keys.retainAll(keepIds)
   }
 
   private fun lineGeometryOf(text: String): TextLineGeometry {
@@ -662,6 +683,7 @@ class NumericTextView(context: Context) : View(context), Choreographer.FrameCall
       settledText = formatNumber(value)
       targetText = settledText
       hasSettledOnce = true
+      formatTransitionPending = false
       val prepared = preparedTextOf(settledText)
       engine.reset(prepared.layout, settledText, textHeightPx, prepared.raster.id, appleBlurLengthPx())
       updateContentDescription()
@@ -720,6 +742,7 @@ class NumericTextView(context: Context) : View(context), Choreographer.FrameCall
     val next = value.coerceAtLeast(4f)
     if (next == numericFontSize) return
     numericFontSize = next
+    formatTransitionPending = false
     recalcTextPaint()
     val prepared = preparedTextOf(targetText)
     engine.reset(prepared.layout, targetText, textHeightPx, prepared.raster.id, appleBlurLengthPx())
@@ -730,6 +753,7 @@ class NumericTextView(context: Context) : View(context), Choreographer.FrameCall
   fun setFontWeight(value: String) {
     if (value == numericFontWeight) return
     numericFontWeight = value
+    formatTransitionPending = false
     recalcTextPaint()
     val prepared = preparedTextOf(targetText)
     engine.reset(prepared.layout, targetText, textHeightPx, prepared.raster.id, appleBlurLengthPx())
@@ -740,6 +764,7 @@ class NumericTextView(context: Context) : View(context), Choreographer.FrameCall
   fun setFontFamily(value: String) {
     if (value == numericFontFamily) return
     numericFontFamily = value
+    formatTransitionPending = false
     recalcTextPaint()
     val prepared = preparedTextOf(targetText)
     engine.reset(prepared.layout, targetText, textHeightPx, prepared.raster.id, appleBlurLengthPx())
