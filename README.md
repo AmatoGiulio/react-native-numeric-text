@@ -33,7 +33,11 @@ The platform strategy is intentionally asymmetric:
 
 The goal is not to pretend both platforms render text identically. The goal is to give the same React Native component the same class of polished numeric interaction on both platforms.
 
-This project is independent and is not affiliated with Expo or Apple.
+The formatting API is a second borrowed idea. [`number-flow`](https://github.com/barvian/number-flow) by Maxwell Barvian solves the same problem on the web, and its answer to "how should a component be told what shape a number takes" is one `format` object shaped like `Intl.NumberFormatOptions` rather than a growing row of flat props. That shape is taken from it directly, including the choice to pass a bound through untouched so `Intl`'s own defaulting rule decides the rest.
+
+The two libraries reach it from opposite ends: `number-flow` renders real text nodes and lets the browser lay them out, so it inherits `Intl` for free; here the string has to be produced natively on each platform, by `NumberFormatter` and `android.icu`, because the renderers animate the structure of a formatted number rather than a string handed to them. The API is the same either way, which is the point of copying it.
+
+This project is independent and is not affiliated with Expo, Apple, or `number-flow`.
 
 ## Why numeric text needs its own transition model
 
@@ -131,6 +135,8 @@ Formatting is resolved before the transition is built; separators are not decora
 This keeps locale-specific punctuation structurally associated with the digits while the value changes.
 
 The `format` prop is a subset of `Intl.NumberFormatOptions`, and each platform resolves it with its own formatter: `NumberFormatter` on iOS, `android.icu` on Android, `Intl` on web. The string is produced where it is drawn, because the renderer animates the structure of a formatted number rather than a string handed to it ready-made.
+
+The shape of this prop is borrowed from [`number-flow`](https://github.com/barvian/number-flow); see [Origin](#origin).
 
 `format` is an object, so `NumericText` will re-render whenever the parent does unless you keep it stable. Hoist it to module scope or wrap it in `useMemo` if you rely on the memo skipping renders.
 

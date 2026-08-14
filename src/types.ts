@@ -4,6 +4,11 @@ import type { StyleProp, TextStyle } from 'react-native';
  * How to turn the value into the number that is drawn: a subset of `Intl.NumberFormatOptions`,
  * resolved natively by `NumberFormatter` on iOS and `android.icu` on Android.
  *
+ * The shape is taken from `number-flow` (https://github.com/barvian/number-flow), which answers
+ * the same question on the web with one `format` object rather than a growing row of flat props.
+ * Borrowed with it: passing a bound through untouched so `Intl`'s own defaulting rule decides the
+ * rest, instead of guessing a default here and handing each platform a number it did not ask for.
+ *
  * It is a subset because every option here has to mean the same thing on both platforms at the
  * versions this library supports, and has to survive being animated: the renderers transition the
  * *structure* of a formatted number, so the string has to be produced where it is drawn rather
