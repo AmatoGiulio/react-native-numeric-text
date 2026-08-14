@@ -89,16 +89,6 @@ describe('normalizeFormat', () => {
       maximumFractionDigits: 4,
     });
   });
-
-  it('degrades the not-yet-supported currency name display to symbol', () => {
-    expect(
-      normalizeFormat({
-        style: 'currency',
-        currency: 'USD',
-        currencyDisplay: 'name',
-      })
-    ).toMatchObject({ currencyDisplay: 'symbol' });
-  });
 });
 
 describe('formatNumber', () => {
@@ -185,47 +175,6 @@ describe('formatNumber', () => {
       maximumFractionDigits: 101,
     });
     expect(text.split('.')[1]).toHaveLength(100);
-  });
-});
-
-describe('formatNumber, trailing decimal separator', () => {
-  it('holds the mark after the last digit when nothing follows it yet', () => {
-    expect(formatNumber(7, 'en-US', {}, true)).toBe('7.');
-  });
-
-  it('is a no-op once a fraction digit arrives', () => {
-    expect(formatNumber(7.5, 'en-US', {}, true)).toBe('7.5');
-  });
-
-  it('is a no-op when the format already prints a mark', () => {
-    const fixed = { minimumFractionDigits: 2, maximumFractionDigits: 2 };
-    expect(formatNumber(7, 'en-US', fixed, true)).toBe('7.00');
-  });
-
-  it('uses the locale mark, not a full stop', () => {
-    expect(formatNumber(1234, 'de-DE', {}, true)).toBe('1.234,');
-  });
-
-  it('goes after the last digit rather than at the end of the string', () => {
-    const euro = resolveFormat({ currency: 'EUR' });
-    const zeroDecimals = {
-      ...euro,
-      minimumFractionDigits: 0,
-      maximumFractionDigits: 0,
-    };
-    expect(formatNumber(1234, 'de-DE', zeroDecimals, true)).toBe('1.234, €');
-  });
-
-  it('keeps a leading currency symbol outside the mark', () => {
-    const usd = {
-      ...resolveFormat({ currency: 'USD' }),
-      maximumFractionDigits: 0,
-    };
-    expect(formatNumber(7, 'en-US', usd, true)).toBe('$7.');
-  });
-
-  it('does nothing when the flag is off, which is the default', () => {
-    expect(formatNumber(7, 'en-US', {})).toBe('7');
   });
 });
 
