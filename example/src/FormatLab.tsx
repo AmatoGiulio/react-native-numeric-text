@@ -112,8 +112,8 @@ export function FormatLab() {
   const selectPreset = useCallback(
     (presetIndex: number) => {
       clearBurst();
-      // Change format and value in one React update. This intentionally exercises the Android
-      // prop-application path we still need to compare with iOS.
+      // Change format and value in one React update. Structural format changes should commit as one
+      // atomic snap; subsequent A/B and burst changes exercise the numeric transition itself.
       setState({ presetIndex, side: 1 });
     },
     [clearBurst]
@@ -248,7 +248,7 @@ const styles = StyleSheet.create({
   },
   number: {
     color: INK,
-    fontSize: 64,
+    fontSize: 38,
     fontWeight: '700',
     fontVariant: ['tabular-nums'],
   },
