@@ -4,6 +4,7 @@ import {
   formatNumber,
   intlOptions,
   nativeFormatProps,
+  normalizeFormat,
   resolveFormat,
 } from '../numberFormat';
 
@@ -30,9 +31,73 @@ describe('resolveFormat', () => {
   });
 
   it('leaves an absent prop absent rather than defaulting it', () => {
-    // The renderers need to tell "0 fraction digits" from "the currency's own count", so a prop
-    // nobody set must not arrive as a number.
     expect(resolveFormat({})).toEqual({});
+  });
+});
+
+describe('normalizeFormat', () => {
+  it('normalizes a currency code before both JS and native see it', () => {
+    expect(normalizeFormat({ style: 'currency', currency: 'usd' })).toMatchObject({
+      style: 'currency',
+      currency: 'USD',
+    });
+  });
+
+  it('drops a malformed currency code instead of letting platforms disagree', () => {
+    expect(normalizeFormat({ style: 'currency', currency: 'NOPE' })).toMatchObject({
+      style: 'decimal',
+    });
+  });
+
+  it('keeps accounting symbol-only', () => {
+    const normalized = normalizeFormat({
+      style: 'currency',
+      currency: 'USD',
+      currencyDisplay: 'code',
+      currencySign: 'accounting',
+    });
+    expect(normalized.currencyDisplay).toBe('code');
+    expect(normalized.currencySign).toBe('standard');
+  });
+
+  it('clamps digit bounds to the Intl contract', () => {
+    expect(
+      normalizeFormat({
+        minimumIntegerDigits: 0,
+        minimumFractionDigits: -1,
+        maximumFractionDigits: 500,
+        minimumSignificantDigits: 0,
+        maximumSignificantDigits: 99,
+      })
+    ).toMatchObject({
+      minimumIntegerDigits: 1,
+      minimumFractionDigits: 0,
+      maximumFractionDigits: 100,
+      minimumSignificantDigits: 1,
+      maximumSignificantDigits: 21,
+    });
+  });
+
+  it('never leaves a maximum below its minimum', () => {
+    expect(
+      normalizeFormat({
+        minimumFractionDigits: 4,
+        maximumFractionDigits: 1,
+      })
+    ).toMatchObject({
+      minimumFractionDigits: 4,
+      maximumFractionDigits: 4,
+    });
+  });
+
+  it('degrades the not-yet-supported currency name display to symbol', () => {
+    expect(
+      normalizeFormat({
+        style: 'currency',
+        currency: 'USD',
+        currencyDisplay: 'name',
+      })
+    ).toMatchObject({ currencyDisplay: 'symbol' });
   });
 });
 
@@ -51,29 +116,19 @@ describe('formatNumber', () => {
   });
 
   it('puts the symbol where the locale puts it', () => {
-    // Written escaped because the space before the symbol is a no-break one, which is exactly the
-    // kind of character the transition has to key on and a reader cannot see.
     expect(
       formatNumber(1234.5, 'de-DE', resolveFormat({ currency: 'EUR' }))
     ).toBe('1.234,50\u00a0€');
   });
 
-  it('writes the currency as a code or a name on request', () => {
-    const currency = 'USD';
+  it('writes the currency as an ISO code on request', () => {
     expect(
       formatNumber(1234.5, 'en-US', {
         style: 'currency',
-        currency,
+        currency: 'USD',
         currencyDisplay: 'code',
       })
     ).toBe('USD\u00a01,234.50');
-    expect(
-      formatNumber(1234.5, 'en-US', {
-        style: 'currency',
-        currency,
-        currencyDisplay: 'name',
-      })
-    ).toBe('1,234.50 US dollars');
   });
 
   it('brackets a negative amount in the accounting sign', () => {
@@ -86,6 +141,17 @@ describe('formatNumber', () => {
     ).toBe('($1,234.50)');
   });
 
+  it('does not apply accounting to code display', () => {
+    expect(
+      formatNumber(-1234.5, 'en-US', {
+        style: 'currency',
+        currency: 'USD',
+        currencyDisplay: 'code',
+        currencySign: 'accounting',
+      })
+    ).toBe('-USD\u00a01,234.50');
+  });
+
   it('multiplies a percentage by a hundred and drops its decimals', () => {
     expect(formatNumber(0.425, 'en-US', { style: 'percent' })).toBe('43%');
   });
@@ -94,32 +160,35 @@ describe('formatNumber', () => {
     expect(formatNumber(9, 'en-US', { minimumIntegerDigits: 2 })).toBe('09');
   });
 
-  it('rounds a half away from zero, which is Intls rule and neither platforms', () => {
-    // Both native formatters are told to do the same. The three implementations disagreeing about
-    // whether 2.5 reads as 2 or 3 would be a bug, so it is not left to each platform's default.
+  it('rounds a half away from zero', () => {
     expect(formatNumber(2.5, 'en-US', { maximumFractionDigits: 0 })).toBe('3');
     expect(formatNumber(-2.5, 'en-US', { maximumFractionDigits: 0 })).toBe(
       '-3'
     );
   });
 
-  it('falls back to a plain number rather than throwing on an unknown currency', () => {
+  it('falls back to a plain number on a malformed currency', () => {
     expect(
       formatNumber(12, 'en-US', { style: 'currency', currency: 'NOPE' })
     ).toBe('12');
   });
 
   it('treats a currency style with no code as a plain number', () => {
-    // Intl throws on this pair. The renderers cannot, so all three agree to ignore it.
     expect(formatNumber(1234.5, 'en-US', { style: 'currency' })).toBe(
       '1,234.5'
     );
   });
+
+  it('does not fall back to a short JS string for an oversized fraction bound', () => {
+    const text = formatNumber(1, 'en-US', {
+      minimumFractionDigits: 101,
+      maximumFractionDigits: 101,
+    });
+    expect(text.split('.')[1]).toHaveLength(100);
+  });
 });
 
 describe('formatNumber, trailing decimal separator', () => {
-  // `value` is a number and a number cannot hold `7.`, so typing 7 . 5 produces 7, 7, 7.5. The
-  // flag is what gives the mark somewhere to live between the second and third keystroke.
   it('holds the mark after the last digit when nothing follows it yet', () => {
     expect(formatNumber(7, 'en-US', {}, true)).toBe('7.');
   });
@@ -138,7 +207,6 @@ describe('formatNumber, trailing decimal separator', () => {
   });
 
   it('goes after the last digit rather than at the end of the string', () => {
-    // de-DE writes the symbol last. Appending blindly would put the mark beyond the euro sign.
     const euro = resolveFormat({ currency: 'EUR' });
     const zeroDecimals = {
       ...euro,
@@ -163,8 +231,6 @@ describe('formatNumber, trailing decimal separator', () => {
 
 describe('intlOptions', () => {
   it('never asks for a maximum below its minimum', () => {
-    // Intl throws on that pair; the native formatters clamp. Clamping here keeps a bad prop from
-    // taking a render down.
     const options = intlOptions({
       minimumFractionDigits: 4,
       maximumFractionDigits: 1,
@@ -173,9 +239,12 @@ describe('intlOptions', () => {
     expect(() => (1).toLocaleString('en-US', options)).not.toThrow();
   });
 
-  it('passes a bound through untouched so Intl applies its own default to the other', () => {
+  it('passes a bound through untouched when it is already valid', () => {
     expect(intlOptions({ maximumFractionDigits: 1 })).not.toHaveProperty(
       'minimumFractionDigits'
+    );
+    expect(intlOptions({ maximumFractionDigits: 1 }).maximumFractionDigits).toBe(
+      1
     );
   });
 });
@@ -206,5 +275,14 @@ describe('nativeFormatProps', () => {
     const props = nativeFormatProps({ style: 'currency' });
     expect(props.numberStyle).toBe('decimal');
     expect(props.currency).toBe('');
+  });
+
+  it('hands native the same clamped bound JS uses', () => {
+    const props = nativeFormatProps({
+      minimumFractionDigits: 101,
+      maximumFractionDigits: 500,
+    });
+    expect(props.minimumFractionDigits).toBe(100);
+    expect(props.maximumFractionDigits).toBe(100);
   });
 });
