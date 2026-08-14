@@ -32,10 +32,10 @@ class NumericTextViewManager : SimpleViewManager<NumericTextView>(),
    * value. Applying locale/currency/digit options one-by-one lets intermediate formats retarget the
    * persistent glyph stack, so an affix from the previous format can survive into the next one.
    *
-   * Stage the whole React transaction here and commit it once from onAfterUpdateTransaction. Format
-   * changes are settled synchronously with motion temporarily disabled; value is applied last, so a
-   * simultaneous format + value render performs exactly one numeric transition using the final
-   * formatter.
+   * Stage the whole React transaction here and commit it once from onAfterUpdateTransaction. A
+   * format change is structural rather than numeric: the whole transaction is settled with motion
+   * disabled, including a simultaneous value change. Only value-only transactions are allowed to
+   * roll.
    */
   private fun pending(view: NumericTextView?): PendingProps? {
     if (view == null) return null
@@ -156,7 +156,9 @@ class NumericTextViewManager : SimpleViewManager<NumericTextView>(),
     props.textColor?.let(view::setTextColor)
 
     if (formatChanged) {
-      // The format is structural. Do not let intermediate formatter states enter the roll engine.
+      // A format change changes the identity of the whole rendered string. Keep motion disabled
+      // through the value assignment as well: otherwise the old numeric value is reinterpreted in
+      // the new domain (for example 1234.5 -> 123450%) and then animated to the new value.
       view.setReduceMotion("always")
       props.locale?.let(view::setLocale)
       props.numberStyle?.let(view::setNumberStyle)
@@ -170,12 +172,13 @@ class NumericTextViewManager : SimpleViewManager<NumericTextView>(),
       props.maximumFractionDigits?.let(view::setMaximumFractionDigits)
       props.minimumSignificantDigits?.let(view::setMinimumSignificantDigits)
       props.maximumSignificantDigits?.let(view::setMaximumSignificantDigits)
+      props.value?.let(view::setValue)
       view.setReduceMotion(finalReduceMotion)
-    } else {
-      props.reduceMotion?.let(view::setReduceMotion)
+      return
     }
 
-    // Value is deliberately last: it is the only part of the transaction allowed to roll.
+    props.reduceMotion?.let(view::setReduceMotion)
+    // Value-only updates preserve the formatter and are the only transactions that should roll.
     props.value?.let(view::setValue)
   }
 
