@@ -78,6 +78,16 @@ internal class NumericRollEngine {
     private const val MAX_DURATION_MULTIPLE = 1.25f
     private const val RESPONSE_SECONDS = 0.30f
 
+    // Frame-aligned iOS GT shows an affix/sign topology change beginning before the digit roll by
+    // roughly one 85 ms retrigger interval. Keep ordinary numeric carries unchanged; only SIGN/OTHER
+    // insertion/removal earns this lead.
+    private const val AFFIX_DIGIT_LEAD_SECONDS = 0.085f
+
+    // Parentheses, signs and currency prose on SwiftUI leave mostly through presence + blur near the
+    // baseline. Driving them through a full digit lane made Android remove them far too quickly.
+    private const val AFFIX_EXIT_DISTANCE = 0.45f
+    private const val AFFIX_EXIT_ALPHA_SLOWDOWN = 1.35f
+
     private const val POSITION_EPSILON = 0.001f
     private const val VELOCITY_EPSILON = 0.005f
     private const val ENTRY_CULL_ALPHA = 0.004f
@@ -223,6 +233,10 @@ internal class NumericRollEngine {
       }
     }
 
+    val affixTopologyChanged =
+      layout.any { structuralEnterKeys.contains(it.key) && isAffixKind(it.kind) } ||
+        previousSlots.any { structuralRemovalKeys.contains(it.key) && isAffixKind(it.kind) }
+
     for ((key, column) in columns) {
       column.retiring = incomingByKey[key] == null
     }
@@ -267,8 +281,14 @@ internal class NumericRollEngine {
             (phase + 0.5) *
             1_000_000_000.0
         ).toLong()
+      val digitLeadNanos =
+        if (affixTopologyChanged && column.kind == TokenKind.DIGIT) {
+          (AFFIX_DIGIT_LEAD_SECONDS.toDouble() * 1_000_000_000.0).toLong()
+        } else {
+          0L
+        }
 
-      val requestedDueNanos = eventNanos + waveDelayNanos
+      val requestedDueNanos = eventNanos + digitLeadNanos + waveDelayNanos
       val previousPending = column.pending.lastOrNull()
 
       val dueAtNanos =
@@ -493,7 +513,7 @@ internal class NumericRollEngine {
   private fun commitRemove(column: Column, direction: Int) {
     for (entry in column.entries) {
       if (!entry.superseded) {
-        supersede(entry, direction)
+        supersede(entry, direction, column.kind)
       }
     }
   }
@@ -517,7 +537,7 @@ internal class NumericRollEngine {
 
     for (entry in column.entries) {
       if (!entry.superseded) {
-        supersede(entry, direction)
+        supersede(entry, direction, column.kind)
       }
     }
 
@@ -555,10 +575,11 @@ internal class NumericRollEngine {
     current.rasterId = rasterId
   }
 
-  private fun supersede(entry: Entry, direction: Int) {
+  private fun supersede(entry: Entry, direction: Int, kind: TokenKind) {
+    val exitDistance = if (isAffixKind(kind)) AFFIX_EXIT_DISTANCE else 1f
     entry.superseded = true
-    entry.target = direction.toFloat()
-    entry.posTarget = direction.toFloat()
+    entry.target = direction.toFloat() * exitDistance
+    entry.posTarget = direction.toFloat() * exitDistance
     entry.blurTarget = 1f
     entry.alphaTarget = 0f
   }
@@ -647,6 +668,9 @@ internal class NumericRollEngine {
     if (column.charAt[from] == slot.char) return from
     return from - direction
   }
+
+  private fun isAffixKind(kind: TokenKind): Boolean =
+    kind == TokenKind.SIGN || kind == TokenKind.OTHER
 
   private fun wavePhases(
     layout: List<KeyedSlot>,
@@ -759,8 +783,11 @@ internal class NumericRollEngine {
       // exactly. This keeps the validated overlap normalisation and the "all digits dance" retrigger.
       val aError = entry.alphaTarget - entry.alpha
       if (abs(aError) > POSITION_EPSILON || abs(entry.alphaVelocity) > VELOCITY_EPSILON) {
+        val affixExitSlowdown =
+          if (entry.superseded && isAffixKind(column.kind)) AFFIX_EXIT_ALPHA_SLOWDOWN else 1f
         val localAlphaClock =
-          alphaClock / (1f + (STACK_FLIP_SOFT - 1f) * column.flipRaw)
+          alphaClock /
+            ((1f + (STACK_FLIP_SOFT - 1f) * column.flipRaw) * affixExitSlowdown)
 
         entry.alphaVelocity +=
           (
