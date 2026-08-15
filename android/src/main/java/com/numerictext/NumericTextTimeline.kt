@@ -83,6 +83,13 @@ internal class NumericRollEngine {
     // insertion/removal earns this lead.
     private const val AFFIX_DIGIT_LEAD_SECONDS = 0.085f
 
+    // Raw-value-aligned GT shows SwiftUI holding the old structure briefly before removal and
+    // introducing the replacement structure only around the same point the numeric roll becomes
+    // visible. These delays apply only to structural SIGN/OTHER events, never to ordinary digits,
+    // decimal/group separators, or same-format A/B transitions.
+    private const val AFFIX_REMOVE_DELAY_SECONDS = 0.050f
+    private const val AFFIX_ENTER_DELAY_SECONDS = 0.095f
+
     // Parentheses, signs and currency prose on SwiftUI leave mostly through presence + blur near the
     // baseline. Driving them through a full digit lane made Android remove them far too quickly.
     private const val AFFIX_EXIT_DISTANCE = 0.45f
@@ -287,8 +294,21 @@ internal class NumericRollEngine {
         } else {
           0L
         }
+      val affixDelaySeconds =
+        if (isAffixKind(column.kind)) {
+          when (kind) {
+            PendingKind.REMOVE -> AFFIX_REMOVE_DELAY_SECONDS
+            PendingKind.ENTER -> AFFIX_ENTER_DELAY_SECONDS
+            PendingKind.CHANGE -> 0f
+          }
+        } else {
+          0f
+        }
+      val affixDelayNanos =
+        (affixDelaySeconds.toDouble() * 1_000_000_000.0).toLong()
 
-      val requestedDueNanos = eventNanos + digitLeadNanos + waveDelayNanos
+      val requestedDueNanos =
+        eventNanos + digitLeadNanos + affixDelayNanos + waveDelayNanos
       val previousPending = column.pending.lastOrNull()
 
       val dueAtNanos =
