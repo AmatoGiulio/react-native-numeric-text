@@ -229,7 +229,6 @@ internal class NumericRollEngine {
     }
 
     val previousByKey = previousSlots.associateBy { it.key }
-    val previousTargetRasterId = targetRasterId
 
     targetText = text
     targetRasterId = rasterId
@@ -265,18 +264,15 @@ internal class NumericRollEngine {
         }
       }
     } else {
-      // A per-entry X pin belongs only to the format transition that created it. When the next
-      // transaction keeps the same format and changes only the value, continuing glyphs must return
-      // to the first-release horizontal reflow. Preserve already-superseded old-format ghosts at
-      // their pinned X, but release the current target raster without a visual jump.
+      // Pins belong only to a structural format roll. As soon as the new request resolves to an
+      // ordinary/current-layout update, release every active entry from its pin. Superseded ghosts
+      // keep their own historical X, so this restores first-release reflow without moving old glyphs.
       for ((key, column) in columns) {
         if (!previousByKey.containsKey(key) || !incomingByKey.containsKey(key)) continue
 
         val currentPinned =
           column.entries.lastOrNull {
-            !it.superseded &&
-              it.rasterId == previousTargetRasterId &&
-              !it.pinnedX.isNaN()
+            !it.superseded && !it.pinnedX.isNaN()
           }
         if (currentPinned != null) {
           column.x = currentPinned.pinnedX
@@ -284,12 +280,12 @@ internal class NumericRollEngine {
         }
 
         for (entry in column.entries) {
-          if (!entry.superseded && entry.rasterId == previousTargetRasterId) {
+          if (!entry.superseded) {
             entry.pinnedX = Float.NaN
           }
         }
         for (pending in column.pending) {
-          if (pending.kind != PendingKind.REMOVE && pending.rasterId == previousTargetRasterId) {
+          if (pending.kind != PendingKind.REMOVE) {
             pending.pinnedX = Float.NaN
           }
         }
@@ -318,6 +314,7 @@ internal class NumericRollEngine {
           structuralEnterKeys.contains(slot.key) ||
           geometryChangeKeys.contains(slot.key) ||
           column == null ||
+          column.entries.none { !it.superseded } ||
           stopFor(column, slot, lastDirection) != column.goalStop()
       ) {
         digitEventKeys.add(slot.key)
@@ -421,8 +418,9 @@ internal class NumericRollEngine {
       }
 
       val ordinaryNext = stopFor(column, slot, lastDirection)
+      val needsRevive = column.entries.none { !it.superseded }
       val next =
-        if (formatGeometrySplit && ordinaryNext == column.goalStop()) {
+        if ((formatGeometrySplit || needsRevive) && ordinaryNext == column.goalStop()) {
           column.goalStop() - lastDirection
         } else {
           ordinaryNext
