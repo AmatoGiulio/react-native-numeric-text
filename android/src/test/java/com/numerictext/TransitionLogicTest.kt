@@ -28,7 +28,7 @@ class TransitionLogicTest {
   @Test
   fun integerDigits_areAnchoredFromTheLeft() {
     assertEquals(
-      mapOf("I0" to "2", "G3" to ",", "I1" to "5", "I2" to "7", "I3" to "6"),
+      mapOf("I0" to "2", "G3:," to ",", "I1" to "5", "I2" to "7", "I3" to "6"),
       keyMap("2,576"),
     )
   }
@@ -46,23 +46,23 @@ class TransitionLogicTest {
     assertEquals("0", next["I1"])
     assertEquals("0", next["I2"])
     assertEquals("0", next["I3"])
-    assertEquals(",", next["G3"])
+    assertEquals(",", next["G3:,"])
   }
 
   @Test
   fun groupSeparator_isStructuralAndBornOnCarry() {
-    assertFalse(keyMap("999").containsKey("G3"))
-    assertEquals(",", keyMap("1,000")["G3"])
+    assertFalse(keyMap("999").containsKey("G3:,"))
+    assertEquals(",", keyMap("1,000")["G3:,"])
   }
 
   @Test
   fun fractions_areAnchoredFromTheDecimalPoint() {
     assertEquals(
-      mapOf("I0" to "1", "DEC" to ".", "F0" to "9"),
+      mapOf("I0" to "1", "DEC:." to ".", "F0" to "9"),
       keyMap("1.9"),
     )
     assertEquals(
-      mapOf("I0" to "2", "DEC" to ".", "F0" to "0"),
+      mapOf("I0" to "2", "DEC:." to ".", "F0" to "0"),
       keyMap("2.0"),
     )
   }
@@ -138,13 +138,13 @@ class TransitionLogicTest {
     assertEquals(".", map["P1"])
     assertEquals("/", map["P2"])
     assertEquals("B", map["P3"])
-    assertEquals(",", map["G3"])
-    assertEquals(".", map["DEC"])
+    assertEquals(",", map["G3:,"])
+    assertEquals(".", map["DEC:."])
     assertEquals("1", map["I0"])
     assertEquals("5", map["F0"])
     assertEquals(TokenKind.OTHER, slots.single { it.key == "P1" }.semanticKind)
-    assertEquals(TokenKind.GROUP_SEPARATOR, slots.single { it.key == "G3" }.semanticKind)
-    assertEquals(TokenKind.DECIMAL_SEPARATOR, slots.single { it.key == "DEC" }.semanticKind)
+    assertEquals(TokenKind.GROUP_SEPARATOR, slots.single { it.key == "G3:," }.semanticKind)
+    assertEquals(TokenKind.DECIMAL_SEPARATOR, slots.single { it.key == "DEC:." }.semanticKind)
   }
 
   @Test
@@ -169,16 +169,23 @@ class TransitionLogicTest {
   }
 
   @Test
-  fun everyVisibleGlyph_usesTheValidatedDigitPhysics() {
+  fun affixesAndSigns_useValidatedDigitPhysics() {
     val slots = keyed("-\$1,234.50%")
 
-    assertTrue(slots.isNotEmpty())
-    assertTrue(slots.all { it.kind == TokenKind.DIGIT })
-    assertEquals(TokenKind.SIGN, slots.single { it.key == "S" }.semanticKind)
-    assertEquals(TokenKind.OTHER, slots.single { it.key == "P0" }.semanticKind)
-    assertEquals(TokenKind.GROUP_SEPARATOR, slots.single { it.key == "G3" }.semanticKind)
-    assertEquals(TokenKind.DECIMAL_SEPARATOR, slots.single { it.key == "DEC" }.semanticKind)
-    assertEquals(TokenKind.OTHER, slots.single { it.key == "X0" }.semanticKind)
+    val sign = slots.single { it.key == "S" }
+    val prefix = slots.single { it.key == "P0" }
+    val suffix = slots.single { it.key == "X0" }
+    assertEquals(TokenKind.DIGIT, sign.kind)
+    assertEquals(TokenKind.DIGIT, prefix.kind)
+    assertEquals(TokenKind.DIGIT, suffix.kind)
+    assertEquals(TokenKind.SIGN, sign.semanticKind)
+    assertEquals(TokenKind.OTHER, prefix.semanticKind)
+    assertEquals(TokenKind.OTHER, suffix.semanticKind)
+
+    val group = slots.single { it.key == "G3:," }
+    val decimal = slots.single { it.key == "DEC:." }
+    assertEquals(TokenKind.GROUP_SEPARATOR, group.kind)
+    assertEquals(TokenKind.DECIMAL_SEPARATOR, decimal.kind)
   }
 
   @Test
@@ -193,7 +200,7 @@ class TransitionLogicTest {
   @Test
   fun tokenBoundsComeFromTheFullLineGeometry() {
     val slots = keyed("1,000")
-    val comma = slots.first { it.key == "G3" }
+    val comma = slots.first { it.key == "G3:," }
     assertEquals(1f, comma.leftFromLeft, 0.001f)
     assertEquals(2f, comma.rightFromLeft, 0.001f)
     assertEquals(5f, comma.totalWidth, 0.001f)
