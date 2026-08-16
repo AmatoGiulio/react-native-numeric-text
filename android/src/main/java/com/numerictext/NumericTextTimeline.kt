@@ -83,12 +83,12 @@ internal class NumericRollEngine {
     // insertion/removal earns this lead.
     private const val AFFIX_DIGIT_LEAD_SECONDS = 0.085f
 
-    // Raw-value-aligned GT shows SwiftUI holding the old structure briefly before removal and
-    // introducing the replacement structure only around the same point the numeric roll becomes
-    // visible. These delays apply only to structural SIGN/OTHER events, never to ordinary digits,
-    // decimal/group separators, or same-format A/B transitions.
-    private const val AFFIX_REMOVE_DELAY_SECONDS = 0.050f
-    private const val AFFIX_ENTER_DELAY_SECONDS = 0.095f
+    // Raw-value-aligned GT shows prefix/sign structure beginning around 50 ms, while a trailing
+    // suffix such as ')' or '%' remains anchored longer on SwiftUI. Keep these delays semantic: the
+    // first-release digit physics stays untouched and same-format numeric changes never enter here.
+    private const val AFFIX_ENTER_DELAY_SECONDS = 0.050f
+    private const val AFFIX_PREFIX_REMOVE_DELAY_SECONDS = 0.050f
+    private const val AFFIX_SUFFIX_REMOVE_DELAY_SECONDS = 0.100f
 
     // Parentheses, signs and currency prose on SwiftUI leave mostly through presence + blur near the
     // baseline. Driving them through a full digit lane made Android remove them far too quickly.
@@ -294,18 +294,8 @@ internal class NumericRollEngine {
         } else {
           0L
         }
-      val affixDelaySeconds =
-        if (isAffixKind(column.kind)) {
-          when (kind) {
-            PendingKind.REMOVE -> AFFIX_REMOVE_DELAY_SECONDS
-            PendingKind.ENTER -> AFFIX_ENTER_DELAY_SECONDS
-            PendingKind.CHANGE -> 0f
-          }
-        } else {
-          0f
-        }
       val affixDelayNanos =
-        (affixDelaySeconds.toDouble() * 1_000_000_000.0).toLong()
+        (affixDelaySeconds(column, kind).toDouble() * 1_000_000_000.0).toLong()
 
       val requestedDueNanos =
         eventNanos + digitLeadNanos + affixDelayNanos + waveDelayNanos
@@ -691,6 +681,23 @@ internal class NumericRollEngine {
 
   private fun isAffixKind(kind: TokenKind): Boolean =
     kind == TokenKind.SIGN || kind == TokenKind.OTHER
+
+  private fun isSuffixAffix(column: Column): Boolean =
+    column.kind == TokenKind.OTHER && column.key.startsWith("X")
+
+  private fun affixDelaySeconds(column: Column, kind: PendingKind): Float {
+    if (!isAffixKind(column.kind)) return 0f
+    return when (kind) {
+      PendingKind.ENTER -> AFFIX_ENTER_DELAY_SECONDS
+      PendingKind.REMOVE ->
+        if (isSuffixAffix(column)) {
+          AFFIX_SUFFIX_REMOVE_DELAY_SECONDS
+        } else {
+          AFFIX_PREFIX_REMOVE_DELAY_SECONDS
+        }
+      PendingKind.CHANGE -> 0f
+    }
+  }
 
   private fun wavePhases(
     layout: List<KeyedSlot>,
