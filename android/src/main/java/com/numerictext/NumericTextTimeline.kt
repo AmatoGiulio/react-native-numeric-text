@@ -103,6 +103,7 @@ internal class NumericRollEngine {
     private const val ENTRY_CULL_ALPHA = 0.004f
     private const val RENDER_ALPHA_EPSILON = 0.01f
     private const val STRUCTURAL_ENTRY_ALPHA = 0.32f
+    private const val GEOMETRY_EPSILON_PX = 0.1f
   }
 
   private enum class PendingKind { CHANGE, REMOVE, ENTER }
@@ -115,6 +116,7 @@ internal class NumericRollEngine {
     val kind: PendingKind,
     val rasterId: Int,
     val replacementAffixExit: Boolean = false,
+    val pinnedX: Float = Float.NaN,
   )
 
   private class Entry(val ch: String, var p: Float, var rasterId: Int) {
@@ -133,6 +135,11 @@ internal class NumericRollEngine {
 
     var superseded = false
     var replacementAffixExit = false
+
+    // Normal numeric transitions keep using Column.x exactly as the first release did. During a
+    // format-geometry split this captures the shaped X for this individual glyph, allowing the old
+    // and new layouts to coexist while both glyphs roll vertically.
+    var pinnedX = Float.NaN
 
     var alpha = 0f
     var alphaVelocity = 0f
@@ -245,6 +252,42 @@ internal class NumericRollEngine {
       }
     }
 
+    // SwiftUI keeps the old shaped layout and the new shaped layout visible at the same time during
+    // a format change. Detect that situation from semantic affix/sign topology rather than physics
+    // kind (SIGN/OTHER deliberately travel through the DIGIT physics path).
+    val formatGeometrySplit =
+      layout.any {
+        structuralEnterKeys.contains(it.key) && isAffixKind(it.semanticKind)
+      } ||
+        previousSlots.any {
+          structuralRemovalKeys.contains(it.key) && isAffixKind(it.semanticKind)
+        } ||
+        layout.any { slot ->
+          val previous = previousByKey[slot.key]
+          previous != null &&
+            (isAffixKind(previous.semanticKind) || isAffixKind(slot.semanticKind)) &&
+            previous.char != slot.char
+        }
+
+    val geometryChangeKeys = HashSet<String>()
+    if (formatGeometrySplit) {
+      for (slot in layout) {
+        val previous = previousByKey[slot.key] ?: continue
+        if (abs(xRel(previous) - xRel(slot)) > GEOMETRY_EPSILON_PX) {
+          geometryChangeKeys.add(slot.key)
+        }
+      }
+
+      // Freeze every currently visible glyph at the X where the old shaped line placed it. The
+      // column is still free to settle internally, but it can no longer drag an outgoing glyph
+      // horizontally across the number while the vertical roll is in progress.
+      for (column in columns.values) {
+        for (entry in column.entries) {
+          if (entry.pinnedX.isNaN()) entry.pinnedX = column.x
+        }
+      }
+    }
+
     val hasAffixEnter =
       layout.any { structuralEnterKeys.contains(it.key) && isAffixKind(it.kind) }
     val hasAffixRemoval =
@@ -264,6 +307,7 @@ internal class NumericRollEngine {
       val column = columns[slot.key]
       if (
         structuralEnterKeys.contains(slot.key) ||
+          geometryChangeKeys.contains(slot.key) ||
           column == null ||
           stopFor(column, slot, lastDirection) != column.goalStop()
       ) {
@@ -287,6 +331,7 @@ internal class NumericRollEngine {
       wavePhase: Int,
       sourceRasterId: Int,
       replacementAffixExit: Boolean = false,
+      pinnedX: Float = Float.NaN,
     ) {
       val phase =
         if (changingCount > 0) wavePhase.coerceIn(0, changingCount - 1) else 0
@@ -332,6 +377,7 @@ internal class NumericRollEngine {
           kind = kind,
           rasterId = sourceRasterId,
           replacementAffixExit = replacementAffixExit,
+          pinnedX = pinnedX,
         )
       )
     }
@@ -340,17 +386,18 @@ internal class NumericRollEngine {
     val oldPhaseByKey = wavePhases(previousSlots, digitEventKeys, changingCount)
 
     for (slot in layout) {
+      val incomingX = xRel(slot)
       var column = columns[slot.key]
 
       if (column == null) {
         column = Column(slot.key, slot.kind)
-        column.x = xRel(slot)
+        column.x = incomingX
         column.targetX = column.x
         columns[slot.key] = column
       }
 
       column.kind = slot.kind
-      column.targetX = xRel(slot)
+      column.targetX = incomingX
       column.retiring = false
 
       if (structuralEnterKeys.contains(slot.key)) {
@@ -363,11 +410,23 @@ internal class NumericRollEngine {
           kind = PendingKind.ENTER,
           wavePhase = newPhaseByKey[slot.key] ?: 0,
           sourceRasterId = rasterId,
+          pinnedX = if (formatGeometrySplit) incomingX else Float.NaN,
         )
         continue
       }
 
-      val next = stopFor(column, slot, lastDirection)
+      val ordinaryNext = stopFor(column, slot, lastDirection)
+      val next =
+        if (
+          formatGeometrySplit &&
+            geometryChangeKeys.contains(slot.key) &&
+            ordinaryNext == column.goalStop()
+        ) {
+          column.goalStop() - lastDirection
+        } else {
+          ordinaryNext
+        }
+
       if (next != column.goalStop()) {
         column.charAt[next] = slot.char
 
@@ -377,6 +436,7 @@ internal class NumericRollEngine {
           kind = PendingKind.CHANGE,
           wavePhase = newPhaseByKey[slot.key] ?: 0,
           sourceRasterId = rasterId,
+          pinnedX = if (formatGeometrySplit) incomingX else Float.NaN,
         )
       } else {
         bindCurrentRaster(column, slot.char, rasterId)
@@ -493,9 +553,24 @@ internal class NumericRollEngine {
           when (pendingStop.kind) {
             PendingKind.REMOVE ->
               commitRemove(column, commitDir, pendingStop.replacementAffixExit)
-            PendingKind.ENTER -> commitEnter(column, stop, commitDir, pendingStop.rasterId)
+            PendingKind.ENTER ->
+              commitEnter(
+                column,
+                stop,
+                commitDir,
+                pendingStop.rasterId,
+                pendingStop.pinnedX,
+              )
             PendingKind.CHANGE ->
-              commitChange(column, stop, commitDir, oldDir, wasAtRest, pendingStop.rasterId)
+              commitChange(
+                column,
+                stop,
+                commitDir,
+                oldDir,
+                wasAtRest,
+                pendingStop.rasterId,
+                pendingStop.pinnedX,
+              )
           }
 
           active = true
@@ -544,10 +619,17 @@ internal class NumericRollEngine {
     }
   }
 
-  private fun commitEnter(column: Column, stop: Int, direction: Int, rasterId: Int) {
+  private fun commitEnter(
+    column: Column,
+    stop: Int,
+    direction: Int,
+    rasterId: Int,
+    pinnedX: Float,
+  ) {
     val ch = column.charAt[stop] ?: return
     val entry = Entry(ch, incomingAmplitude(direction, column.flipRaw), rasterId)
     entry.alpha = STRUCTURAL_ENTRY_ALPHA
+    entry.pinnedX = pinnedX
     column.entries.add(entry)
   }
 
@@ -558,6 +640,7 @@ internal class NumericRollEngine {
     oldDirection: Int?,
     wasAtRest: Boolean,
     rasterId: Int,
+    pinnedX: Float,
   ) {
     val ch = column.charAt[stop] ?: return
 
@@ -587,10 +670,12 @@ internal class NumericRollEngine {
       reuse.alphaTarget = 1f
       reuse.blurTarget = 0f
       reuse.rasterId = rasterId
+      reuse.pinnedX = pinnedX
       return
     }
 
     val entry = Entry(ch, incomingAmplitude(direction, column.flipRaw), rasterId)
+    entry.pinnedX = pinnedX
     if (column.entries.isEmpty()) {
       entry.alpha = STRUCTURAL_ENTRY_ALPHA
     }
@@ -683,7 +768,7 @@ internal class NumericRollEngine {
           },
           renderId = entry.id,
           rasterId = entry.rasterId,
-          x = column.x,
+          x = if (entry.pinnedX.isNaN()) column.x else entry.pinnedX,
           offsetY = effectiveOffset * lineHeightPx,
           alpha = alpha.coerceIn(0f, 1f),
           scaleX = shrink,
