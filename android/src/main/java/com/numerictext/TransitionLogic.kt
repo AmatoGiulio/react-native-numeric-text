@@ -38,19 +38,20 @@ object TransitionLogic {
   )
 
   /**
-   * Integer digits keep visual identity from the left; fractions from the decimal point; anything
-   * outside the number keeps it from whichever end of the number it sits against.
+   * Integer digits keep logical identity from the left; fractions from the decimal point. Affix
+   * identity, however, is derived from shaped visual geometry rather than logical string order.
+   * That distinction matters for bidi formats: an AED affix can live after the digits logically but
+   * render to their left. Treating that token as a suffix would incorrectly match it with a former
+   * visual suffix and make the column travel horizontally across the number.
    *
-   * ICU semantic fields are the source of truth when available. A currency affix is arbitrary text
-   * and may itself contain '.', ',' or '-'; character equality cannot tell whether those marks are
-   * numeric structure or currency prose.
+   * ICU semantic fields remain the source of truth for token meaning. Visible SIGN/OTHER glyphs are
+   * emitted through the DIGIT physics path so currency affixes, signs and suffixes use the exact
+   * validated roll, movement, scale, blur, alpha and wave machinery as numeric digits. Numeric
+   * separators deliberately keep their first-release physics classification. Directional bidi marks
+   * stay in the shaped line but do not become transition slots because they have no visible glyph.
    *
-   * semanticKind remains the source of identity. Visible SIGN/OTHER glyphs are emitted through the
-   * DIGIT physics path so currency affixes, signs and suffixes use the exact validated roll, movement,
-   * scale, blur, alpha and wave machinery as the digits. Numeric separators deliberately keep their
-   * existing physics classification so first-release carries such as 999 -> 1,000 retain their
-   * previously validated timing. Directional bidi marks stay in the shaped line but do not become
-   * transition slots, because they are invisible and must not consume a wave phase.
+   * Returned slots are ordered by visual X. NumericRollEngine's existing wave therefore traverses the
+   * shaped line in screen order, including RTL affixes, without changing any animation constants.
    */
   internal fun layoutKeyedSlots(
     formatted: String,
@@ -73,6 +74,9 @@ object TransitionLogic {
         if (semantics != null) tokenizeSemantically(formatted, semantics)
         else tokenizeFallback(formatted, groupSep, decimalSep, minusSign)
       ).filterNot(::isDirectionalToken)
+
+    if (tokens.isEmpty()) return emptyList()
+
     val firstDigit = tokens.indexOfFirst { it.kind == TokenKind.DIGIT }
     val lastDigit = tokens.indexOfLast { it.kind == TokenKind.DIGIT }
 
@@ -83,14 +87,48 @@ object TransitionLogic {
       if (tokens[i].kind == TokenKind.DIGIT && !tokens[i].fractional) digitsToRight += 1
     }
 
+    val lefts = FloatArray(tokens.size)
+    val rights = FloatArray(tokens.size)
+    val centers = FloatArray(tokens.size)
+    for (i in tokens.indices) {
+      val (left, right) = line.visualBounds(tokens[i].utf16Start, tokens[i].utf16End)
+      lefts[i] = left
+      rights[i] = right
+      centers[i] = (left + right) / 2f
+    }
+
+    val digitIndices = tokens.indices.filter { tokens[it].kind == TokenKind.DIGIT }
+    val numericLeft = digitIndices.minOfOrNull { lefts[it] }
+    val numericRight = digitIndices.maxOfOrNull { rights[it] }
+    val visualEpsilon = 0.001f
+
+    val prefixRank = IntArray(tokens.size) { -1 }
+    val suffixRank = IntArray(tokens.size) { -1 }
+
+    if (numericLeft != null && numericRight != null) {
+      tokens.indices
+        .filter {
+          tokens[it].kind == TokenKind.OTHER &&
+            rights[it] <= numericLeft + visualEpsilon
+        }
+        .sortedByDescending { centers[it] }
+        .forEachIndexed { rank, tokenIndex -> prefixRank[tokenIndex] = rank }
+
+      tokens.indices
+        .filter {
+          tokens[it].kind == TokenKind.OTHER &&
+            lefts[it] >= numericRight - visualEpsilon
+        }
+        .sortedBy { centers[it] }
+        .forEachIndexed { rank, tokenIndex -> suffixRank[tokenIndex] = rank }
+    }
+
     val result = ArrayList<KeyedSlot>(tokens.size)
     var integerPosition = 0
     var fractionalPosition = 0
 
     for (i in tokens.indices) {
       val token = tokens[i]
-      val (left, right) = line.visualBounds(token.utf16Start, token.utf16End)
-
       val key = when (token.kind) {
         TokenKind.DIGIT ->
           if (token.fractional) "F${fractionalPosition++}"
@@ -98,7 +136,7 @@ object TransitionLogic {
         TokenKind.GROUP_SEPARATOR -> structuralKey("G${integerDigitsToRight[i]}", token.text)
         TokenKind.DECIMAL_SEPARATOR -> structuralKey("DEC", token.text)
         TokenKind.SIGN -> "S"
-        TokenKind.OTHER -> affixKey(i, firstDigit, lastDigit)
+        TokenKind.OTHER -> visualAffixKey(i, prefixRank, suffixRank)
       }
       val physicsKind = when (token.kind) {
         TokenKind.SIGN, TokenKind.OTHER -> TokenKind.DIGIT
@@ -111,25 +149,33 @@ object TransitionLogic {
           kind = physicsKind,
           semanticKind = token.kind,
           char = token.text,
-          centerFromLeft = (left + right) / 2f,
+          centerFromLeft = centers[i],
           totalWidth = line.totalWidth,
-          leftFromLeft = left,
-          rightFromLeft = right,
+          leftFromLeft = lefts[i],
+          rightFromLeft = rights[i],
           utf16Start = token.utf16Start,
           utf16End = token.utf16End,
         )
       )
     }
 
-    return result
+    return result.sortedWith(
+      compareBy<KeyedSlot> { it.centerFromLeft }
+        .thenBy { it.leftFromLeft }
+        .thenBy { it.utf16Start }
+    )
   }
 
   private fun structuralKey(base: String, glyph: String): String = "$base:$glyph"
 
-  private fun affixKey(index: Int, firstDigit: Int, lastDigit: Int): String = when {
-    firstDigit >= 0 && index < firstDigit -> "P${firstDigit - index - 1}"
-    lastDigit >= 0 && index > lastDigit -> "X${index - lastDigit - 1}"
-    else -> "O$index"
+  private fun visualAffixKey(
+    tokenIndex: Int,
+    prefixRank: IntArray,
+    suffixRank: IntArray,
+  ): String = when {
+    prefixRank[tokenIndex] >= 0 -> "P${prefixRank[tokenIndex]}"
+    suffixRank[tokenIndex] >= 0 -> "X${suffixRank[tokenIndex]}"
+    else -> "O$tokenIndex"
   }
 
   private fun tokenizeSemantically(
