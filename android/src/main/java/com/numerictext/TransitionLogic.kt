@@ -45,12 +45,12 @@ object TransitionLogic {
    * and may itself contain '.', ',' or '-'; character equality cannot tell whether those marks are
    * numeric structure or currency prose.
    *
-   * The semantic kind determines identity only. Every visible glyph is emitted as a DIGIT physics
-   * slot so signs, currency affixes and separators run through the exact same persistent roll,
-   * movement, scale, blur, alpha and wave machinery as numeric digits. This mirrors SwiftUI's
-   * per-glyph numericText transition while keeping semanticKind available for diagnostics/tests.
-   * Directional bidi marks are retained in the shaped line but omitted from transition slots because
-   * they have no visible glyph and must not consume a wave phase.
+   * semanticKind remains the source of identity. Visible SIGN/OTHER glyphs are emitted through the
+   * DIGIT physics path so currency affixes, signs and suffixes use the exact validated roll, movement,
+   * scale, blur, alpha and wave machinery as the digits. Numeric separators deliberately keep their
+   * existing physics classification so first-release carries such as 999 -> 1,000 retain their
+   * previously validated timing. Directional bidi marks stay in the shaped line but do not become
+   * transition slots, because they are invisible and must not consume a wave phase.
    */
   internal fun layoutKeyedSlots(
     formatted: String,
@@ -95,16 +95,20 @@ object TransitionLogic {
         TokenKind.DIGIT ->
           if (token.fractional) "F${fractionalPosition++}"
           else "I${integerPosition++}"
-        TokenKind.GROUP_SEPARATOR -> "G${integerDigitsToRight[i]}"
-        TokenKind.DECIMAL_SEPARATOR -> "DEC"
+        TokenKind.GROUP_SEPARATOR -> structuralKey("G${integerDigitsToRight[i]}", token.text)
+        TokenKind.DECIMAL_SEPARATOR -> structuralKey("DEC", token.text)
         TokenKind.SIGN -> "S"
         TokenKind.OTHER -> affixKey(i, firstDigit, lastDigit)
+      }
+      val physicsKind = when (token.kind) {
+        TokenKind.SIGN, TokenKind.OTHER -> TokenKind.DIGIT
+        else -> token.kind
       }
 
       result.add(
         KeyedSlot(
           key = key,
-          kind = TokenKind.DIGIT,
+          kind = physicsKind,
           semanticKind = token.kind,
           char = token.text,
           centerFromLeft = (left + right) / 2f,
@@ -119,6 +123,8 @@ object TransitionLogic {
 
     return result
   }
+
+  private fun structuralKey(base: String, glyph: String): String = "$base:$glyph"
 
   private fun affixKey(index: Int, firstDigit: Int, lastDigit: Int): String = when {
     firstDigit >= 0 && index < firstDigit -> "P${firstDigit - index - 1}"
