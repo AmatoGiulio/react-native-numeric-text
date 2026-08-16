@@ -94,4 +94,74 @@ class FormatGeometryPinTest {
     assertTrue(movingEuro.x > 30f)
     assertTrue(movingEuro.x < 40f)
   }
+
+  @Test
+  fun repeatedSettledFormatChange_startsFromCanonicalTargetState() {
+    val negative =
+      listOf(
+        slot("S", "-", TokenKind.SIGN, center = 10f),
+        slot("P0", "U", TokenKind.OTHER, center = 30f),
+        slot("I0", "9", TokenKind.DIGIT, center = 75f),
+      )
+    val positive =
+      listOf(
+        slot("P0", "U", TokenKind.OTHER, center = 20f),
+        slot("I0", "0", TokenKind.DIGIT, center = 80f),
+      )
+
+    val engine = NumericRollEngine()
+    engine.reset(
+      layout = negative,
+      text = "-U9",
+      lineHeight = 100f,
+      rasterId = 1,
+      blurLengthPx = 50f,
+    )
+
+    fun target(layout: List<KeyedSlot>, text: String, direction: Int, rasterId: Int) {
+      engine.setTarget(
+        layout = layout,
+        text = text,
+        direction = direction,
+        lineHeight = 100f,
+        animationDurationMs = 320L,
+        rasterId = rasterId,
+        blurLengthPx = 50f,
+      )
+    }
+
+    fun finishUntilVisuallySettledButStillRunning(): Boolean {
+      Thread.sleep(240L)
+      repeat(120) {
+        engine.step(0.016f)
+        val samples = engine.samples()
+        if (
+          engine.isRunning &&
+            samples.isNotEmpty() &&
+            samples.all { it.stable && it.alpha >= 0.99f }
+        ) {
+          return true
+        }
+      }
+      return false
+    }
+
+    target(positive, "U0", direction = 1, rasterId = 2)
+    assertTrue(finishUntilVisuallySettledButStillRunning())
+
+    target(negative, "-U9", direction = -1, rasterId = 3)
+    assertTrue(finishUntilVisuallySettledButStillRunning())
+
+    // This is the second A -> B transition from the USD recording. The previous frame is already
+    // visually settled, so hidden historical entries must be collapsed before scheduling the new
+    // per-glyph wave. U therefore receives a fresh old/new roll instead of remaining as a static
+    // full-opacity anchor while only the digit changes.
+    target(positive, "U0", direction = 1, rasterId = 4)
+    Thread.sleep(130L)
+    engine.step(0.016f)
+
+    val uSamples = engine.samples().filter { it.key == "P0" && it.ch == "U" }
+    assertTrue(uSamples.size >= 2)
+    assertTrue(uSamples.any { it.blurLengthPx > 0f || it.offsetY != 0f })
+  }
 }
