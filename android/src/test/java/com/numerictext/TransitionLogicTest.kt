@@ -252,6 +252,29 @@ class NumericRollEngineTest {
     repeat(frames) { engine.step(0.01f) }
   }
 
+  private fun slot(
+    key: String,
+    char: String,
+    semanticKind: TokenKind,
+    center: Float,
+  ): KeyedSlot =
+    KeyedSlot(
+      key = key,
+      kind = if (semanticKind == TokenKind.SIGN || semanticKind == TokenKind.OTHER) {
+        TokenKind.DIGIT
+      } else {
+        semanticKind
+      },
+      semanticKind = semanticKind,
+      char = char,
+      centerFromLeft = center,
+      totalWidth = 100f,
+      leftFromLeft = center - 5f,
+      rightFromLeft = center + 5f,
+      utf16Start = 0,
+      utf16End = char.length,
+    )
+
   @Test
   fun increment_entersFromAboveAndExitsBelow() {
     val engine = NumericRollEngine()
@@ -333,6 +356,54 @@ class NumericRollEngineTest {
     assertTrue(samples.first { it.ch == "$" }.blurLengthPx > 0f)
     assertTrue(samples.first { it.ch == "€" }.offsetY < 0f)
     assertTrue(samples.first { it.ch == "$" }.offsetY > 0f)
+  }
+
+  @Test
+  fun formatChange_keepsOldAndNewGlyphsAtTheirOwnXWhileRolling() {
+    val oldLayout =
+      listOf(
+        slot("I0", "1", TokenKind.DIGIT, center = 30f),
+        slot("X0", "€", TokenKind.OTHER, center = 80f),
+      )
+    val newLayout =
+      listOf(
+        slot("P0", "د", TokenKind.OTHER, center = 20f),
+        slot("I0", "1", TokenKind.DIGIT, center = 70f),
+      )
+
+    val engine = NumericRollEngine()
+    engine.reset(
+      layout = oldLayout,
+      text = "1€",
+      lineHeight = 100f,
+      rasterId = 1,
+      blurLengthPx = 50f,
+    )
+    engine.setTarget(
+      layout = newLayout,
+      text = "د1",
+      direction = 1,
+      lineHeight = 100f,
+      animationDurationMs = 320L,
+      rasterId = 2,
+      blurLengthPx = 50f,
+    )
+
+    // The three visual roll events span WAVE_TOTAL_SECONDS. Let all of them become due, then
+    // integrate a frame so old/new copies are simultaneously observable.
+    Thread.sleep(220L)
+    advance(engine)
+
+    val digitSamples = engine.samples().filter { it.key == "I0" && it.ch == "1" }
+    assertEquals(2, digitSamples.size)
+    assertTrue(digitSamples.any { abs(it.x - (-20f)) < 0.01f })
+    assertTrue(digitSamples.any { abs(it.x - 20f) < 0.01f })
+    assertTrue(digitSamples.all { abs(it.offsetY) > 0f })
+
+    val euro = engine.samples().first { it.ch == "€" }
+    val dirham = engine.samples().first { it.ch == "د" }
+    assertEquals(30f, euro.x, 0.01f)
+    assertEquals(-30f, dirham.x, 0.01f)
   }
 
   @Test
