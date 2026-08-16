@@ -97,7 +97,7 @@ internal class NumericRollEngine {
     val kind: PendingKind,
     val rasterId: Int,
     val replacementAffixExit: Boolean = false,
-    val pinnedX: Float = Float.NaN,
+    var pinnedX: Float = Float.NaN,
   )
 
   private class Entry(val ch: String, var p: Float, var rasterId: Int) {
@@ -203,6 +203,7 @@ internal class NumericRollEngine {
 
     val previousSlots = targetLayout
     val previousByKey = previousSlots.associateBy { it.key }
+    val previousTargetRasterId = targetRasterId
 
     targetText = text
     targetRasterId = rasterId
@@ -247,6 +248,36 @@ internal class NumericRollEngine {
       for (column in columns.values) {
         for (entry in column.entries) {
           if (entry.pinnedX.isNaN()) entry.pinnedX = column.x
+        }
+      }
+    } else {
+      // A per-entry X pin belongs only to the format transition that created it. When the next
+      // transaction keeps the same format and changes only the value, continuing glyphs must return
+      // to the first-release horizontal reflow. Preserve already-superseded old-format ghosts at
+      // their pinned X, but release the current target raster without a visual jump.
+      for ((key, column) in columns) {
+        if (!previousByKey.containsKey(key) || !incomingByKey.containsKey(key)) continue
+
+        val currentPinned =
+          column.entries.lastOrNull {
+            !it.superseded &&
+              it.rasterId == previousTargetRasterId &&
+              !it.pinnedX.isNaN()
+          }
+        if (currentPinned != null) {
+          column.x = currentPinned.pinnedX
+          column.xVelocity = 0f
+        }
+
+        for (entry in column.entries) {
+          if (!entry.superseded && entry.rasterId == previousTargetRasterId) {
+            entry.pinnedX = Float.NaN
+          }
+        }
+        for (pending in column.pending) {
+          if (pending.kind != PendingKind.REMOVE && pending.rasterId == previousTargetRasterId) {
+            pending.pinnedX = Float.NaN
+          }
         }
       }
     }
