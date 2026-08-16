@@ -68,6 +68,10 @@ internal class NumericRollEngine {
     private const val WAVE_TOTAL_SECONDS = 0.15f
     private const val MAX_DURATION_MULTIPLE = 1.25f
     private const val RESPONSE_SECONDS = 0.30f
+    // Frame-aligned USD A/B GT: SwiftUI keeps the old line effectively static for roughly
+    // 70 ms before the per-glyph format wave becomes visually active. Apply the onset to the
+    // entire unified format wave, never to ordinary same-format numeric changes.
+    private const val FORMAT_ROLL_ONSET_SECONDS = 0.070f
 
     // Kept for the legacy structural path. SIGN/OTHER now travel through DIGIT physics,
     // so formatGeometrySplit below is the source of truth for unified per-glyph rolls.
@@ -331,6 +335,12 @@ internal class NumericRollEngine {
       val phase = if (changingCount > 0) wavePhase.coerceIn(0, changingCount - 1) else 0
       val waveDelayNanos =
         (gap.toDouble() * (phase + 0.5) * 1_000_000_000.0).toLong()
+      val formatOnsetNanos =
+        if (formatGeometrySplit) {
+          (FORMAT_ROLL_ONSET_SECONDS.toDouble() * 1_000_000_000.0).toLong()
+        } else {
+          0L
+        }
       val digitLeadNanos =
         if (affixTopologyChanged && column.kind == TokenKind.DIGIT) {
           (AFFIX_DIGIT_LEAD_SECONDS.toDouble() * 1_000_000_000.0).toLong()
@@ -340,7 +350,8 @@ internal class NumericRollEngine {
       val affixDelayNanos =
         (affixDelaySeconds(column, kind).toDouble() * 1_000_000_000.0).toLong()
 
-      val requestedDueNanos = eventNanos + digitLeadNanos + affixDelayNanos + waveDelayNanos
+      val requestedDueNanos =
+        eventNanos + formatOnsetNanos + digitLeadNanos + affixDelayNanos + waveDelayNanos
       val previousPending = column.pending.lastOrNull()
 
       val dueAtNanos =
