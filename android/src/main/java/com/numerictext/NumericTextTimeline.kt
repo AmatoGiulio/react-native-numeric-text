@@ -205,6 +205,18 @@ internal class NumericRollEngine {
     durationScale = animationDurationMs.coerceAtLeast(80L) / 320f
     lastDirection = if (direction < 0) -1 else 1
 
+    // A finished format roll can remain internally active for a few frames because invisible ghosts
+    // are still converging. SwiftUI starts the next settled A/B transition from the canonical target,
+    // not from those invisible historical entries. Collapse only when the current output is already
+    // visually identical to the target; genuine in-flight retriggers keep their full history.
+    if (
+      isRunning &&
+        hasStructuralFormatChange(targetLayout, layout) &&
+        canCanonicalizeVisibleTarget()
+    ) {
+      snapToTarget()
+    }
+
     val previousSlots = targetLayout
     val previousByKey = previousSlots.associateBy { it.key }
     val previousTargetRasterId = targetRasterId
@@ -226,19 +238,7 @@ internal class NumericRollEngine {
       if (incomingByKey[slot.key] == null) structuralRemovalKeys.add(slot.key)
     }
 
-    val formatGeometrySplit =
-      layout.any {
-        structuralEnterKeys.contains(it.key) && isAffixKind(it.semanticKind)
-      } ||
-        previousSlots.any {
-          structuralRemovalKeys.contains(it.key) && isAffixKind(it.semanticKind)
-        } ||
-        layout.any { slot ->
-          val previous = previousByKey[slot.key]
-          previous != null &&
-            (isAffixKind(previous.semanticKind) || isAffixKind(slot.semanticKind)) &&
-            previous.char != slot.char
-        }
+    val formatGeometrySplit = hasStructuralFormatChange(previousSlots, layout)
 
     val geometryChangeKeys = HashSet<String>()
     if (formatGeometrySplit) {
@@ -758,6 +758,52 @@ internal class NumericRollEngine {
 
   private fun isAffixKind(kind: TokenKind): Boolean =
     kind == TokenKind.SIGN || kind == TokenKind.OTHER
+
+  private fun hasStructuralFormatChange(
+    previous: List<KeyedSlot>,
+    incoming: List<KeyedSlot>,
+  ): Boolean {
+    val previousByKey = previous.associateBy { it.key }
+    val incomingByKey = incoming.associateBy { it.key }
+
+    return incoming.any {
+      previousByKey[it.key] == null && isAffixKind(it.semanticKind)
+    } ||
+      previous.any {
+        incomingByKey[it.key] == null && isAffixKind(it.semanticKind)
+      } ||
+      incoming.any { slot ->
+        val old = previousByKey[slot.key]
+        old != null &&
+          (isAffixKind(old.semanticKind) || isAffixKind(slot.semanticKind)) &&
+          old.char != slot.char
+      }
+  }
+
+  private fun canCanonicalizeVisibleTarget(): Boolean {
+    if (columns.values.any { it.pending.isNotEmpty() }) return false
+
+    val targetByKey = targetLayout.associateBy { it.key }
+    val visible = samples()
+    if (visible.size != targetByKey.size) return false
+
+    if (
+      visible.any { sample ->
+        val slot = targetByKey[sample.key]
+        slot == null ||
+          slot.char != sample.ch ||
+          !sample.stable ||
+          sample.alpha < 1f - RENDER_ALPHA_EPSILON
+      }
+    ) {
+      return false
+    }
+
+    return columns.values.all { column ->
+      column.retiring ||
+        (abs(column.targetX - column.x) <= 0.1f && abs(column.xVelocity) <= 0.1f)
+    }
+  }
 
   private fun isSuffixAffix(column: Column): Boolean =
     column.kind == TokenKind.OTHER && column.key.startsWith("X")
