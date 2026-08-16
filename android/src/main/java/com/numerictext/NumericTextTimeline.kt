@@ -36,26 +36,17 @@ internal class NumericRollEngine {
 
     const val BUILD_ID = "V0.1-RC3-RELEASE-SURFACE-2026-08-11"
 
-    // Scale transfers directly. The packed Apple translation value 0.59375 is NOT applied here
-    // yet: this STACK already has validated reversal-lane geometry, and multiplying that by 0.59375
-    // would double-count travel during retriggers. Keep the validated baseline until the exact
-    // RenderBox translation coordinate space is mapped.
     private const val STACK_OFFSET = 0.3950f
     private const val STACK_FINAL_SCALE = 0.3984375f
 
-    // RenderBox numericText animation 0: near-critical effect/matchMove spring.
     private const val APPLE_EFFECT_MASS = 1.0f
     private const val APPLE_EFFECT_STIFFNESS = 344.0f
     private const val APPLE_EFFECT_DAMPING = 37.0f
 
-    // RenderBox numericText animation 1: underdamped roll/translation spring.
     private const val APPLE_MOVE_MASS = 2.0f
     private const val APPLE_MOVE_STIFFNESS = 470.0f
     private const val APPLE_MOVE_DAMPING = 34.0f
 
-    // Presence keeps the validated independent channel. Blur keeps its validated time evolution.
-    // Phase5d changes only blur amplitude semantics: Apple's packed blur byte 32 is interpreted as
-    // relative blur 32 / 128 = 0.25, with the View mapping that fraction to text line height.
     private const val STACK_ALPHA_RESPONSE_SECONDS = 0.277f
     private const val STACK_ALPHA_DAMPING = 1.00f
     private const val STACK_EXIT_BLUR_SPEEDUP = 1.35f
@@ -78,22 +69,12 @@ internal class NumericRollEngine {
     private const val MAX_DURATION_MULTIPLE = 1.25f
     private const val RESPONSE_SECONDS = 0.30f
 
-    // Frame-aligned iOS GT shows an affix/sign topology change beginning before the digit roll by
-    // roughly one 85 ms retrigger interval. Keep ordinary numeric carries unchanged; only SIGN/OTHER
-    // insertion/removal earns this lead.
+    // Kept for the legacy structural path. SIGN/OTHER now travel through DIGIT physics,
+    // so formatGeometrySplit below is the source of truth for unified per-glyph rolls.
     private const val AFFIX_DIGIT_LEAD_SECONDS = 0.085f
-
-    // Raw-value-aligned GT shows prefix/sign structure beginning around 50 ms, while a trailing
-    // suffix such as ')' or '%' remains anchored longer on SwiftUI. Keep these delays semantic: the
-    // first-release digit physics stays untouched and same-format numeric changes never enter here.
     private const val AFFIX_ENTER_DELAY_SECONDS = 0.050f
     private const val AFFIX_PREFIX_REMOVE_DELAY_SECONDS = 0.050f
     private const val AFFIX_SUFFIX_REMOVE_DELAY_SECONDS = 0.100f
-
-    // Pure affix removals (accounting parentheses/signs) stay near the baseline on SwiftUI. When an
-    // affix is being replaced by another affix topology, the old glyph instead needs the full
-    // already-validated exit lane so it does not collide with the incoming symbol/text. This routes
-    // events differently without changing any spring, digit lane, wave, blur, or retrigger physics.
     private const val AFFIX_EXIT_DISTANCE = 0.45f
     private const val AFFIX_REPLACEMENT_EXIT_DISTANCE = 1.0f
     private const val AFFIX_EXIT_ALPHA_SLOWDOWN = 1.35f
@@ -135,10 +116,6 @@ internal class NumericRollEngine {
 
     var superseded = false
     var replacementAffixExit = false
-
-    // Normal numeric transitions keep using Column.x exactly as the first release did. During a
-    // format-geometry split this captures the shaped X for this individual glyph, allowing the old
-    // and new layouts to coexist while both glyphs roll vertically.
     var pinnedX = Float.NaN
 
     var alpha = 0f
@@ -155,18 +132,14 @@ internal class NumericRollEngine {
     val entries = ArrayList<Entry>()
 
     var target = 0
-
     var crowdRaw = 0f
     var crowd = 0f
-
     var flipRaw = 0f
     var flipGate = 0f
     var lastDir: Int? = null
-
     var x = 0f
     var xVelocity = 0f
     var targetX = 0f
-
     var retiring = false
 
     fun goalStop(): Int = pending.lastOrNull()?.stop ?: target
@@ -240,21 +213,14 @@ internal class NumericRollEngine {
 
     val structuralEnterKeys = HashSet<String>()
     for (slot in layout) {
-      if (previousByKey[slot.key] == null) {
-        structuralEnterKeys.add(slot.key)
-      }
+      if (previousByKey[slot.key] == null) structuralEnterKeys.add(slot.key)
     }
 
     val structuralRemovalKeys = HashSet<String>()
     for (slot in previousSlots) {
-      if (incomingByKey[slot.key] == null) {
-        structuralRemovalKeys.add(slot.key)
-      }
+      if (incomingByKey[slot.key] == null) structuralRemovalKeys.add(slot.key)
     }
 
-    // SwiftUI keeps the old shaped layout and the new shaped layout visible at the same time during
-    // a format change. Detect that situation from semantic affix/sign topology rather than physics
-    // kind (SIGN/OTHER deliberately travel through the DIGIT physics path).
     val formatGeometrySplit =
       layout.any {
         structuralEnterKeys.contains(it.key) && isAffixKind(it.semanticKind)
@@ -278,9 +244,6 @@ internal class NumericRollEngine {
         }
       }
 
-      // Freeze every currently visible glyph at the X where the old shaped line placed it. The
-      // column is still free to settle internally, but it can no longer drag an outgoing glyph
-      // horizontally across the number while the vertical roll is in progress.
       for (column in columns.values) {
         for (entry in column.entries) {
           if (entry.pinnedX.isNaN()) entry.pinnedX = column.x
@@ -306,7 +269,8 @@ internal class NumericRollEngine {
 
       val column = columns[slot.key]
       if (
-        structuralEnterKeys.contains(slot.key) ||
+        formatGeometrySplit ||
+          structuralEnterKeys.contains(slot.key) ||
           geometryChangeKeys.contains(slot.key) ||
           column == null ||
           stopFor(column, slot, lastDirection) != column.goalStop()
@@ -333,15 +297,9 @@ internal class NumericRollEngine {
       replacementAffixExit: Boolean = false,
       pinnedX: Float = Float.NaN,
     ) {
-      val phase =
-        if (changingCount > 0) wavePhase.coerceIn(0, changingCount - 1) else 0
-
+      val phase = if (changingCount > 0) wavePhase.coerceIn(0, changingCount - 1) else 0
       val waveDelayNanos =
-        (
-          gap.toDouble() *
-            (phase + 0.5) *
-            1_000_000_000.0
-        ).toLong()
+        (gap.toDouble() * (phase + 0.5) * 1_000_000_000.0).toLong()
       val digitLeadNanos =
         if (affixTopologyChanged && column.kind == TokenKind.DIGIT) {
           (AFFIX_DIGIT_LEAD_SECONDS.toDouble() * 1_000_000_000.0).toLong()
@@ -351,8 +309,7 @@ internal class NumericRollEngine {
       val affixDelayNanos =
         (affixDelaySeconds(column, kind).toDouble() * 1_000_000_000.0).toLong()
 
-      val requestedDueNanos =
-        eventNanos + digitLeadNanos + affixDelayNanos + waveDelayNanos
+      val requestedDueNanos = eventNanos + digitLeadNanos + affixDelayNanos + waveDelayNanos
       val previousPending = column.pending.lastOrNull()
 
       val dueAtNanos =
@@ -361,11 +318,7 @@ internal class NumericRollEngine {
         } else {
           val arrivalSpacingNanos =
             (eventNanos - previousPending.enqueuedAtNanos).coerceAtLeast(1L)
-
-          maxOf(
-            requestedDueNanos,
-            previousPending.dueAtNanos + arrivalSpacingNanos,
-          )
+          maxOf(requestedDueNanos, previousPending.dueAtNanos + arrivalSpacingNanos)
         }
 
       column.pending.addLast(
@@ -417,11 +370,7 @@ internal class NumericRollEngine {
 
       val ordinaryNext = stopFor(column, slot, lastDirection)
       val next =
-        if (
-          formatGeometrySplit &&
-            geometryChangeKeys.contains(slot.key) &&
-            ordinaryNext == column.goalStop()
-        ) {
+        if (formatGeometrySplit && ordinaryNext == column.goalStop()) {
           column.goalStop() - lastDirection
         } else {
           ordinaryNext
@@ -532,7 +481,6 @@ internal class NumericRollEngine {
           val pendingStop = column.pending.removeFirst()
           val stop = pendingStop.stop
           val commitDir = pendingStop.direction
-
           val wasAtRest =
             column.entries.all {
               abs(it.p) < POSITION_EPSILON && abs(it.velocity) < VELOCITY_EPSILON
@@ -540,9 +488,7 @@ internal class NumericRollEngine {
 
           column.target = stop
 
-          if (!wasAtRest) {
-            column.crowdRaw = min(1f, column.crowdRaw + CROWD_STEP)
-          }
+          if (!wasAtRest) column.crowdRaw = min(1f, column.crowdRaw + CROWD_STEP)
 
           val oldDir = column.lastDir
           if (oldDir != null && oldDir != commitDir && !wasAtRest) {
@@ -554,13 +500,7 @@ internal class NumericRollEngine {
             PendingKind.REMOVE ->
               commitRemove(column, commitDir, pendingStop.replacementAffixExit)
             PendingKind.ENTER ->
-              commitEnter(
-                column,
-                stop,
-                commitDir,
-                pendingStop.rasterId,
-                pendingStop.pinnedX,
-              )
+              commitEnter(column, stop, commitDir, pendingStop.rasterId, pendingStop.pinnedX)
             PendingKind.CHANGE ->
               commitChange(
                 column,
@@ -591,12 +531,8 @@ internal class NumericRollEngine {
     val ids = LinkedHashSet<Int>()
     if (targetRasterId > 0) ids.add(targetRasterId)
     for (column in columns.values) {
-      for (entry in column.entries) {
-        if (entry.rasterId > 0) ids.add(entry.rasterId)
-      }
-      for (pending in column.pending) {
-        if (pending.rasterId > 0) ids.add(pending.rasterId)
-      }
+      for (entry in column.entries) if (entry.rasterId > 0) ids.add(entry.rasterId)
+      for (pending in column.pending) if (pending.rasterId > 0) ids.add(pending.rasterId)
     }
     return ids
   }
@@ -650,11 +586,7 @@ internal class NumericRollEngine {
       }
     }
 
-    val reversing =
-      oldDirection != null &&
-        oldDirection != direction &&
-        !wasAtRest
-
+    val reversing = oldDirection != null && oldDirection != direction && !wasAtRest
     val reuse =
       if (reversing) {
         column.entries.lastOrNull { it.superseded && it.ch == ch }
@@ -676,9 +608,7 @@ internal class NumericRollEngine {
 
     val entry = Entry(ch, incomingAmplitude(direction, column.flipRaw), rasterId)
     entry.pinnedX = pinnedX
-    if (column.entries.isEmpty()) {
-      entry.alpha = STRUCTURAL_ENTRY_ALPHA
-    }
+    if (column.entries.isEmpty()) entry.alpha = STRUCTURAL_ENTRY_ALPHA
     column.entries.add(entry)
   }
 
@@ -708,8 +638,7 @@ internal class NumericRollEngine {
   }
 
   private fun incomingAmplitude(direction: Int, flipRaw: Float): Float =
-    -direction.toFloat() *
-      (1f + (STACK_FLIP_BORN - 1f) * flipRaw)
+    -direction.toFloat() * (1f + (STACK_FLIP_BORN - 1f) * flipRaw)
 
   private fun emitStack(column: Column, out: MutableList<GlyphSample>) {
     val count = column.entries.size
@@ -724,8 +653,7 @@ internal class NumericRollEngine {
       total += presence
     }
 
-    val norm =
-      if (total > STACK_ALPHA_CEILING) STACK_ALPHA_CEILING / total else 1f
+    val norm = if (total > STACK_ALPHA_CEILING) STACK_ALPHA_CEILING / total else 1f
 
     for (i in 0 until count) {
       val alpha = raw[i] * norm
@@ -733,12 +661,10 @@ internal class NumericRollEngine {
 
       val entry = column.entries[i]
       val distance = min(1f, abs(entry.q))
-
       val hasOtherVisibleEntry =
         column.entries.indices.any { j ->
           j != i && column.entries[j].alpha > RENDER_ALPHA_EPSILON
         }
-
       val settled =
         i == count - 1 &&
           !hasOtherVisibleEntry &&
@@ -774,11 +700,7 @@ internal class NumericRollEngine {
           scaleX = shrink,
           scaleY = shrink,
           blurLengthPx =
-            if (settled) {
-              0f
-            } else {
-              maxBlurLengthPx * entry.b.coerceIn(0f, 1f)
-            },
+            if (settled) 0f else maxBlurLengthPx * entry.b.coerceIn(0f, 1f),
           stable = settled,
         )
       )
@@ -803,11 +725,8 @@ internal class NumericRollEngine {
     return when (kind) {
       PendingKind.ENTER -> AFFIX_ENTER_DELAY_SECONDS
       PendingKind.REMOVE ->
-        if (isSuffixAffix(column)) {
-          AFFIX_SUFFIX_REMOVE_DELAY_SECONDS
-        } else {
-          AFFIX_PREFIX_REMOVE_DELAY_SECONDS
-        }
+        if (isSuffixAffix(column)) AFFIX_SUFFIX_REMOVE_DELAY_SECONDS
+        else AFFIX_PREFIX_REMOVE_DELAY_SECONDS
       PendingKind.CHANGE -> 0f
     }
   }
@@ -824,12 +743,10 @@ internal class NumericRollEngine {
 
     for (slot in layout) {
       if (slot.kind == TokenKind.DIGIT && digitEventKeys.contains(slot.key)) {
-        phases[slot.key] =
-          if (changingCount > 0) phase.coerceAtMost(changingCount - 1) else 0
+        phases[slot.key] = if (changingCount > 0) phase.coerceAtMost(changingCount - 1) else 0
         phase += 1
       } else {
-        phases[slot.key] =
-          if (changingCount > 0) phase.coerceAtMost(changingCount - 1) else 0
+        phases[slot.key] = if (changingCount > 0) phase.coerceAtMost(changingCount - 1) else 0
       }
     }
 
@@ -846,27 +763,14 @@ internal class NumericRollEngine {
 
     val oneWayCrowd = column.crowd * column.crowdRaw
     val reversalSuppression = (1f - column.flipRaw).coerceIn(0f, 1f)
-    val geometryRush =
-      1f + STACK_CROWD_SPEEDUP * oneWayCrowd * reversalSuppression
-
+    val geometryRush = 1f + STACK_CROWD_SPEEDUP * oneWayCrowd * reversalSuppression
     val base = response / RESPONSE_SECONDS
-
     val alphaClock =
-      (
-        2.0 * Math.PI /
-          max(0.05f, STACK_ALPHA_RESPONSE_SECONDS * base)
-      ).toFloat()
-
+      (2.0 * Math.PI / max(0.05f, STACK_ALPHA_RESPONSE_SECONDS * base)).toFloat()
     val blurClockBase =
-      (
-        2.0 * Math.PI /
-          max(0.05f, STACK_BLUR_RESPONSE_SECONDS * base)
-      ).toFloat()
+      (2.0 * Math.PI / max(0.05f, STACK_BLUR_RESPONSE_SECONDS * base)).toFloat()
 
     for (entry in column.entries) {
-      // Use Apple's actual physical roll spring, solved analytically in O(1). This preserves the
-      // improvement from phase5 without its fixed-substep CPU cost and without changing the
-      // historical event stream that makes continuous hold/retrigger work.
       val moveScale = appleTimeScale / geometryRush
       val moveResult = integrateSpringExact(
         value = entry.p,
@@ -891,36 +795,27 @@ internal class NumericRollEngine {
         moving = true
       }
 
-      // Blur deliberately remains its own validated channel. Tying blur to add/remove presence in
-      // phase5 made the visible part of a continuous roll nearly sharp.
       val blurClock =
         if (entry.superseded) blurClockBase * STACK_EXIT_BLUR_SPEEDUP else blurClockBase
       val bError = entry.blurTarget - entry.b
 
       if (abs(bError) > POSITION_EPSILON || abs(entry.bVelocity) > VELOCITY_EPSILON) {
         entry.bVelocity +=
-          (
-            (blurClock * blurClock * bError) -
-              (2f * STACK_BLUR_DAMPING * blurClock * entry.bVelocity)
-          ) * dt
-
+          ((blurClock * blurClock * bError) -
+            (2f * STACK_BLUR_DAMPING * blurClock * entry.bVelocity)) * dt
         entry.b = (entry.b + entry.bVelocity * dt).coerceIn(0f, 1f)
-
         if (
           (entry.b <= 0f && entry.bVelocity < 0f) ||
             (entry.b >= 1f && entry.bVelocity > 0f)
         ) {
           entry.bVelocity = 0f
         }
-
         moving = true
       } else {
         entry.b = entry.blurTarget
         entry.bVelocity = 0f
       }
 
-      // Presence also remains independent until we can map RenderBox insertion/removal composition
-      // exactly. This keeps the validated overlap normalisation and the "all digits dance" retrigger.
       val aError = entry.alphaTarget - entry.alpha
       if (abs(aError) > POSITION_EPSILON || abs(entry.alphaVelocity) > VELOCITY_EPSILON) {
         val affixExitSlowdown =
@@ -930,10 +825,8 @@ internal class NumericRollEngine {
             ((1f + (STACK_FLIP_SOFT - 1f) * column.flipRaw) * affixExitSlowdown)
 
         entry.alphaVelocity +=
-          (
-            (localAlphaClock * localAlphaClock * aError) -
-              (2f * STACK_ALPHA_DAMPING * localAlphaClock * entry.alphaVelocity)
-          ) * dt
+          ((localAlphaClock * localAlphaClock * aError) -
+            (2f * STACK_ALPHA_DAMPING * localAlphaClock * entry.alphaVelocity)) * dt
         entry.alpha += entry.alphaVelocity * dt
         moving = true
       } else {
@@ -941,8 +834,6 @@ internal class NumericRollEngine {
         entry.alphaVelocity = 0f
       }
 
-      // Scale uses Apple's near-critical effect spring, again solved analytically. q keeps its own
-      // state so size is not forced to share alpha or blur progress.
       val effectScale = appleTimeScale / geometryRush
       val scaleResult = integrateSpringExact(
         value = entry.q,
@@ -978,7 +869,6 @@ internal class NumericRollEngine {
 
   private data class SpringResult(val value: Float, val velocity: Float)
 
-  /** Exact solution of m*x'' + c*x' + k*(x-target) = 0 for a constant target over [dt]. */
   private fun integrateSpringExact(
     value: Float,
     velocity: Float,
@@ -993,7 +883,6 @@ internal class NumericRollEngine {
     val h = dt.toDouble()
     if (h <= 0.0) return SpringResult(value, velocity)
 
-    // Scaling time by S is equivalent to k/S^2 and c/S, preserving damping ratio.
     val m = mass.toDouble()
     val k = stiffness.toDouble() / (scale * scale)
     val c = damping.toDouble() / scale
@@ -1016,10 +905,8 @@ internal class NumericRollEngine {
         val sinT = sin(wd * h)
         val shape = a * cosT + b * sinT
         y = decay * shape
-        v = decay * (
-          -zeta * omega0 * shape +
-            (-a * wd * sinT + b * wd * cosT)
-        )
+        v = decay *
+          (-zeta * omega0 * shape + (-a * wd * sinT + b * wd * cosT))
       }
 
       zeta > 1.0 + 1e-6 -> {
