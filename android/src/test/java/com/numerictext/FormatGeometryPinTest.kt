@@ -164,4 +164,112 @@ class FormatGeometryPinTest {
     assertTrue(uSamples.size >= 2)
     assertTrue(uSamples.any { it.blurLengthPx > 0f || it.offsetY != 0f })
   }
+
+  @Test
+  fun rapidFormatTaps_dropTargetsThatNeverReachedTheScreen() {
+    val negative =
+      listOf(
+        slot("S", "-", TokenKind.SIGN, center = 10f),
+        slot("P0", "U", TokenKind.OTHER, center = 30f),
+        slot("I0", "9", TokenKind.DIGIT, center = 75f),
+      )
+    val positive =
+      listOf(
+        slot("P0", "U", TokenKind.OTHER, center = 20f),
+        slot("I0", "0", TokenKind.DIGIT, center = 80f),
+      )
+
+    val engine = NumericRollEngine()
+    engine.reset(
+      layout = negative,
+      text = "-U9",
+      lineHeight = 100f,
+      rasterId = 1,
+      blurLengthPx = 50f,
+    )
+
+    fun target(layout: List<KeyedSlot>, text: String, direction: Int, rasterId: Int) {
+      engine.setTarget(
+        layout = layout,
+        text = text,
+        direction = direction,
+        lineHeight = 100f,
+        animationDurationMs = 320L,
+        rasterId = rasterId,
+        blurLengthPx = 50f,
+      )
+    }
+
+    // No frame is advanced between these requests, so the intermediate positive targets have never
+    // been visible. The final request is the same layout that is physically still on screen.
+    target(positive, "U0", direction = 1, rasterId = 2)
+    target(negative, "-U9", direction = -1, rasterId = 3)
+    target(positive, "U0", direction = 1, rasterId = 4)
+    target(negative, "-U9", direction = -1, rasterId = 5)
+
+    Thread.sleep(260L)
+    engine.step(0.016f)
+
+    val samples = engine.samples()
+    assertEquals(3, samples.size)
+    assertEquals("-", samples.single { it.key == "S" }.ch)
+    assertEquals("U", samples.single { it.key == "P0" }.ch)
+    assertEquals("9", samples.single { it.key == "I0" }.ch)
+    assertTrue(samples.all { it.stable })
+  }
+
+  @Test
+  fun reversingAfterSignRemovalStarted_revivesTheOutgoingGlyph() {
+    val negative =
+      listOf(
+        slot("S", "-", TokenKind.SIGN, center = 10f),
+        slot("P0", "U", TokenKind.OTHER, center = 30f),
+        slot("I0", "9", TokenKind.DIGIT, center = 75f),
+      )
+    val positive =
+      listOf(
+        slot("P0", "U", TokenKind.OTHER, center = 20f),
+        slot("I0", "0", TokenKind.DIGIT, center = 80f),
+      )
+
+    val engine = NumericRollEngine()
+    engine.reset(
+      layout = negative,
+      text = "-U9",
+      lineHeight = 100f,
+      rasterId = 1,
+      blurLengthPx = 50f,
+    )
+
+    engine.setTarget(
+      layout = positive,
+      text = "U0",
+      direction = 1,
+      lineHeight = 100f,
+      animationDurationMs = 320L,
+      rasterId = 2,
+      blurLengthPx = 50f,
+    )
+
+    // The sign is the first visual event in this fixture; after the format onset it has committed to
+    // EXIT while the rest of the wave is still in flight.
+    Thread.sleep(130L)
+    engine.step(0.016f)
+    assertEquals(NumericRollEngine.GlyphRole.EXIT, engine.samples().first { it.key == "S" }.role)
+
+    engine.setTarget(
+      layout = negative,
+      text = "-U9",
+      direction = -1,
+      lineHeight = 100f,
+      animationDurationMs = 320L,
+      rasterId = 3,
+      blurLengthPx = 50f,
+    )
+    engine.step(0.016f)
+
+    val sign = engine.samples().first { it.key == "S" && it.ch == "-" }
+    assertEquals(NumericRollEngine.GlyphRole.ENTER, sign.role)
+    assertTrue(sign.blurLengthPx > 0f || sign.offsetY != 0f)
+  }
 }
