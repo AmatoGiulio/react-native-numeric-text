@@ -205,19 +205,29 @@ internal class NumericRollEngine {
     durationScale = animationDurationMs.coerceAtLeast(80L) / 320f
     lastDirection = if (direction < 0) -1 else 1
 
+    val requestedFormatChange = hasStructuralFormatChange(targetLayout, layout)
+
     // A finished format roll can remain internally active for a few frames because invisible ghosts
     // are still converging. SwiftUI starts the next settled A/B transition from the canonical target,
     // not from those invisible historical entries. Collapse only when the current output is already
     // visually identical to the target; genuine in-flight retriggers keep their full history.
     if (
       isRunning &&
-        hasStructuralFormatChange(targetLayout, layout) &&
+        requestedFormatChange &&
         canCanonicalizeVisibleTarget()
     ) {
       snapToTarget()
     }
 
-    val previousSlots = targetLayout
+    // During an in-flight format retarget, targetLayout can describe glyphs whose delayed wave event
+    // has never become visible. Do not queue the new request behind that stale future. Drop only
+    // uncommitted events and reconstruct the previous layout from the entries that actually exist on
+    // screen; already-committed entries keep their p/q/blur/alpha velocities for a true retrigger.
+    var previousSlots = targetLayout
+    if (isRunning && requestedFormatChange) {
+      previousSlots = rebaseFormatRetargetToVisibleState()
+    }
+
     val previousByKey = previousSlots.associateBy { it.key }
     val previousTargetRasterId = targetRasterId
 
@@ -804,6 +814,64 @@ internal class NumericRollEngine {
         (abs(column.targetX - column.x) <= 0.1f && abs(column.xVelocity) <= 0.1f)
     }
   }
+
+  private fun rebaseFormatRetargetToVisibleState(): List<KeyedSlot> {
+    val visibleSlots = ArrayList<KeyedSlot>(columns.size)
+    val iterator = columns.entries.iterator()
+
+    while (iterator.hasNext()) {
+      val column = iterator.next().value
+
+      // Pending stops have not affected a frame yet, so they must not survive a format retarget.
+      column.pending.clear()
+      column.entries.removeAll {
+        it.superseded && it.alpha <= RENDER_ALPHA_EPSILON
+      }
+
+      val current =
+        column.entries.lastOrNull { !it.superseded }
+          ?: column.entries.maxByOrNull { it.alpha }
+            ?.takeIf { it.alpha > RENDER_ALPHA_EPSILON }
+
+      if (current == null) {
+        iterator.remove()
+        continue
+      }
+
+      // Once the queue is discarded, target is the last committed stop. Remove stale chars belonging
+      // to future stops so stopFor() can only reason from the glyph state that actually reached screen.
+      column.charAt.keys.retainAll(setOf(column.target))
+      column.charAt[column.target] = current.ch
+
+      val visibleX = if (current.pinnedX.isNaN()) column.x else current.pinnedX
+      val semanticKind = semanticKindForKey(column.key, column.kind)
+      visibleSlots.add(
+        KeyedSlot(
+          key = column.key,
+          kind = column.kind,
+          semanticKind = semanticKind,
+          char = current.ch,
+          centerFromLeft = visibleX,
+          totalWidth = 0f,
+          leftFromLeft = visibleX,
+          rightFromLeft = visibleX,
+          utf16Start = 0,
+          utf16End = current.ch.length,
+        )
+      )
+    }
+
+    return visibleSlots.sortedBy { it.centerFromLeft }
+  }
+
+  private fun semanticKindForKey(key: String, physicalKind: TokenKind): TokenKind =
+    when {
+      key == "S" -> TokenKind.SIGN
+      key.startsWith("P") || key.startsWith("X") -> TokenKind.OTHER
+      key.startsWith("DEC:") -> TokenKind.DECIMAL_SEPARATOR
+      key.startsWith("G") -> TokenKind.GROUP_SEPARATOR
+      else -> physicalKind
+    }
 
   private fun isSuffixAffix(column: Column): Boolean =
     column.kind == TokenKind.OTHER && column.key.startsWith("X")
