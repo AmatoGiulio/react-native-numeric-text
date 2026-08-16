@@ -90,9 +90,12 @@ internal class NumericRollEngine {
     private const val AFFIX_PREFIX_REMOVE_DELAY_SECONDS = 0.050f
     private const val AFFIX_SUFFIX_REMOVE_DELAY_SECONDS = 0.100f
 
-    // Parentheses, signs and currency prose on SwiftUI leave mostly through presence + blur near the
-    // baseline. Driving them through a full digit lane made Android remove them far too quickly.
+    // Pure affix removals (accounting parentheses/signs) stay near the baseline on SwiftUI. When an
+    // affix is being replaced by another affix topology, the old glyph instead needs the full
+    // already-validated exit lane so it does not collide with the incoming symbol/text. This routes
+    // events differently without changing any spring, digit lane, wave, blur, or retrigger physics.
     private const val AFFIX_EXIT_DISTANCE = 0.45f
+    private const val AFFIX_REPLACEMENT_EXIT_DISTANCE = 1.0f
     private const val AFFIX_EXIT_ALPHA_SLOWDOWN = 1.35f
 
     private const val POSITION_EPSILON = 0.001f
@@ -111,6 +114,7 @@ internal class NumericRollEngine {
     val dueAtNanos: Long,
     val kind: PendingKind,
     val rasterId: Int,
+    val replacementAffixExit: Boolean = false,
   )
 
   private class Entry(val ch: String, var p: Float, var rasterId: Int) {
@@ -128,6 +132,7 @@ internal class NumericRollEngine {
     var blurTarget = 0f
 
     var superseded = false
+    var replacementAffixExit = false
 
     var alpha = 0f
     var alphaVelocity = 0f
@@ -240,9 +245,12 @@ internal class NumericRollEngine {
       }
     }
 
-    val affixTopologyChanged =
-      layout.any { structuralEnterKeys.contains(it.key) && isAffixKind(it.kind) } ||
-        previousSlots.any { structuralRemovalKeys.contains(it.key) && isAffixKind(it.kind) }
+    val hasAffixEnter =
+      layout.any { structuralEnterKeys.contains(it.key) && isAffixKind(it.kind) }
+    val hasAffixRemoval =
+      previousSlots.any { structuralRemovalKeys.contains(it.key) && isAffixKind(it.kind) }
+    val affixTopologyChanged = hasAffixEnter || hasAffixRemoval
+    val affixReplacement = hasAffixEnter && hasAffixRemoval
 
     for ((key, column) in columns) {
       column.retiring = incomingByKey[key] == null
@@ -278,6 +286,7 @@ internal class NumericRollEngine {
       kind: PendingKind,
       wavePhase: Int,
       sourceRasterId: Int,
+      replacementAffixExit: Boolean = false,
     ) {
       val phase =
         if (changingCount > 0) wavePhase.coerceIn(0, changingCount - 1) else 0
@@ -322,6 +331,7 @@ internal class NumericRollEngine {
           dueAtNanos = dueAtNanos,
           kind = kind,
           rasterId = sourceRasterId,
+          replacementAffixExit = replacementAffixExit,
         )
       )
     }
@@ -383,6 +393,7 @@ internal class NumericRollEngine {
         kind = PendingKind.REMOVE,
         wavePhase = oldPhaseByKey[slot.key] ?: 0,
         sourceRasterId = -1,
+        replacementAffixExit = affixReplacement && isAffixKind(column.kind),
       )
     }
 
@@ -480,7 +491,8 @@ internal class NumericRollEngine {
           column.lastDir = commitDir
 
           when (pendingStop.kind) {
-            PendingKind.REMOVE -> commitRemove(column, commitDir)
+            PendingKind.REMOVE ->
+              commitRemove(column, commitDir, pendingStop.replacementAffixExit)
             PendingKind.ENTER -> commitEnter(column, stop, commitDir, pendingStop.rasterId)
             PendingKind.CHANGE ->
               commitChange(column, stop, commitDir, oldDir, wasAtRest, pendingStop.rasterId)
@@ -520,10 +532,14 @@ internal class NumericRollEngine {
     return out
   }
 
-  private fun commitRemove(column: Column, direction: Int) {
+  private fun commitRemove(
+    column: Column,
+    direction: Int,
+    replacementAffixExit: Boolean,
+  ) {
     for (entry in column.entries) {
       if (!entry.superseded) {
-        supersede(entry, direction, column.kind)
+        supersede(entry, direction, column.kind, replacementAffixExit)
       }
     }
   }
@@ -547,7 +563,7 @@ internal class NumericRollEngine {
 
     for (entry in column.entries) {
       if (!entry.superseded) {
-        supersede(entry, direction, column.kind)
+        supersede(entry, direction, column.kind, replacementAffixExit = false)
       }
     }
 
@@ -565,6 +581,7 @@ internal class NumericRollEngine {
 
     if (reuse != null) {
       reuse.superseded = false
+      reuse.replacementAffixExit = false
       reuse.target = 0f
       reuse.posTarget = 0f
       reuse.alphaTarget = 1f
@@ -585,9 +602,20 @@ internal class NumericRollEngine {
     current.rasterId = rasterId
   }
 
-  private fun supersede(entry: Entry, direction: Int, kind: TokenKind) {
-    val exitDistance = if (isAffixKind(kind)) AFFIX_EXIT_DISTANCE else 1f
+  private fun supersede(
+    entry: Entry,
+    direction: Int,
+    kind: TokenKind,
+    replacementAffixExit: Boolean,
+  ) {
+    val isReplacement = replacementAffixExit && isAffixKind(kind)
+    val exitDistance = when {
+      isReplacement -> AFFIX_REPLACEMENT_EXIT_DISTANCE
+      isAffixKind(kind) -> AFFIX_EXIT_DISTANCE
+      else -> 1f
+    }
     entry.superseded = true
+    entry.replacementAffixExit = isReplacement
     entry.target = direction.toFloat() * exitDistance
     entry.posTarget = direction.toFloat() * exitDistance
     entry.blurTarget = 1f
