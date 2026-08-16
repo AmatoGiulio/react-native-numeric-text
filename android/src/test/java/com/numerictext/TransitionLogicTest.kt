@@ -28,7 +28,7 @@ class TransitionLogicTest {
   @Test
   fun integerDigits_areAnchoredFromTheLeft() {
     assertEquals(
-      mapOf("I0" to "2", "G3:," to ",", "I1" to "5", "I2" to "7", "I3" to "6"),
+      mapOf("I0" to "2", "G3" to ",", "I1" to "5", "I2" to "7", "I3" to "6"),
       keyMap("2,576"),
     )
   }
@@ -46,59 +46,58 @@ class TransitionLogicTest {
     assertEquals("0", next["I1"])
     assertEquals("0", next["I2"])
     assertEquals("0", next["I3"])
-    assertEquals(",", next["G3:,"])
+    assertEquals(",", next["G3"])
   }
 
   @Test
   fun groupSeparator_isStructuralAndBornOnCarry() {
-    assertFalse(keyMap("999").containsKey("G3:,"))
-    assertEquals(",", keyMap("1,000")["G3:,"])
+    assertFalse(keyMap("999").containsKey("G3"))
+    assertEquals(",", keyMap("1,000")["G3"])
   }
 
   @Test
   fun fractions_areAnchoredFromTheDecimalPoint() {
     assertEquals(
-      mapOf("I0" to "1", "DEC:." to ".", "F0" to "9"),
+      mapOf("I0" to "1", "DEC" to ".", "F0" to "9"),
       keyMap("1.9"),
     )
     assertEquals(
-      mapOf("I0" to "2", "DEC:." to ".", "F0" to "0"),
+      mapOf("I0" to "2", "DEC" to ".", "F0" to "0"),
       keyMap("2.0"),
     )
   }
 
   @Test
   fun sign_hasStableStructuralKey() {
-    assertEquals("-", keyMap("-1")["S:-"])
+    assertEquals("-", keyMap("-1")["S"])
     assertEquals("1", keyMap("-1")["I0"])
   }
 
   @Test
   fun currencySymbol_keepsItsKeyWhenTheNumberGrowsADigit() {
-    assertEquals("$", keyMap("\$999")["P0:$"])
-    assertEquals("$", keyMap("\$1,000")["P0:$"])
+    assertEquals("$", keyMap("\$999")["P0"])
+    assertEquals("$", keyMap("\$1,000")["P0"])
   }
 
   @Test
   fun currencySymbol_keepsItsKeyAcrossASignChange() {
-    assertEquals("$", keyMap("\$1.00")["P0:$"])
-    assertEquals("$", keyMap("-\$1.00")["P0:$"])
-    assertEquals("-", keyMap("-\$1.00")["S:-"])
+    assertEquals("$", keyMap("\$1.00")["P0"])
+    assertEquals("$", keyMap("-\$1.00")["P0"])
+    assertEquals("-", keyMap("-\$1.00")["S"])
   }
 
   @Test
-  fun differentStructuralGlyphs_neverShareIdentity() {
-    assertTrue(keyMap("\$1").containsKey("P0:$"))
-    assertTrue(keyMap("€1").containsKey("P0:€"))
-    assertFalse(keyMap("€1").containsKey("P0:$"))
+  fun differentStructuralGlyphs_shareTheSameSemanticPosition() {
+    assertEquals("$", keyMap("\$1")["P0"])
+    assertEquals("€", keyMap("€1")["P0"])
   }
 
   @Test
   fun accountingBrackets_sitOutsideTheSymbol() {
     val accounting = keyMap("(\$1.00)")
-    assertEquals("$", accounting["P0:$"])
-    assertEquals("(", accounting["P1:("])
-    assertEquals(")", accounting["X0:)"])
+    assertEquals("$", accounting["P0"])
+    assertEquals("(", accounting["P1"])
+    assertEquals(")", accounting["X0"])
   }
 
   @Test
@@ -109,24 +108,24 @@ class TransitionLogicTest {
       TransitionLogic.layoutKeyedSlots("1.000,00\u00A0€", '.', ',', '-', line("1.000,00\u00A0€"))
         .associate { it.key to it.char }
 
-    assertEquals("€", small["X1:€"])
-    assertEquals("€", large["X1:€"])
-    assertEquals("\u00A0", small["X0:\u00A0"])
-    assertEquals("\u00A0", large["X0:\u00A0"])
+    assertEquals("€", small["X1"])
+    assertEquals("€", large["X1"])
+    assertEquals("\u00A0", small["X0"])
+    assertEquals("\u00A0", large["X0"])
   }
 
   @Test
   fun percentSign_isKeyedFromTheEndOfTheNumber() {
-    assertEquals("%", keyMap("9%")["X0:%"])
-    assertEquals("%", keyMap("99%")["X0:%"])
+    assertEquals("%", keyMap("9%")["X0"])
+    assertEquals("%", keyMap("99%")["X0"])
   }
 
   @Test
   fun currencyName_keysEachLetterOutwardFromTheNumber() {
     val letters = keyMap("1.00 US dollars")
-    assertEquals(" ", letters["X0: "])
-    assertEquals("U", letters["X1:U"])
-    assertEquals("s", letters["X10:s"])
+    assertEquals(" ", letters["X0"])
+    assertEquals("U", letters["X1"])
+    assertEquals("s", letters["X10"])
   }
 
   @Test
@@ -136,25 +135,26 @@ class TransitionLogicTest {
     val map = slots.associate { it.key to it.char }
 
     assertUniqueKeys(slots)
-    assertEquals(".", map["P1:."])
-    assertEquals("/", map["P2:/"])
-    assertEquals("B", map["P3:B"])
-    assertEquals(",", map["G3:,"])
-    assertEquals(".", map["DEC:."])
+    assertEquals(".", map["P1"])
+    assertEquals("/", map["P2"])
+    assertEquals("B", map["P3"])
+    assertEquals(",", map["G3"])
+    assertEquals(".", map["DEC"])
     assertEquals("1", map["I0"])
     assertEquals("5", map["F0"])
+    assertEquals(TokenKind.OTHER, slots.single { it.key == "P1" }.semanticKind)
+    assertEquals(TokenKind.GROUP_SEPARATOR, slots.single { it.key == "G3" }.semanticKind)
+    assertEquals(TokenKind.DECIMAL_SEPARATOR, slots.single { it.key == "DEC" }.semanticKind)
   }
 
   @Test
   fun punctuationInsideCurrencySuffix_isNotNumericStructure() {
     val text = "1,234.50 د.إ."
     val slots = keyed(text)
-    val map = slots.associate { it.key to it.char }
 
     assertUniqueKeys(slots)
-    assertEquals(".", map["DEC:."])
-    assertEquals(1, slots.count { it.kind == TokenKind.DECIMAL_SEPARATOR })
-    assertEquals(2, slots.count { it.char == "." && it.kind == TokenKind.OTHER })
+    assertEquals(1, slots.count { it.semanticKind == TokenKind.DECIMAL_SEPARATOR })
+    assertEquals(2, slots.count { it.char == "." && it.semanticKind == TokenKind.OTHER })
   }
 
   @Test
@@ -163,15 +163,37 @@ class TransitionLogicTest {
     val slots = TransitionLogic.layoutKeyedSlots(text, '.', ',', '-', line(text))
 
     assertUniqueKeys(slots)
-    assertEquals(1, slots.count { it.kind == TokenKind.SIGN })
-    assertEquals("-", slots.single { it.kind == TokenKind.SIGN }.char)
-    assertEquals(1, slots.count { it.char == "-" && it.kind == TokenKind.OTHER })
+    assertEquals(1, slots.count { it.semanticKind == TokenKind.SIGN })
+    assertEquals("-", slots.single { it.semanticKind == TokenKind.SIGN }.char)
+    assertEquals(1, slots.count { it.char == "-" && it.semanticKind == TokenKind.OTHER })
+  }
+
+  @Test
+  fun everyVisibleGlyph_usesTheValidatedDigitPhysics() {
+    val slots = keyed("-\$1,234.50%")
+
+    assertTrue(slots.isNotEmpty())
+    assertTrue(slots.all { it.kind == TokenKind.DIGIT })
+    assertEquals(TokenKind.SIGN, slots.single { it.key == "S" }.semanticKind)
+    assertEquals(TokenKind.OTHER, slots.single { it.key == "P0" }.semanticKind)
+    assertEquals(TokenKind.GROUP_SEPARATOR, slots.single { it.key == "G3" }.semanticKind)
+    assertEquals(TokenKind.DECIMAL_SEPARATOR, slots.single { it.key == "DEC" }.semanticKind)
+    assertEquals(TokenKind.OTHER, slots.single { it.key == "X0" }.semanticKind)
+  }
+
+  @Test
+  fun bidiDirectionalMarks_doNotCreateTransitionSlots() {
+    val text = "\u061C-1"
+    val slots = keyed(text)
+
+    assertEquals(listOf("S", "I0"), slots.map { it.key })
+    assertEquals(listOf("-", "1"), slots.map { it.char })
   }
 
   @Test
   fun tokenBoundsComeFromTheFullLineGeometry() {
     val slots = keyed("1,000")
-    val comma = slots.first { it.key == "G3:," }
+    val comma = slots.first { it.key == "G3" }
     assertEquals(1f, comma.leftFromLeft, 0.001f)
     assertEquals(2f, comma.rightFromLeft, 0.001f)
     assertEquals(5f, comma.totalWidth, 0.001f)
@@ -285,15 +307,25 @@ class NumericRollEngineTest {
   }
 
   @Test
-  fun changedStructuralGlyphGetsANewColumnIdentity() {
+  fun changedStructuralGlyph_rollsThroughTheSameColumn() {
+    val oldSlots = slots("\$1")
+    val newSlots = slots("€1")
+    assertEquals(
+      oldSlots.single { it.char == "$" }.key,
+      newSlots.single { it.char == "€" }.key,
+    )
+
     val engine = NumericRollEngine()
     reset(engine, "\$1")
     target(engine, "€1", direction = 1, rasterId = 2)
     advance(engine)
 
-    val samples = engine.samples()
+    val samples = engine.samples().filter { it.key == "P0" }
     assertTrue(samples.any { it.ch == "€" })
     assertTrue(samples.any { it.ch == "$" })
+    assertTrue(samples.first { it.ch == "$" }.blurLengthPx > 0f)
+    assertTrue(samples.first { it.ch == "€" }.offsetY < 0f)
+    assertTrue(samples.first { it.ch == "$" }.offsetY > 0f)
   }
 
   @Test
