@@ -67,7 +67,7 @@ and it has to keep behaving correctly when updates arrive continuously rather th
 - Continuous increment/decrement updates without resetting the whole animation.
 - Structural handling of integer digits, fractional digits, grouping separators, decimal separators, and signs.
 - Locale-aware native number formatting through an `Intl.NumberFormat`-shaped `format` prop.
-- Native currency display: symbol, ISO code, or name, with the accounting sign for negatives.
+- Native currency display with symbol or ISO code, plus the accounting sign for negatives.
 - Native percent display.
 - Configurable grouping, integer padding, fractional precision, and significant digits.
 - Identical rounding on iOS, Android, and web.
@@ -154,9 +154,6 @@ The shape of this prop is borrowed from [`number-flow`](https://github.com/barvi
 <NumericText value={1234.5} format={{ style: 'currency', currency: 'USD', currencyDisplay: 'code' }} />
 // USD 1,234.50
 
-<NumericText value={1234.5} format={{ style: 'currency', currency: 'USD', currencyDisplay: 'name' }} />
-// 1,234.50 US dollars
-
 <NumericText value={-1234.5} format={{ style: 'currency', currency: 'USD', currencySign: 'accounting' }} />
 // ($1,234.50)
 ```
@@ -165,7 +162,7 @@ The currency affix takes part in the transition rather than sitting on top of it
 
 Fraction digits follow the currency when you do not set them: two for `USD`, none for `JPY`, three for `BHD`.
 
-`currencySign: 'accounting'` applies with `currencyDisplay: 'symbol'`, the one combination both platforms format natively; with `'code'` or `'name'` the standard sign is used. `Intl`'s `currencyDisplay: 'narrowSymbol'` is not offered, because neither platform's native formatter exposes it at the versions this library supports.
+`currencySign: 'accounting'` applies with `currencyDisplay: 'symbol'`. Code display always uses the standard sign form. `Intl`'s `currencyDisplay: 'narrowSymbol'` is not offered, because neither platform's native formatter exposes it at the versions this library supports.
 
 ### Percent, padding, and significant digits
 
@@ -186,24 +183,6 @@ Set `minimumFractionDigits` to hold a fixed number of decimals through a change 
 ```tsx
 <NumericText value={price} format={{ minimumFractionDigits: 2, maximumFractionDigits: 2 }} />
 ```
-
-### Amount fields, and the decimal you are still typing
-
-`value` is a number, and a number cannot hold `7.`. Someone typing `7`, `.`, `5` produces the values 7, 7, 7.5, so between the second and third keystroke the mark they typed has nowhere to live. `trailingDecimalSeparator` gives it one:
-
-```tsx
-const [raw, setRaw] = useState('');
-
-<NumericText
-  value={Number(raw) || 0}
-  currency="USD"
-  trailingDecimalSeparator={raw.endsWith('.')}
-/>
-```
-
-The mark becomes a real column: the locale's own character, the same font, the same baseline, keyed as `DEC`, and already in place when the first fraction digit is born beside it. It is a no-op once a fraction digit arrives or when the format already prints a mark, so pairing it with `minimumFractionDigits` is safe. It goes after the last digit rather than at the end of the string, so `de-DE` gives `1.234, €` and not `1.234 €,`.
-
-Do not reach for a sibling `<Text>` holding a `.` instead. It cannot be made to line up: this view reserves half an em of headroom for the transition's overspill and centres the number inside it, so the distance from the last digit to the right edge of the view is not fixed, and it moves with the value and with the font.
 
 ### Rounding
 
@@ -244,7 +223,6 @@ During rapid updates, automatic direction is resolved against the value the rend
 | `locale` | `string` | `'en-US'` | BCP-47 locale used for native number formatting. |
 | `format` | `NumericTextFormat` | `{}` | How to shape the number. See below. |
 | `currency` | `string` | none | Shorthand for `format={{ style: 'currency', currency }}`. `format` wins where the two overlap. |
-| `trailingDecimalSeparator` | `boolean` | `false` | Draws the decimal mark after the last digit when no fraction digit follows it yet. For amount fields; see above. |
 | `direction` | `'automatic' \| 'up' \| 'down'` | `'automatic'` | Direction of the numeric transition. |
 | `animationDuration` | `number` | `80` | Android only. Nominal timing input used to scale the native transition; it is not a hard duration clamp. |
 | `reduceMotion` | `'system' \| 'always' \| 'never'` | `'system'` | Accessibility behaviour for motion. |
@@ -264,7 +242,7 @@ A subset of `Intl.NumberFormatOptions`. Every option is resolved by the platform
 |---|---|---|---|
 | `style` | `'decimal' \| 'currency' \| 'percent'` | `'decimal'` | `'currency'` needs `currency` and falls back to `'decimal'` without it. `'percent'` multiplies by 100. |
 | `currency` | `string` | none | ISO 4217 code. |
-| `currencyDisplay` | `'symbol' \| 'code' \| 'name'` | `'symbol'` | `$1,234.56`, `USD 1,234.56`, `1,234.56 US dollars`. |
+| `currencyDisplay` | `'symbol' \| 'code'` | `'symbol'` | `$1,234.56` or `USD 1,234.56`. |
 | `currencySign` | `'standard' \| 'accounting'` | `'standard'` | `'accounting'` brackets a negative amount. Applies with `currencyDisplay: 'symbol'`. |
 | `useGrouping` | `boolean` | `true` | Enables grouping separators. |
 | `minimumIntegerDigits` | `number` | none | Pads with leading zeros to at least this width. |
@@ -277,6 +255,7 @@ A subset of `Intl.NumberFormatOptions`. Every option is resolved by the platform
 
 | Option | Reason |
 |---|---|
+| `currencyDisplay: 'name'` | Localized names can change spelling with the value (`dollar`/`dollars`); mutable affixes are deferred until they have an explicit transition contract. |
 | `notation: 'compact'` (`1.2K`) | Both platforms can produce it, but from different CLDR vintages, so they would disagree on the string for the same input. |
 | `signDisplay` | Android's `NumberFormatter` is API 30; iOS's `NumberFormatter` has no equivalent. |
 | `currencyDisplay: 'narrowSymbol'` | Same. |
@@ -344,9 +323,9 @@ Android includes a subset of [Sunghyun Sans](https://github.com/anaclumos/sunghy
 />
 ```
 
-The bundled Android subset contains Latin-script numeric-formatting glyphs: digits, the separators and signs a locale formats with, the currency symbols, and the Latin letters an ISO code or a currency name needs. That is about 33 KB a weight, 300 KB for the nine.
+The bundled Android subset contains Latin-script numeric-formatting glyphs: digits, the separators and signs a locale formats with, currency symbols, and the Latin letters needed by ISO currency codes. The current bundled files are about 33 KB a weight, 300 KB for the nine.
 
-Coverage is checked against the characters the current format will actually draw, not against the locale alone, so a currency symbol or a currency name is part of the question. When any of them is missing from the bundled face, the renderer falls back to the platform font rather than drawing missing-glyph boxes.
+Coverage is checked against the characters the current format will actually draw, so a currency symbol or ISO code is part of the question. When any required glyph is missing from the bundled face, the renderer falls back to the platform font rather than drawing missing-glyph boxes.
 
 The full font license is included at `android/src/main/assets/fonts/OFL.txt`.
 
