@@ -151,7 +151,7 @@ class UsdCodeRepeatTransitionTest {
     // but hidden superseded entries keep the engine alive, so the following value change is a real
     // reversal rather than a canonical fresh start.
     var reachedWindow = false
-    repeat(80) {
+    for (step in 0 until 80) {
       Thread.sleep(20L)
       engine.step(0.020f)
       val samples = engine.samples()
@@ -162,7 +162,7 @@ class UsdCodeRepeatTransitionTest {
         }
       if (engine.isRunning && usdSettled) {
         reachedWindow = true
-        return@repeat
+        break
       }
     }
     assertTrue("fixture must reach visually-settled USD while engine history is still active", reachedWindow)
