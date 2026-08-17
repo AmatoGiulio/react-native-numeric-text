@@ -1,5 +1,6 @@
 package com.numerictext
 
+import com.facebook.react.R
 import com.facebook.react.module.annotations.ReactModule
 import com.facebook.react.uimanager.SimpleViewManager
 import com.facebook.react.uimanager.ThemedReactContext
@@ -166,6 +167,11 @@ class NumericTextViewManager : SimpleViewManager<NumericTextView>(),
 
     committedFormatByView[view] = finalFormat
     finalValue?.let { committedValueByView[view] = it }
+
+    // NumericTextView supplies the formatted number as its default contentDescription. BaseViewManager
+    // stores an explicit React Native accessibilityLabel in this tag; a value/format update happens
+    // at the end of the transaction and must not overwrite that consumer-provided label.
+    (view.getTag(R.id.accessibility_label) as? String)?.let { view.contentDescription = it }
   }
 
   override fun onDropViewInstance(view: NumericTextView) {
