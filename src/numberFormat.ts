@@ -241,49 +241,16 @@ export function nativeFormatProps(
 export function formatNumber(
   value: number,
   locale: string,
-  format: NumericTextFormat,
-  trailingDecimalSeparator = false
-): string {
-  const normalized = normalizeFormat(format);
-  let text: string;
-  try {
-    text = value.toLocaleString(locale, intlOptions(normalized));
-  } catch {
-    try {
-      text = value.toLocaleString(locale);
-    } catch {
-      text = value.toLocaleString(DEFAULT_LOCALE);
-    }
-  }
-  return trailingDecimalSeparator
-    ? withTrailingSeparator(text, decimalSeparatorFor(locale, normalized))
-    : text;
-}
-
-function decimalSeparatorFor(
-  locale: string,
   format: NumericTextFormat
 ): string {
+  const normalized = normalizeFormat(format);
   try {
-    const probe: Intl.NumberFormatOptions = { ...intlOptions(format) };
-    delete probe.minimumSignificantDigits;
-    delete probe.maximumSignificantDigits;
-    probe.minimumFractionDigits = 1;
-    probe.maximumFractionDigits = 1;
-
-    const parts = new Intl.NumberFormat(locale, probe).formatToParts(1.1);
-    return parts.find((part) => part.type === 'decimal')?.value ?? '.';
+    return value.toLocaleString(locale, intlOptions(normalized));
   } catch {
-    return '.';
+    try {
+      return value.toLocaleString(locale);
+    } catch {
+      return value.toLocaleString(DEFAULT_LOCALE);
+    }
   }
-}
-
-function withTrailingSeparator(text: string, mark: string): string {
-  if (text.includes(mark)) return text;
-
-  let end = -1;
-  for (const match of text.matchAll(/\p{Nd}/gu)) {
-    end = match.index + match[0].length;
-  }
-  return end < 0 ? text + mark : text.slice(0, end) + mark + text.slice(end);
 }

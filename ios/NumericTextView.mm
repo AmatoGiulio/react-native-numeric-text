@@ -52,8 +52,8 @@ using namespace facebook::react;
   const auto &next = *std::static_pointer_cast<NumericTextViewProps const>(props);
 
   // Every prop is forwarded on every update rather than diffed here. The SwiftUI side ignores an
-  // unchanged value on its own — its animation is scoped to `value` — and a partial forward is how
-  // a number ends up still drawn in the previous font after a style change.
+  // unchanged value on its own, and a partial forward is how a number ends up still drawn in the
+  // previous font after a style change.
   //
   // Formatting first: the value is drawn through it, so a change to both in one commit has to
   // reach the formatter before it reaches the text.
@@ -68,7 +68,7 @@ using namespace facebook::react;
          maximumFractionDigits:next.maximumFractionDigits
       minimumSignificantDigits:next.minimumSignificantDigits
       maximumSignificantDigits:next.maximumSignificantDigits
-       trailingDecimalSeparator:next.trailingDecimalSeparator];
+       trailingDecimalSeparator:NO];
 
   [_host applyValue:next.value
           direction:RCTNSStringFromString(next.direction)

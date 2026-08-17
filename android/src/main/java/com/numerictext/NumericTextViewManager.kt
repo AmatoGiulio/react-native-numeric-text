@@ -94,11 +94,6 @@ class NumericTextViewManager : SimpleViewManager<NumericTextView>(),
     pending(view)?.useGrouping = value
   }
 
-  @ReactProp(name = "trailingDecimalSeparator")
-  override fun setTrailingDecimalSeparator(view: NumericTextView?, value: Boolean) {
-    pending(view)?.trailingDecimalSeparator = value
-  }
-
   @ReactProp(name = "minimumIntegerDigits")
   override fun setMinimumIntegerDigits(view: NumericTextView?, value: Int) {
     pending(view)?.minimumIntegerDigits = value
@@ -191,7 +186,6 @@ class NumericTextViewManager : SimpleViewManager<NumericTextView>(),
     var currencyDisplay: String? = null,
     var currencySign: String? = null,
     var useGrouping: Boolean? = null,
-    var trailingDecimalSeparator: Boolean? = null,
     var minimumIntegerDigits: Int? = null,
     var minimumFractionDigits: Int? = null,
     var maximumFractionDigits: Int? = null,
@@ -214,7 +208,6 @@ class NumericTextViewManager : SimpleViewManager<NumericTextView>(),
       maximumFractionDigits = maximumFractionDigits ?: base.maximumFractionDigits,
       minimumSignificantDigits = minimumSignificantDigits ?: base.minimumSignificantDigits,
       maximumSignificantDigits = maximumSignificantDigits ?: base.maximumSignificantDigits,
-      trailingDecimalSeparator = trailingDecimalSeparator ?: base.trailingDecimalSeparator,
     )
   }
 
