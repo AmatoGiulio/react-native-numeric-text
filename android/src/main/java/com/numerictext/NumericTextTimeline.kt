@@ -403,17 +403,30 @@ internal class NumericRollEngine {
       column.retiring = false
 
       if (structuralEnterKeys.contains(slot.key)) {
-        val stop = column.goalStop()
-        column.charAt[stop] = slot.char
-
-        enqueue(
-          column = column,
-          stop = stop,
-          kind = PendingKind.ENTER,
-          wavePhase = newPhaseByKey[slot.key] ?: 0,
-          sourceRasterId = rasterId,
-          pinnedX = if (formatGeometrySplit) incomingX else Float.NaN,
-        )
+        val needsRevive = column.entries.none { !it.superseded }
+        if (needsRevive && column.entries.isNotEmpty()) {
+          val next = column.goalStop() - lastDirection
+          column.charAt[next] = slot.char
+          enqueue(
+            column = column,
+            stop = next,
+            kind = PendingKind.CHANGE,
+            wavePhase = newPhaseByKey[slot.key] ?: 0,
+            sourceRasterId = rasterId,
+            pinnedX = if (formatGeometrySplit) incomingX else Float.NaN,
+          )
+        } else {
+          val stop = column.goalStop()
+          column.charAt[stop] = slot.char
+          enqueue(
+            column = column,
+            stop = stop,
+            kind = PendingKind.ENTER,
+            wavePhase = newPhaseByKey[slot.key] ?: 0,
+            sourceRasterId = rasterId,
+            pinnedX = if (formatGeometrySplit) incomingX else Float.NaN,
+          )
+        }
         continue
       }
 
@@ -826,10 +839,15 @@ internal class NumericRollEngine {
         it.superseded && it.alpha <= RENDER_ALPHA_EPSILON
       }
 
-      val current =
-        column.entries.lastOrNull { !it.superseded }
-          ?: column.entries.maxByOrNull { it.alpha }
+      val active = column.entries.lastOrNull { !it.superseded }
+      val outgoingGhost =
+        if (active == null) {
+          column.entries.maxByOrNull { it.alpha }
             ?.takeIf { it.alpha > RENDER_ALPHA_EPSILON }
+        } else {
+          null
+        }
+      val current = active ?: outgoingGhost
 
       if (current == null) {
         iterator.remove()
@@ -841,20 +859,26 @@ internal class NumericRollEngine {
       column.charAt.keys.retainAll(setOf(column.target))
       column.charAt[column.target] = current.ch
 
-      val visibleX = if (current.pinnedX.isNaN()) column.x else current.pinnedX
+      // A fading EXIT remains in the physical column so a reversal can reuse its velocity, blur and
+      // alpha. It is not, however, part of the active text topology. Counting it as a previous slot
+      // makes a returning sign look structurally unchanged and suppresses the unified format wave for
+      // stable affix glyphs such as U/S/D on the second positive -> negative USD-code transition.
+      if (active == null) continue
+
+      val visibleX = if (active.pinnedX.isNaN()) column.x else active.pinnedX
       val semanticKind = semanticKindForKey(column.key, column.kind)
       visibleSlots.add(
         KeyedSlot(
           key = column.key,
           kind = column.kind,
           semanticKind = semanticKind,
-          char = current.ch,
+          char = active.ch,
           centerFromLeft = visibleX,
           totalWidth = 0f,
           leftFromLeft = visibleX,
           rightFromLeft = visibleX,
           utf16Start = 0,
-          utf16End = current.ch.length,
+          utf16End = active.ch.length,
         )
       )
     }
