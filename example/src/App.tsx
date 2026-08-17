@@ -1,5 +1,5 @@
-import { FormatLab } from './FormatLab';
+import { Showcase } from './Showcase';
 
 export default function App() {
-  return <FormatLab />;
+  return <Showcase />;
 }
