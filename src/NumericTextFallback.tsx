@@ -1,5 +1,6 @@
 import { memo } from 'react';
 import { Text } from 'react-native';
+import { accessibilityPropsOf } from './accessibilityProps';
 import { DEFAULT_LOCALE, formatNumber, resolveFormat } from './numberFormat';
 import type { NumericTextProps } from './types';
 
@@ -9,7 +10,7 @@ function NumericTextFallbackImpl(props: NumericTextProps) {
   const formatted = formatNumber(value, locale, resolveFormat(props));
 
   return (
-    <Text style={style} testID={testID}>
+    <Text {...accessibilityPropsOf(props)} style={style} testID={testID}>
       {formatted}
     </Text>
   );
