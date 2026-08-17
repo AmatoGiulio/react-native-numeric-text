@@ -107,6 +107,14 @@ const BURST_INTERVAL_MS = 85;
 // One tap produces the same event stream on iOS and Android. Long holds expose settled states;
 // 85 ms runs exercise retriggering while the previous numeric transition is still in flight.
 const GT_SEQUENCE: readonly GtStep[] = [
+  { presetIndex: 0, side: 0, hold: 650, label: 'USD symbol A' },
+  { presetIndex: 0, side: 1, hold: 850, label: 'USD symbol B' },
+  // Same numeric value (1000), same locale and currency: only currencyDisplay changes. These two
+  // steps catch platforms that scope numericText animation to the Double instead of the rendered
+  // string, and Android format transactions that accidentally insert an intermediate baseline.
+  { presetIndex: 5, side: 1, hold: 850, label: 'USD format-only symbol → code' },
+  { presetIndex: 0, side: 1, hold: 850, label: 'USD format-only code → symbol' },
+
   { presetIndex: 1, side: 0, hold: 650, label: 'EUR A' },
   { presetIndex: 1, side: 1, hold: 850, label: 'EUR B' },
   { presetIndex: 1, side: 0, hold: 850, label: 'EUR A return' },
