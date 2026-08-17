@@ -71,10 +71,9 @@ export function resolveFormat(props: FormatProps): NumericTextFormat {
  * this component non-throwing, but clamp the numeric options to ECMA-402's supported ranges and
  * hand the exact same values to JS, Android and iOS.
  *
- * `currencyDisplay: 'name'` is intentionally not part of this first contract. Localized names can
- * change spelling with the value (`dollar`/`dollars`) and the current transition engine treats an
- * affix as stable text. Until mutable affixes have their own transition semantics, a runtime
- * `name` value degrades to `symbol` rather than exposing a platform-dependent animation.
+ * The public currency display contract is deliberately `symbol | code`. Any unsupported runtime
+ * value degrades to `symbol` before JS or either native formatter sees it, so an untyped caller
+ * cannot accidentally opt into a platform-specific affix model.
  */
 export function normalizeFormat(format: NumericTextFormat): NumericTextFormat {
   const currency = normalizeCurrency(format.currency);
