@@ -1,6 +1,8 @@
 package com.numerictext
 
 import android.graphics.Color
+import android.graphics.Path
+import android.graphics.RectF
 import android.text.Layout
 import android.text.StaticLayout
 import android.text.TextPaint
@@ -18,6 +20,38 @@ data class TextLineGeometry(
 ) {
   fun horizontalAt(utf16Offset: Int): Float =
     horizontals[utf16Offset.coerceIn(0, horizontals.lastIndex)]
+
+  /**
+   * Returns the visual cell occupied by one logical text range.
+   *
+   * A bidi boundary can have two valid caret positions. `getPrimaryHorizontal(start/end)` chooses
+   * only one of them, so pairing those two carets can cut directly through the glyph next to an
+   * RTL/LTR boundary. Android's selection path is range-aware and follows the shaped visual run,
+   * which is exactly the geometry the raster partition needs.
+   */
+  fun visualBounds(utf16Start: Int, utf16End: Int): Pair<Float, Float> {
+    val start = utf16Start.coerceIn(0, text.length)
+    val end = utf16End.coerceIn(start, text.length)
+    val shaped = layout
+
+    if (shaped != null && end > start) {
+      val path = Path()
+      shaped.getSelectionPath(start, end, path)
+      val bounds = RectF()
+      path.computeBounds(bounds, true)
+
+      val left = bounds.left - horizontalOrigin
+      val right = bounds.right - horizontalOrigin
+      if (left.isFinite() && right.isFinite() && right > left) {
+        return left to right
+      }
+    }
+
+    // JVM tests and zero-width control characters do not have a useful selection rectangle.
+    val a = horizontalAt(start)
+    val b = horizontalAt(end)
+    return min(a, b) to max(a, b)
+  }
 }
 
 /**

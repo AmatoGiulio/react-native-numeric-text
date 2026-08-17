@@ -28,6 +28,13 @@ public final class NumericTextSwiftUIHost: UIView {
   /// number moved. `nil` until the first render, which must not animate.
   private var lastValue: Double?
 
+  /// The formatting props, exactly as `src/numberFormat.ts` resolved them, and the formatter they
+  /// build. Kept together so the formatter is rebuilt only when something about it changed:
+  /// `updateProps:` forwards every prop on every value change, and a `NumberFormatter` per frame
+  /// of a press-and-hold is real work for no result.
+  private var formatSpec = FormatSpec()
+  private lazy var formatter = Self.makeFormatter(formatSpec)
+
   @objc public override init(frame: CGRect) {
     super.init(frame: frame)
 
@@ -53,28 +60,59 @@ public final class NumericTextSwiftUIHost: UIView {
     fatalError("NumericTextSwiftUIHost is created in code only")
   }
 
+  /**
+   * The formatting props. Applied before the value, because the value is drawn through them.
+   *
+   * Separate from `apply` so neither selector grows past reading: between them they carry
+   * everything the component exposes, and Objective-C spells every argument out.
+   */
   // swiftlint:disable:next function_parameter_count
-  @objc(applyValue:locale:direction:reduceMotion:useGrouping:minimumFractionDigits:maximumFractionDigits:fontSize:fontWeight:fontFamily:textColor:)
-  public func apply(
-    value: Double,
+  @objc(applyFormatWithLocale:numberStyle:currency:currencyDisplay:currencySign:useGrouping:minimumIntegerDigits:minimumFractionDigits:maximumFractionDigits:minimumSignificantDigits:maximumSignificantDigits:)
+  public func applyFormat(
     locale: String,
-    direction: String,
-    reduceMotion: String,
+    numberStyle: String,
+    currency: String,
+    currencyDisplay: String,
+    currencySign: String,
     useGrouping: Bool,
+    minimumIntegerDigits: Int,
     minimumFractionDigits: Int,
     maximumFractionDigits: Int,
+    minimumSignificantDigits: Int,
+    maximumSignificantDigits: Int
+  ) {
+    let next = FormatSpec(
+      locale: locale,
+      numberStyle: numberStyle,
+      currency: currency,
+      currencyDisplay: currencyDisplay,
+      currencySign: currencySign,
+      useGrouping: useGrouping,
+      minimumIntegerDigits: minimumIntegerDigits,
+      minimumFractionDigits: minimumFractionDigits,
+      maximumFractionDigits: maximumFractionDigits,
+      minimumSignificantDigits: minimumSignificantDigits,
+      maximumSignificantDigits: maximumSignificantDigits
+    )
+    guard next != formatSpec else { return }
+    formatSpec = next
+    formatter = Self.makeFormatter(next)
+  }
+
+  // swiftlint:disable:next function_parameter_count
+  @objc(applyValue:direction:reduceMotion:fontSize:fontWeight:fontFamily:textColor:)
+  public func apply(
+    value: Double,
+    direction: String,
+    reduceMotion: String,
     fontSize: CGFloat,
     fontWeight: String,
     fontFamily: String?,
     textColor: UIColor?
   ) {
-    model.text = Self.format(
-      value,
-      locale: locale,
-      useGrouping: useGrouping,
-      minimumFractionDigits: minimumFractionDigits,
-      maximumFractionDigits: maximumFractionDigits
-    )
+    let nextText = Self.text(value, formatter: formatter)
+    let changed = model.text != nextText
+
     model.fontSize = fontSize > 0 ? fontSize : 48
     model.weight = Self.weight(from: fontWeight)
     model.fontFamily = fontFamily
@@ -85,11 +123,17 @@ public final class NumericTextSwiftUIHost: UIView {
       value: value,
       previous: lastValue
     )
-    // The first render places the number; only later ones are transitions.
-    model.animates = lastValue != nil && Self.animates(reduceMotion: reduceMotion)
-    let changed = lastValue != value
+    // The first render places the number; later transitions are driven by what is actually drawn,
+    // not only by the Double. A format-only change such as `$1,000.00` -> `USD 1,000.00` therefore
+    // gets the same SwiftUI numericText transition even though the numeric value did not change.
+    model.animates =
+      lastValue != nil &&
+      changed &&
+      Self.animates(reduceMotion: reduceMotion)
     model.value = value
     lastValue = value
+    // Assign the animation trigger last, after countsDown/animates have been resolved for this frame.
+    model.text = nextText
 
     #if DEBUG
     if model.animates, changed, let host = hosting?.view {
@@ -151,23 +195,117 @@ public final class NumericTextSwiftUIHost: UIView {
     }
   }
 
-  private static func format(
+  // MARK: - Formatting
+
+  /// The formatting props, as `src/numberFormat.ts` resolved them. A digit bound of -1 means the
+  /// caller left it out and the style should supply its own.
+  private struct FormatSpec: Equatable {
+    var locale: String = "en-US"
+    var numberStyle: String = "decimal"
+    var currency: String = ""
+    var currencyDisplay: String = "symbol"
+    var currencySign: String = "standard"
+    var useGrouping: Bool = true
+    var minimumIntegerDigits: Int = -1
+    var minimumFractionDigits: Int = -1
+    var maximumFractionDigits: Int = -1
+    var minimumSignificantDigits: Int = -1
+    var maximumSignificantDigits: Int = -1
+  }
+
+  private static func text(
     _ value: Double,
-    locale: String,
-    useGrouping: Bool,
-    minimumFractionDigits: Int,
-    maximumFractionDigits: Int
+    formatter: NumberFormatter
   ) -> String {
+    formatter.string(from: NSNumber(value: value)) ?? String(value)
+  }
+
+  private static func makeFormatter(_ spec: FormatSpec) -> NumberFormatter {
     let formatter = NumberFormatter()
-    formatter.locale = Locale(identifier: locale.isEmpty ? "en-US" : locale)
-    formatter.numberStyle = .decimal
-    formatter.usesGroupingSeparator = useGrouping
-    formatter.minimumFractionDigits = max(0, minimumFractionDigits)
-    formatter.maximumFractionDigits = max(
-      max(0, minimumFractionDigits),
-      maximumFractionDigits
+    formatter.locale = Locale(identifier: spec.locale.isEmpty ? "en-US" : spec.locale)
+
+    let money = spec.numberStyle == "currency" && !spec.currency.isEmpty
+    formatter.numberStyle = style(spec, money: money)
+    if money { formatter.currencyCode = spec.currency }
+    formatter.usesGroupingSeparator = spec.useGrouping
+
+    // Intl rounds halves away from zero; Foundation and ICU both default to half-even. Follow
+    // Intl, so `2.5` at zero decimals reads as `3` on iOS, on Android, and on the web fallback
+    // rather than as `3`, `2`, `2`.
+    formatter.roundingMode = .halfUp
+
+    if spec.minimumIntegerDigits >= 0 {
+      formatter.minimumIntegerDigits = spec.minimumIntegerDigits
+    }
+
+    if spec.minimumSignificantDigits >= 0 || spec.maximumSignificantDigits >= 0 {
+      let (low, high) = bounds(
+        spec.minimumSignificantDigits,
+        spec.maximumSignificantDigits,
+        defaultMinimum: 1,
+        defaultMaximum: 21
+      )
+      formatter.usesSignificantDigits = true
+      formatter.maximumSignificantDigits = high
+      formatter.minimumSignificantDigits = low
+      return formatter
+    }
+
+    // Read before it is written: with the style and the code set, the formatter is already
+    // carrying the currency's own fraction digits (2 for USD, 0 for JPY, 3 for BHD), and that is
+    // exactly the default Intl would have applied.
+    let percent = !money && spec.numberStyle == "percent"
+    let defaultMaximum: Int
+    if money {
+      defaultMaximum = max(0, formatter.maximumFractionDigits)
+    } else if percent {
+      defaultMaximum = 0
+    } else {
+      defaultMaximum = 3
+    }
+    // A plain number is the only style that may drop a trailing zero, so it is the only one whose
+    // minimum differs from its maximum.
+    let defaultMinimum = (money || percent) ? defaultMaximum : 0
+
+    let (low, high) = bounds(
+      spec.minimumFractionDigits,
+      spec.maximumFractionDigits,
+      defaultMinimum: defaultMinimum,
+      defaultMaximum: defaultMaximum
     )
-    return formatter.string(from: NSNumber(value: value)) ?? String(value)
+    formatter.maximumFractionDigits = high
+    formatter.minimumFractionDigits = low
+    return formatter
+  }
+
+  private static func style(_ spec: FormatSpec, money: Bool) -> NumberFormatter.Style {
+    guard money else {
+      return spec.numberStyle == "percent" ? .percent : .decimal
+    }
+    switch spec.currencyDisplay {
+    case "code": return .currencyISOCode
+    default: return spec.currencySign == "accounting" ? .currencyAccounting : .currency
+    }
+  }
+
+  /**
+   * ECMA-402's rule for resolving digit bounds, so the three implementations of this component
+   * round the same number to the same string.
+   *
+   * A bound that was left out is filled from the style, and a maximum below its minimum is
+   * clamped rather than rejected. `Intl` throws on that pair; a formatter that refuses to draw is
+   * worse than a number carrying one more decimal than was asked for.
+   */
+  private static func bounds(
+    _ minimum: Int,
+    _ maximum: Int,
+    defaultMinimum: Int,
+    defaultMaximum: Int
+  ) -> (Int, Int) {
+    if minimum >= 0 && maximum >= 0 { return (minimum, max(minimum, maximum)) }
+    if minimum >= 0 { return (minimum, max(defaultMaximum, minimum)) }
+    if maximum >= 0 { return (min(defaultMinimum, maximum), maximum) }
+    return (defaultMinimum, defaultMaximum)
   }
 }
 
@@ -230,7 +368,7 @@ private struct NumericTextRoot: View {
       .foregroundStyle(model.color)
       .numericTextTransition(countsDown: model.countsDown)
       .debugSliceProbe()
-      .animation(model.animates ? transitionAnimation : nil, value: model.value)
+      .animation(model.animates ? transitionAnimation : nil, value: model.text)
       .frame(maxWidth: .infinity, maxHeight: .infinity)
       .mask(edgeFadeMask)
   }

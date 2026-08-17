@@ -52,19 +52,30 @@ using namespace facebook::react;
   const auto &next = *std::static_pointer_cast<NumericTextViewProps const>(props);
 
   // Every prop is forwarded on every update rather than diffed here. The SwiftUI side ignores an
-  // unchanged value on its own — its animation is scoped to `value` — and a partial forward is how
-  // a number ends up still drawn in the previous font after a style change.
+  // unchanged value on its own, and a partial forward is how a number ends up still drawn in the
+  // previous font after a style change.
+  //
+  // Formatting first: the value is drawn through it, so a change to both in one commit has to
+  // reach the formatter before it reaches the text.
+  [_host applyFormatWithLocale:RCTNSStringFromString(next.locale)
+                   numberStyle:RCTNSStringFromString(next.numberStyle)
+                      currency:RCTNSStringFromString(next.currency)
+               currencyDisplay:RCTNSStringFromString(next.currencyDisplay)
+                  currencySign:RCTNSStringFromString(next.currencySign)
+                   useGrouping:next.useGrouping
+          minimumIntegerDigits:next.minimumIntegerDigits
+         minimumFractionDigits:next.minimumFractionDigits
+         maximumFractionDigits:next.maximumFractionDigits
+      minimumSignificantDigits:next.minimumSignificantDigits
+      maximumSignificantDigits:next.maximumSignificantDigits];
+
   [_host applyValue:next.value
-                   locale:RCTNSStringFromString(next.locale)
-                direction:RCTNSStringFromString(next.direction)
-             reduceMotion:RCTNSStringFromString(next.reduceMotion)
-              useGrouping:next.useGrouping
-    minimumFractionDigits:next.minimumFractionDigits
-    maximumFractionDigits:next.maximumFractionDigits
-                 fontSize:next.fontSize
-               fontWeight:RCTNSStringFromString(next.fontWeight)
-               fontFamily:RCTNSStringFromString(next.fontFamily)
-                textColor:RCTUIColorFromSharedColor(next.textColor)];
+          direction:RCTNSStringFromString(next.direction)
+       reduceMotion:RCTNSStringFromString(next.reduceMotion)
+           fontSize:next.fontSize
+         fontWeight:RCTNSStringFromString(next.fontWeight)
+         fontFamily:RCTNSStringFromString(next.fontFamily)
+          textColor:RCTUIColorFromSharedColor(next.textColor)];
 
   [super updateProps:props oldProps:oldProps];
 }
