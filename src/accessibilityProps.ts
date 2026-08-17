@@ -1,20 +1,7 @@
-import type { AccessibilityProps } from 'react-native';
-import type { NumericTextProps } from './types';
-
-export type NumericTextAccessibilityProps = Pick<
-  AccessibilityProps,
-  | 'accessible'
-  | 'accessibilityLabel'
-  | 'accessibilityHint'
-  | 'accessibilityRole'
-  | 'accessibilityLiveRegion'
-  | 'importantForAccessibility'
-  | 'screenReaderFocusable'
-  | 'accessibilityLabelledBy'
-  | 'accessibilityElementsHidden'
-  | 'accessibilityViewIsModal'
-  | 'accessibilityLanguage'
->;
+import type {
+  NumericTextAccessibilityProps,
+  NumericTextProps,
+} from './types';
 
 /** Accessibility is a view concern, not part of numeric formatting. Keep the two prop surfaces apart. */
 export function accessibilityPropsOf(
