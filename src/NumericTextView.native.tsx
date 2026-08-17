@@ -54,6 +54,10 @@ function NumericTextViewImpl(props: NumericTextProps) {
   );
 }
 
+function sameBox(a: Box, b: Box): boolean {
+  return a.minWidth === b.minWidth && a.minHeight === b.minHeight;
+}
+
 function useShrinkHeldBox(target: Box, holdMs: number): Box {
   const [held, setHeld] = useState(target);
   const targetRef = useRef(target);
@@ -61,16 +65,26 @@ function useShrinkHeldBox(target: Box, holdMs: number): Box {
 
   const grew =
     target.minWidth >= held.minWidth && target.minHeight >= held.minHeight;
-  const settled =
-    target.minWidth === held.minWidth && target.minHeight === held.minHeight;
+  const settled = sameBox(target, held);
 
   useEffect(() => {
     if (settled) return;
     if (grew) {
-      setHeld(targetRef.current);
+      setHeld(target);
       return;
     }
-    const timer = setTimeout(() => setHeld(targetRef.current), holdMs);
+
+    // Capture the box this timer belongs to. React Native can delay/coalesce JS timers; if a newer
+    // formatted value arrives before this callback gets CPU time, targetRef.current already points
+    // at that newer (possibly much narrower) box. Shrinking to targetRef.current here clipped the
+    // outgoing raster during format changes such as `1,000% -> ¥999`. A stale release may only
+    // commit when its own target is still current.
+    const shrinkTo = target;
+    const timer = setTimeout(() => {
+      if (sameBox(targetRef.current, shrinkTo)) {
+        setHeld(shrinkTo);
+      }
+    }, holdMs);
     return () => clearTimeout(timer);
   }, [settled, grew, target.minWidth, target.minHeight, holdMs]);
 
