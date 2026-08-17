@@ -1,4 +1,4 @@
-import type { StyleProp, TextStyle } from 'react-native';
+import type { AccessibilityProps, StyleProp, TextStyle } from 'react-native';
 
 /**
  * How to turn the value into the number that is drawn: a deliberately small subset of
@@ -50,11 +50,26 @@ export type NumericTextFormat = {
   maximumSignificantDigits?: number;
 };
 
+type NumericTextAccessibilityProps = Pick<
+  AccessibilityProps,
+  | 'accessible'
+  | 'accessibilityLabel'
+  | 'accessibilityHint'
+  | 'accessibilityRole'
+  | 'accessibilityLiveRegion'
+  | 'importantForAccessibility'
+  | 'screenReaderFocusable'
+  | 'accessibilityLabelledBy'
+  | 'accessibilityElementsHidden'
+  | 'accessibilityViewIsModal'
+  | 'accessibilityLanguage'
+>;
+
 /**
  * A number that animates between values the way SwiftUI's `.contentTransition(.numericText())`
  * does: each digit column rolls on its own spring and rapid changes retain their motion.
  */
-export type NumericTextProps = {
+export type NumericTextProps = NumericTextAccessibilityProps & {
   /** The number to display. Changing it animates; the first render does not. */
   value: number;
 
