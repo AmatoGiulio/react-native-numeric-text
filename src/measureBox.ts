@@ -9,8 +9,8 @@
  * The estimate is per character rather than a flat average because the bundled font's tabular
  * digits and its separators differ by more than a factor of two, and a four-digit grouped number
  * is a quarter separator by character count. Once a number can carry a currency (`$1,234.56`,
- * `1.234,56 €`, `1,234.56 US dollars`) the spread is wider still, so symbols and letters are
- * charged separately from punctuation rather than being lumped in with the comma.
+ * `1.234,56 €`, `USD 1,234.56`) the spread is wider still, so symbols and letters are charged
+ * separately from punctuation rather than being lumped in with the comma.
  */
 
 /** Advance widths as a fraction of font size, from the bundled Sunghyun Sans with `tnum` on. */
@@ -18,14 +18,7 @@ const DIGIT_EM = 0.6167;
 const SEPARATOR_EM = 0.2541;
 const SIGN_EM = 0.36;
 
-/**
- * Currency symbols, the percent sign, and the letters of an ISO code or a currency name.
- *
- * One estimate covers all of them because they land close together in this face and because the
- * box is a minimum with headroom on top: `$` measures near a digit, `%` slightly wider, and a
- * lower-case letter narrower. Over-charging a letter costs a few pixels of reserved width;
- * under-charging one clips `US dollars`.
- */
+/** Currency symbols, the percent sign, and the letters of an ISO currency code. */
 const GLYPH_EM = 0.62;
 
 /** Room for the transition's own overspill: a dying glyph drifts outward and carries a blur halo. */

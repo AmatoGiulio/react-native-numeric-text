@@ -67,8 +67,7 @@ using namespace facebook::react;
          minimumFractionDigits:next.minimumFractionDigits
          maximumFractionDigits:next.maximumFractionDigits
       minimumSignificantDigits:next.minimumSignificantDigits
-      maximumSignificantDigits:next.maximumSignificantDigits
-       trailingDecimalSeparator:NO];
+      maximumSignificantDigits:next.maximumSignificantDigits];
 
   [_host applyValue:next.value
           direction:RCTNSStringFromString(next.direction)

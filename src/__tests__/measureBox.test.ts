@@ -34,8 +34,8 @@ describe('widthInEm', () => {
     }
   });
 
-  it('charges the letters of a code or a name', () => {
-    expect(widthInEm('US dollars')).toBeGreaterThan(9 * widthInEm(','));
+  it('charges the letters of an ISO currency code', () => {
+    expect(widthInEm('USD')).toBeGreaterThan(3 * widthInEm(','));
   });
 
   it('keeps the spaces a locale groups with narrow', () => {

@@ -706,9 +706,6 @@ class NumericTextView(context: Context) : View(context), Choreographer.FrameCall
   fun setCurrencySign(value: String) = updateFormat { it.copy(currencySign = value) }
   fun setUseGrouping(value: Boolean) = updateFormat { it.copy(useGrouping = value) }
 
-  fun setTrailingDecimalSeparator(value: Boolean) =
-    updateFormat { it.copy(trailingDecimalSeparator = value) }
-
   fun setMinimumIntegerDigits(value: Int) =
     updateFormat { it.copy(minimumIntegerDigits = value) }
 
