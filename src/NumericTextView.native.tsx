@@ -1,5 +1,6 @@
 import { memo, useEffect, useRef, useState } from 'react';
 import NumericTextViewNativeComponent from './NumericTextViewNativeComponent';
+import { accessibilityPropsOf } from './accessibilityProps';
 import { measureBox, widest, type Box } from './measureBox';
 import {
   DEFAULT_LOCALE,
@@ -38,6 +39,7 @@ function NumericTextViewImpl(props: NumericTextProps) {
 
   return (
     <NumericTextViewNativeComponent
+      {...accessibilityPropsOf(props)}
       value={value}
       direction={direction}
       locale={locale}
