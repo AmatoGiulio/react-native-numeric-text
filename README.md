@@ -33,7 +33,11 @@ The platform strategy is intentionally asymmetric:
 
 The goal is not to pretend both platforms render text identically. The goal is to give the same React Native component the same class of polished numeric interaction on both platforms.
 
-This project is independent and is not affiliated with Expo or Apple.
+The formatting API is a second borrowed idea. [`number-flow`](https://github.com/barvian/number-flow) by Maxwell Barvian solves the same problem on the web, and its answer to "how should a component be told what shape a number takes" is one `format` object shaped like `Intl.NumberFormatOptions` rather than a growing row of flat props. That shape is taken from it directly, including the choice to pass a bound through untouched so `Intl`'s own defaulting rule decides the rest.
+
+The two libraries reach it from opposite ends: `number-flow` renders real text nodes and lets the browser lay them out, so it inherits `Intl` for free; here the string has to be produced natively on each platform, by `NumberFormatter` and `android.icu`, because the renderers animate the structure of a formatted number rather than a string handed to them. The API is the same either way, which is the point of copying it.
+
+This project is independent and is not affiliated with Expo, Apple, or `number-flow`.
 
 ## Why numeric text needs its own transition model
 
@@ -62,8 +66,11 @@ and it has to keep behaving correctly when updates arrive continuously rather th
 - Stable interruption and rapid-retarget behaviour.
 - Continuous increment/decrement updates without resetting the whole animation.
 - Structural handling of integer digits, fractional digits, grouping separators, decimal separators, and signs.
-- Locale-aware native number formatting.
-- Configurable grouping and fractional precision.
+- Locale-aware native number formatting through an `Intl.NumberFormat`-shaped `format` prop.
+- Native currency display with symbol or ISO code, plus the accounting sign for negatives.
+- Native percent display.
+- Configurable grouping, integer padding, fractional precision, and significant digits.
+- Identical rounding on iOS, Android, and web.
 - Automatic, forced-up, and forced-down transition direction.
 - System-aware reduced-motion support.
 - Android 12+ hardware blur path.
@@ -121,13 +128,65 @@ Formatting is resolved before the transition is built; separators are not decora
 <NumericText
   value={1234.5}
   locale="de-DE"
-  useGrouping
-  minimumFractionDigits={2}
-  maximumFractionDigits={2}
+  format={{ useGrouping: true, minimumFractionDigits: 2, maximumFractionDigits: 2 }}
 />
 ```
 
 This keeps locale-specific punctuation structurally associated with the digits while the value changes.
+
+The `format` prop is a subset of `Intl.NumberFormatOptions`, and each platform resolves it with its own formatter: `NumberFormatter` on iOS, `android.icu` on Android, `Intl` on web. The string is produced where it is drawn, because the renderer animates the structure of a formatted number rather than a string handed to it ready-made.
+
+The shape of this prop is borrowed from [`number-flow`](https://github.com/barvian/number-flow); see [Origin](#origin).
+
+`format` is an object, so `NumericText` will re-render whenever the parent does unless you keep it stable. Hoist it to module scope or wrap it in `useMemo` if you rely on the memo skipping renders.
+
+### Currency
+
+```tsx
+<NumericText value={1234.5} currency="USD" />          // $1,234.50
+<NumericText value={1234.5} currency="JPY" />          // ¥1,235
+<NumericText value={1234.5} locale="de-DE" currency="EUR" />  // 1.234,50 €
+```
+
+`currency` is shorthand for `format={{ style: 'currency', currency }}`. The full form adds how the currency is written and how a negative amount is signed:
+
+```tsx
+<NumericText value={1234.5} format={{ style: 'currency', currency: 'USD', currencyDisplay: 'code' }} />
+// USD 1,234.50
+
+<NumericText value={-1234.5} format={{ style: 'currency', currency: 'USD', currencySign: 'accounting' }} />
+// ($1,234.50)
+```
+
+The currency affix takes part in the transition rather than sitting on top of it. It is keyed by its distance from the digits, not by its offset in the string, so `$999` → `$1,000` slides one `$` left instead of destroying it and creating another one, and a trailing `1.234,50 €` keeps its symbol through the same change. Where a locale uses a different decimal mark for money than for plain numbers, the renderers key on the monetary one, so the decimal boundary still holds the fraction digits still.
+
+Fraction digits follow the currency when you do not set them: two for `USD`, none for `JPY`, three for `BHD`.
+
+`currencySign: 'accounting'` applies with `currencyDisplay: 'symbol'`. Code display always uses the standard sign form. `Intl`'s `currencyDisplay: 'narrowSymbol'` is not offered, because neither platform's native formatter exposes it at the versions this library supports.
+
+### Percent, padding, and significant digits
+
+```tsx
+<NumericText value={0.42} format={{ style: 'percent' }} />                  // 42%
+<NumericText value={9} format={{ minimumIntegerDigits: 2 }} />              // 09
+<NumericText value={1234.5} format={{ maximumSignificantDigits: 3 }} />     // 1,230
+```
+
+`minimumIntegerDigits` is what holds a clock at `05:09` and stops a counter changing width as it crosses a power of ten. Significant digits take precedence over fraction digits when either bound is set, matching `Intl`.
+
+### Fractions and rounding
+
+A decimal mark is structural, not punctuation. Integer digits keep their identity from the left, fraction digits from the decimal mark, and the mark itself holds still, so `9.99` → `10.00` moves the digits it has to and leaves the rest alone.
+
+Set `minimumFractionDigits` to hold a fixed number of decimals through a change that would otherwise drop one. Without it, `1.50` renders as `1.5` and the fraction columns restructure under a roll that should only have moved digits:
+
+```tsx
+<NumericText value={price} format={{ minimumFractionDigits: 2, maximumFractionDigits: 2 }} />
+```
+
+### Rounding
+
+Rounding is half-away-from-zero on both platforms and on web: `2.5` at zero decimals reads as `3` everywhere. That is `Intl`'s default and neither platform's (`NumberFormatter` and ICU both round half-to-even left alone), so it is set explicitly rather than exposed as an option. Two renderers disagreeing about the number they draw is a bug, not a preference.
 
 ## Direction
 
@@ -162,26 +221,55 @@ During rapid updates, automatic direction is resolved against the value the rend
 |---|---|---|---|
 | `value` | `number` | required | Number to display. The first render does not animate. |
 | `locale` | `string` | `'en-US'` | BCP-47 locale used for native number formatting. |
+| `format` | `NumericTextFormat` | `{}` | How to shape the number. See below. |
+| `currency` | `string` | none | Shorthand for `format={{ style: 'currency', currency }}`. `format` wins where the two overlap. |
 | `direction` | `'automatic' \| 'up' \| 'down'` | `'automatic'` | Direction of the numeric transition. |
 | `animationDuration` | `number` | `80` | Android only. Nominal timing input used to scale the native transition; it is not a hard duration clamp. |
 | `reduceMotion` | `'system' \| 'always' \| 'never'` | `'system'` | Accessibility behaviour for motion. |
-| `useGrouping` | `boolean` | `true` | Enables grouping separators. |
-| `minimumFractionDigits` | `number` | `0` | Minimum number of fractional digits. |
-| `maximumFractionDigits` | `number` | `3` | Maximum number of fractional digits. |
-| `style` | `StyleProp<TextStyle>` | — | Text/view style. `fontSize`, `fontWeight`, `fontFamily`, and `color` are forwarded to the native renderer. |
-| `testID` | `string` | — | React Native test identifier. |
+| `useGrouping` | `boolean` | `true` | Shorthand for the same field of `format`. |
+| `minimumFractionDigits` | `number` | none | Shorthand for the same field of `format`. |
+| `maximumFractionDigits` | `number` | none | Shorthand for the same field of `format`. |
+| `style` | `StyleProp<TextStyle>` | none | Text/view style. `fontSize`, `fontWeight`, `fontFamily`, and `color` are forwarded to the native renderer. |
+| `testID` | `string` | none | React Native test identifier. |
 
 When `fontSize` or `color` are omitted, the native defaults are `48` and black.
+
+### `NumericTextFormat`
+
+A subset of `Intl.NumberFormatOptions`. Every option is resolved by the platform's own formatter, and means the same thing on both.
+
+| Option | Type | Default | Description |
+|---|---|---|---|
+| `style` | `'decimal' \| 'currency' \| 'percent'` | `'decimal'` | `'currency'` needs `currency` and falls back to `'decimal'` without it. `'percent'` multiplies by 100. |
+| `currency` | `string` | none | ISO 4217 code. |
+| `currencyDisplay` | `'symbol' \| 'code'` | `'symbol'` | `$1,234.56` or `USD 1,234.56`. |
+| `currencySign` | `'standard' \| 'accounting'` | `'standard'` | `'accounting'` brackets a negative amount. Applies with `currencyDisplay: 'symbol'`. |
+| `useGrouping` | `boolean` | `true` | Enables grouping separators. |
+| `minimumIntegerDigits` | `number` | none | Pads with leading zeros to at least this width. |
+| `minimumFractionDigits` | `number` | style's own | `0` for a plain number, `0` for a percentage, the currency's count for money. |
+| `maximumFractionDigits` | `number` | style's own | `3` for a plain number, `0` for a percentage, the currency's count for money. |
+| `minimumSignificantDigits` | `number` | none | Takes precedence over the fraction bounds. |
+| `maximumSignificantDigits` | `number` | none | Takes precedence over the fraction bounds. |
+
+`Intl` options that are **not** supported, and why:
+
+| Option | Reason |
+|---|---|
+| `currencyDisplay: 'name'` | Localized names can change spelling with the value (`dollar`/`dollars`); mutable affixes are deferred until they have an explicit transition contract. |
+| `notation: 'compact'` (`1.2K`) | Both platforms can produce it, but from different CLDR vintages, so they would disagree on the string for the same input. |
+| `signDisplay` | Android's `NumberFormatter` is API 30; iOS's `NumberFormatter` has no equivalent. |
+| `currencyDisplay: 'narrowSymbol'` | Same. |
+| `unit`, `unitDisplay`, `roundingIncrement`, `roundingMode` | Same, except `roundingMode`, which is fixed at half-away-from-zero on purpose. |
 
 ## Platform behaviour
 
 | Platform | Behaviour |
 |---|---|
-| iOS 17+ | Native SwiftUI `.contentTransition(.numericText())`. |
+| iOS 17+ | Native SwiftUI `.contentTransition(.numericText())`, formatted by `NumberFormatter`. |
 | Earlier supported iOS | Native formatting and rendering without the unavailable numeric content transition. |
-| Android API 31+ | Native renderer using `RenderNode` and `RenderEffect` for the blur path. |
+| Android API 31+ | Native renderer using `RenderNode` and `RenderEffect` for the blur path, formatted by `android.icu`. |
 | Android API 24-30 | Same transition model with a temporary software-layer blur path while animating. |
-| Web | Correctly formatted static `Text`; numeric transitions are not currently animated. |
+| Web | Correctly formatted static `Text` via `Intl`; numeric transitions are not currently animated. |
 
 The minimum Android SDK is **24**.
 
@@ -193,7 +281,7 @@ The renderer is built around a small set of invariants:
 
 1. **Typeset the complete formatted line first.** Layout and glyph positions come from the full value before the line is partitioned into logical transition slots.
 2. **Keep immutable value rasters.** Outgoing content keeps the pixels that belonged to its original formatted value while incoming content references the new target value.
-3. **Use structural identity.** Integer digits are anchored from the left, fractional digits from the decimal boundary, and punctuation receives stable semantic identity.
+3. **Use structural identity.** Integer digits are anchored from the left, fractional digits from the decimal boundary, and punctuation receives stable semantic identity. A currency affix, a percent sign and an accounting bracket are keyed by their distance from the digits, so they survive the number growing or losing one.
 4. **Preserve history during retriggers.** A new target does not require the previous transition to finish first.
 5. **Keep frame work bounded.** Expensive bitmap extraction and per-slot bitmap creation stay out of the normal render/update hot path.
 6. **Use analytic motion evaluation.** Native transition state can be evaluated directly for the current frame instead of integrating a simulation with frame-rate-dependent state.
@@ -235,7 +323,9 @@ Android includes a subset of [Sunghyun Sans](https://github.com/anaclumos/sunghy
 />
 ```
 
-The bundled Android subset contains Latin-script numeric-formatting glyphs. When a locale requires glyphs unavailable in the bundled face, the renderer falls back to the platform font rather than drawing missing-glyph boxes.
+The bundled Android subset contains Latin-script numeric-formatting glyphs: digits, the separators and signs a locale formats with, currency symbols, and the Latin letters needed by ISO currency codes. The current bundled files are about 33 KB a weight, 300 KB for the nine.
+
+Coverage is checked against the characters the current format will actually draw, so a currency symbol or ISO code is part of the question. When any required glyph is missing from the bundled face, the renderer falls back to the platform font rather than drawing missing-glyph boxes.
 
 The full font license is included at `android/src/main/assets/fonts/OFL.txt`.
 

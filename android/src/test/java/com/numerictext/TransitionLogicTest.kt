@@ -1,5 +1,6 @@
 package com.numerictext
 
+import kotlin.math.abs
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -21,10 +22,14 @@ class TransitionLogicTest {
 
   private fun keyMap(text: String): Map<String, String> = keyed(text).associate { it.key to it.char }
 
+  private fun assertUniqueKeys(slots: List<KeyedSlot>) {
+    assertEquals(slots.size, slots.map { it.key }.toSet().size)
+  }
+
   @Test
   fun integerDigits_areAnchoredFromTheLeft() {
     assertEquals(
-      mapOf("I0" to "2", "G3" to ",", "I1" to "5", "I2" to "7", "I3" to "6"),
+      mapOf("I0" to "2", "G3:," to ",", "I1" to "5", "I2" to "7", "I3" to "6"),
       keyMap("2,576"),
     )
   }
@@ -42,23 +47,23 @@ class TransitionLogicTest {
     assertEquals("0", next["I1"])
     assertEquals("0", next["I2"])
     assertEquals("0", next["I3"])
-    assertEquals(",", next["G3"])
+    assertEquals(",", next["G3:,"])
   }
 
   @Test
   fun groupSeparator_isStructuralAndBornOnCarry() {
-    assertFalse(keyMap("999").containsKey("G3"))
-    assertEquals(",", keyMap("1,000")["G3"])
+    assertFalse(keyMap("999").containsKey("G3:,"))
+    assertEquals(",", keyMap("1,000")["G3:,"])
   }
 
   @Test
   fun fractions_areAnchoredFromTheDecimalPoint() {
     assertEquals(
-      mapOf("I0" to "1", "DEC" to ".", "F0" to "9"),
+      mapOf("I0" to "1", "DEC:." to ".", "F0" to "9"),
       keyMap("1.9"),
     )
     assertEquals(
-      mapOf("I0" to "2", "DEC" to ".", "F0" to "0"),
+      mapOf("I0" to "2", "DEC:." to ".", "F0" to "0"),
       keyMap("2.0"),
     )
   }
@@ -70,9 +75,133 @@ class TransitionLogicTest {
   }
 
   @Test
+  fun currencySymbol_keepsItsKeyWhenTheNumberGrowsADigit() {
+    assertEquals("$", keyMap("\$999")["P0"])
+    assertEquals("$", keyMap("\$1,000")["P0"])
+  }
+
+  @Test
+  fun currencySymbol_keepsItsKeyAcrossASignChange() {
+    assertEquals("$", keyMap("\$1.00")["P0"])
+    assertEquals("$", keyMap("-\$1.00")["P0"])
+    assertEquals("-", keyMap("-\$1.00")["S"])
+  }
+
+  @Test
+  fun differentStructuralGlyphs_shareTheSameSemanticPosition() {
+    assertEquals("$", keyMap("\$1")["P0"])
+    assertEquals("€", keyMap("€1")["P0"])
+  }
+
+  @Test
+  fun accountingBrackets_sitOutsideTheSymbol() {
+    val accounting = keyMap("(\$1.00)")
+    assertEquals("$", accounting["P0"])
+    assertEquals("(", accounting["P1"])
+    assertEquals(")", accounting["X0"])
+  }
+
+  @Test
+  fun trailingSymbol_isKeyedFromTheEndOfTheNumber() {
+    val small = TransitionLogic.layoutKeyedSlots("999,00\u00A0€", '.', ',', '-', line("999,00\u00A0€"))
+      .associate { it.key to it.char }
+    val large =
+      TransitionLogic.layoutKeyedSlots("1.000,00\u00A0€", '.', ',', '-', line("1.000,00\u00A0€"))
+        .associate { it.key to it.char }
+
+    assertEquals("€", small["X1"])
+    assertEquals("€", large["X1"])
+    assertEquals("\u00A0", small["X0"])
+    assertEquals("\u00A0", large["X0"])
+  }
+
+  @Test
+  fun percentSign_isKeyedFromTheEndOfTheNumber() {
+    assertEquals("%", keyMap("9%")["X0"])
+    assertEquals("%", keyMap("99%")["X0"])
+  }
+
+  @Test
+  fun currencyName_keysEachLetterOutwardFromTheNumber() {
+    val letters = keyMap("1.00 US dollars")
+    assertEquals(" ", letters["X0"])
+    assertEquals("U", letters["X1"])
+    assertEquals("s", letters["X10"])
+  }
+
+  @Test
+  fun punctuationInsideCurrencyPrefix_isNotNumericStructure() {
+    val text = "B/. 1,234.50"
+    val slots = keyed(text)
+    val map = slots.associate { it.key to it.char }
+
+    assertUniqueKeys(slots)
+    assertEquals(".", map["P1"])
+    assertEquals("/", map["P2"])
+    assertEquals("B", map["P3"])
+    assertEquals(",", map["G3:,"])
+    assertEquals(".", map["DEC:."])
+    assertEquals("1", map["I0"])
+    assertEquals("5", map["F0"])
+    assertEquals(TokenKind.OTHER, slots.single { it.key == "P1" }.semanticKind)
+    assertEquals(TokenKind.GROUP_SEPARATOR, slots.single { it.key == "G3:," }.semanticKind)
+    assertEquals(TokenKind.DECIMAL_SEPARATOR, slots.single { it.key == "DEC:." }.semanticKind)
+  }
+
+  @Test
+  fun punctuationInsideCurrencySuffix_isNotNumericStructure() {
+    val text = "1,234.50 د.إ."
+    val slots = keyed(text)
+
+    assertUniqueKeys(slots)
+    assertEquals(1, slots.count { it.semanticKind == TokenKind.DECIMAL_SEPARATOR })
+    assertEquals(2, slots.count { it.char == "." && it.semanticKind == TokenKind.OTHER })
+  }
+
+  @Test
+  fun hyphenInsideCurrencyName_isNotTheNumericSign() {
+    val text = "-1,00 US-Dollar"
+    val slots = TransitionLogic.layoutKeyedSlots(text, '.', ',', '-', line(text))
+
+    assertUniqueKeys(slots)
+    assertEquals(1, slots.count { it.semanticKind == TokenKind.SIGN })
+    assertEquals("-", slots.single { it.semanticKind == TokenKind.SIGN }.char)
+    assertEquals(1, slots.count { it.char == "-" && it.semanticKind == TokenKind.OTHER })
+  }
+
+  @Test
+  fun affixesAndSigns_useValidatedDigitPhysics() {
+    val slots = keyed("-\$1,234.50%")
+
+    val sign = slots.single { it.key == "S" }
+    val prefix = slots.single { it.key == "P0" }
+    val suffix = slots.single { it.key == "X0" }
+    assertEquals(TokenKind.DIGIT, sign.kind)
+    assertEquals(TokenKind.DIGIT, prefix.kind)
+    assertEquals(TokenKind.DIGIT, suffix.kind)
+    assertEquals(TokenKind.SIGN, sign.semanticKind)
+    assertEquals(TokenKind.OTHER, prefix.semanticKind)
+    assertEquals(TokenKind.OTHER, suffix.semanticKind)
+
+    val group = slots.single { it.key == "G3:," }
+    val decimal = slots.single { it.key == "DEC:." }
+    assertEquals(TokenKind.GROUP_SEPARATOR, group.kind)
+    assertEquals(TokenKind.DECIMAL_SEPARATOR, decimal.kind)
+  }
+
+  @Test
+  fun bidiDirectionalMarks_doNotCreateTransitionSlots() {
+    val text = "\u061C-1"
+    val slots = keyed(text)
+
+    assertEquals(listOf("S", "I0"), slots.map { it.key })
+    assertEquals(listOf("-", "1"), slots.map { it.char })
+  }
+
+  @Test
   fun tokenBoundsComeFromTheFullLineGeometry() {
     val slots = keyed("1,000")
-    val comma = slots.first { it.key == "G3" }
+    val comma = slots.first { it.key == "G3:," }
     assertEquals(1f, comma.leftFromLeft, 0.001f)
     assertEquals(2f, comma.rightFromLeft, 0.001f)
     assertEquals(5f, comma.totalWidth, 0.001f)
@@ -123,6 +252,29 @@ class NumericRollEngineTest {
   private fun advance(engine: NumericRollEngine, frames: Int = 1) {
     repeat(frames) { engine.step(0.01f) }
   }
+
+  private fun slot(
+    key: String,
+    char: String,
+    semanticKind: TokenKind,
+    center: Float,
+  ): KeyedSlot =
+    KeyedSlot(
+      key = key,
+      kind = if (semanticKind == TokenKind.SIGN || semanticKind == TokenKind.OTHER) {
+        TokenKind.DIGIT
+      } else {
+        semanticKind
+      },
+      semanticKind = semanticKind,
+      char = char,
+      centerFromLeft = center,
+      totalWidth = 100f,
+      leftFromLeft = center - 5f,
+      rightFromLeft = center + 5f,
+      utf16Start = 0,
+      utf16End = char.length,
+    )
 
   @Test
   fun increment_entersFromAboveAndExitsBelow() {
@@ -183,6 +335,76 @@ class NumericRollEngineTest {
     assertTrue("5" in chars)
     assertTrue("6" in chars)
     assertTrue("7" in chars)
+  }
+
+  @Test
+  fun changedStructuralGlyph_rollsThroughTheSameColumn() {
+    val oldSlots = slots("\$1")
+    val newSlots = slots("€1")
+    assertEquals(
+      oldSlots.single { it.char == "$" }.key,
+      newSlots.single { it.char == "€" }.key,
+    )
+
+    val engine = NumericRollEngine()
+    reset(engine, "\$1")
+    target(engine, "€1", direction = 1, rasterId = 2)
+    advance(engine)
+
+    val samples = engine.samples().filter { it.key == "P0" }
+    assertTrue(samples.any { it.ch == "€" })
+    assertTrue(samples.any { it.ch == "$" })
+    assertTrue(samples.first { it.ch == "$" }.blurLengthPx > 0f)
+    assertTrue(samples.first { it.ch == "€" }.offsetY < 0f)
+    assertTrue(samples.first { it.ch == "$" }.offsetY > 0f)
+  }
+
+  @Test
+  fun formatChange_keepsOldAndNewGlyphsAtTheirOwnXWhileRolling() {
+    val oldLayout =
+      listOf(
+        slot("I0", "1", TokenKind.DIGIT, center = 30f),
+        slot("X0", "€", TokenKind.OTHER, center = 80f),
+      )
+    val newLayout =
+      listOf(
+        slot("P0", "د", TokenKind.OTHER, center = 20f),
+        slot("I0", "1", TokenKind.DIGIT, center = 70f),
+      )
+
+    val engine = NumericRollEngine()
+    engine.reset(
+      layout = oldLayout,
+      text = "1€",
+      lineHeight = 100f,
+      rasterId = 1,
+      blurLengthPx = 50f,
+    )
+    engine.setTarget(
+      layout = newLayout,
+      text = "د1",
+      direction = 1,
+      lineHeight = 100f,
+      animationDurationMs = 320L,
+      rasterId = 2,
+      blurLengthPx = 50f,
+    )
+
+    // The three visual roll events span WAVE_TOTAL_SECONDS. Let all of them become due, then
+    // integrate a frame so old/new copies are simultaneously observable.
+    Thread.sleep(220L)
+    advance(engine)
+
+    val digitSamples = engine.samples().filter { it.key == "I0" && it.ch == "1" }
+    assertEquals(2, digitSamples.size)
+    assertTrue(digitSamples.any { abs(it.x - (-20f)) < 0.01f })
+    assertTrue(digitSamples.any { abs(it.x - 20f) < 0.01f })
+    assertTrue(digitSamples.all { abs(it.offsetY) > 0f })
+
+    val euro = engine.samples().first { it.ch == "€" }
+    val dirham = engine.samples().first { it.ch == "د" }
+    assertEquals(30f, euro.x, 0.01f)
+    assertEquals(-30f, dirham.x, 0.01f)
   }
 
   @Test

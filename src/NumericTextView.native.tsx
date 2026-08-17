@@ -1,41 +1,37 @@
 import { memo, useEffect, useRef, useState } from 'react';
 import NumericTextViewNativeComponent from './NumericTextViewNativeComponent';
+import { accessibilityPropsOf } from './accessibilityProps';
 import { measureBox, widest, type Box } from './measureBox';
+import {
+  DEFAULT_LOCALE,
+  formatNumber,
+  nativeFormatProps,
+  resolveFormat,
+} from './numberFormat';
 import { resolveTextStyle } from './resolveTextStyle';
 import type { NumericTextProps } from './types';
 
 /**
  * One component, one prop shape, two native renderers.
  *
- * Android draws the transition itself (`android/…/NumericTextView.kt`: a spring per digit column).
- * iOS asks SwiftUI for its own `.contentTransition(.numericText())`
- * (`ios/NumericTextSwiftUIHost.swift`) — the behaviour the Android renderer is measured against, so
- * there is nothing to reimplement there. Web and anything else without a native view resolve
- * `./NumericTextView` to the static fallback instead of this file.
- *
- * `animationDuration` reaches Android only; SwiftUI's numeric transition is a spring with no
- * duration to set. Both sides otherwise read the same props, including the text properties pulled
- * out of `style` — each renderer draws its own glyphs, so it needs them as props.
+ * Android draws the transition itself; iOS delegates the numeric transition to SwiftUI. Formatting
+ * is passed as props rather than as a finished string because each renderer needs the numeric
+ * structure where it draws it. JS reproduces the format only to reserve a safe layout box.
  */
-function NumericTextViewImpl({
-  value,
-  locale = 'en-US',
-  direction = 'automatic',
-  animationDuration = 80,
-  reduceMotion = 'system',
-  minimumFractionDigits = 0,
-  maximumFractionDigits = 3,
-  useGrouping = true,
-  style,
-  testID,
-}: NumericTextProps) {
-  const text = resolveTextStyle(style);
+function NumericTextViewImpl(props: NumericTextProps) {
+  const {
+    value,
+    locale = DEFAULT_LOCALE,
+    direction = 'automatic',
+    animationDuration = 80,
+    reduceMotion = 'system',
+    style,
+    testID,
+  } = props;
 
-  const formatted = value.toLocaleString(locale, {
-    minimumFractionDigits,
-    maximumFractionDigits,
-    useGrouping,
-  });
+  const text = resolveTextStyle(style);
+  const format = resolveFormat(props);
+  const formatted = formatNumber(value, locale, format);
   const box = useShrinkHeldBox(
     measureBox(formatted, text.fontSize),
     Math.max(animationDuration, 500) + 400
@@ -43,14 +39,13 @@ function NumericTextViewImpl({
 
   return (
     <NumericTextViewNativeComponent
+      {...accessibilityPropsOf(props)}
       value={value}
       direction={direction}
       locale={locale}
       animationDuration={animationDuration}
-      useGrouping={useGrouping}
-      minimumFractionDigits={minimumFractionDigits}
-      maximumFractionDigits={maximumFractionDigits}
       reduceMotion={reduceMotion}
+      {...nativeFormatProps(format)}
       fontSize={text.fontSize}
       fontWeight={text.fontWeight}
       fontFamily={text.fontFamily}
@@ -61,38 +56,45 @@ function NumericTextViewImpl({
   );
 }
 
-/**
- * The box the view should reserve: grows with the number immediately, shrinks only after
- * [holdMs], so a departing wider number is not clipped while it is still fading out.
- */
+function sameBox(a: Box, b: Box): boolean {
+  return a.minWidth === b.minWidth && a.minHeight === b.minHeight;
+}
+
 function useShrinkHeldBox(target: Box, holdMs: number): Box {
   const [held, setHeld] = useState(target);
-  // Read inside the effect rather than depending on the object, which is new every render.
   const targetRef = useRef(target);
   targetRef.current = target;
 
+  const targetMinWidth = target.minWidth;
+  const targetMinHeight = target.minHeight;
   const grew =
-    target.minWidth >= held.minWidth && target.minHeight >= held.minHeight;
+    targetMinWidth >= held.minWidth && targetMinHeight >= held.minHeight;
   const settled =
-    target.minWidth === held.minWidth && target.minHeight === held.minHeight;
+    targetMinWidth === held.minWidth && targetMinHeight === held.minHeight;
 
   useEffect(() => {
     if (settled) return;
     if (grew) {
-      setHeld(targetRef.current);
+      setHeld({ minWidth: targetMinWidth, minHeight: targetMinHeight });
       return;
     }
-    const timer = setTimeout(() => setHeld(targetRef.current), holdMs);
+
+    // Capture the box this timer belongs to. React Native can delay/coalesce JS timers; if a newer
+    // formatted value arrives before this callback gets CPU time, targetRef.current already points
+    // at that newer (possibly much narrower) box. Shrinking to targetRef.current here clipped the
+    // outgoing raster during format changes such as `1,000% -> ¥999`. A stale release may only
+    // commit when its own target is still current.
+    const shrinkTo = { minWidth: targetMinWidth, minHeight: targetMinHeight };
+    const timer = setTimeout(() => {
+      if (sameBox(targetRef.current, shrinkTo)) {
+        setHeld(shrinkTo);
+      }
+    }, holdMs);
     return () => clearTimeout(timer);
-  }, [settled, grew, target.minWidth, target.minHeight, holdMs]);
+  }, [settled, grew, targetMinWidth, targetMinHeight, holdMs]);
 
   return settled ? target : widest(target, held);
 }
 
-/**
- * Re-renders only when a prop actually differs. The value changes far more often than anything
- * else here, and every render of a parent would otherwise walk this whole tree to produce an
- * identical element.
- */
 export const NumericTextView = memo(NumericTextViewImpl);
 NumericTextView.displayName = 'NumericTextView';
