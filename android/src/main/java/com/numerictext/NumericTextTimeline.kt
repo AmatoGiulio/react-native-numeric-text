@@ -642,20 +642,25 @@ internal class NumericRollEngine {
     pinnedX: Float,
   ) {
     val ch = column.charAt[stop] ?: return
-
-    for (entry in column.entries) {
-      if (!entry.superseded) {
-        supersede(entry, direction, column.kind, replacementAffixExit = false)
-      }
-    }
-
     val reversing = oldDirection != null && oldDirection != direction && !wasAtRest
+
+    // Capture a true historical candidate before superseding the currently active entry. When a
+    // structural format roll forces U -> U (or any unchanged glyph) and the direction reverses,
+    // searching after supersede() would select the entry we just marked as outgoing and immediately
+    // reactivate it at target 0. That cancels the roll after the first A/B cycle. Ordinary numeric
+    // reversals keep the same behavior because their returning glyph already exists as an older ghost.
     val reuse =
       if (reversing) {
         column.entries.lastOrNull { it.superseded && it.ch == ch }
       } else {
         null
       }
+
+    for (entry in column.entries) {
+      if (!entry.superseded) {
+        supersede(entry, direction, column.kind, replacementAffixExit = false)
+      }
+    }
 
     if (reuse != null) {
       reuse.superseded = false
