@@ -112,11 +112,13 @@ public final class NumericTextSwiftUIHost: UIView {
     fontFamily: String?,
     textColor: UIColor?
   ) {
-    model.text = Self.text(
+    let nextText = Self.text(
       value,
       formatter: formatter,
       trailingDecimalSeparator: formatSpec.trailingDecimalSeparator
     )
+    let changed = model.text != nextText
+
     model.fontSize = fontSize > 0 ? fontSize : 48
     model.weight = Self.weight(from: fontWeight)
     model.fontFamily = fontFamily
@@ -127,11 +129,17 @@ public final class NumericTextSwiftUIHost: UIView {
       value: value,
       previous: lastValue
     )
-    // The first render places the number; only later ones are transitions.
-    model.animates = lastValue != nil && Self.animates(reduceMotion: reduceMotion)
-    let changed = lastValue != value
+    // The first render places the number; later transitions are driven by what is actually drawn,
+    // not only by the Double. A format-only change such as `$1,000.00` -> `USD 1,000.00` therefore
+    // gets the same SwiftUI numericText transition even though the numeric value did not change.
+    model.animates =
+      lastValue != nil &&
+      changed &&
+      Self.animates(reduceMotion: reduceMotion)
     model.value = value
     lastValue = value
+    // Assign the animation trigger last, after countsDown/animates have been resolved for this frame.
+    model.text = nextText
 
     #if DEBUG
     if model.animates, changed, let host = hosting?.view {
@@ -392,7 +400,7 @@ private struct NumericTextRoot: View {
       .foregroundStyle(model.color)
       .numericTextTransition(countsDown: model.countsDown)
       .debugSliceProbe()
-      .animation(model.animates ? transitionAnimation : nil, value: model.value)
+      .animation(model.animates ? transitionAnimation : nil, value: model.text)
       .frame(maxWidth: .infinity, maxHeight: .infinity)
       .mask(edgeFadeMask)
   }
