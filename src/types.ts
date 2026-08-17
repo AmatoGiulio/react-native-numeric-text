@@ -50,7 +50,7 @@ export type NumericTextFormat = {
   maximumSignificantDigits?: number;
 };
 
-type NumericTextAccessibilityProps = Pick<
+export type NumericTextAccessibilityProps = Pick<
   AccessibilityProps,
   | 'accessible'
   | 'accessibilityLabel'
