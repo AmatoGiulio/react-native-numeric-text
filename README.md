@@ -37,6 +37,8 @@ The formatting API is a second borrowed idea. [`number-flow`](https://github.com
 
 The two libraries reach it from opposite ends: `number-flow` renders real text nodes and lets the browser lay them out, so it inherits `Intl` for free; here the string has to be produced natively on each platform, by `NumberFormatter` and `android.icu`, because the renderers animate the structure of a formatted number rather than a string handed to them. The API is the same either way, which is the point of copying it.
 
+Currency and percent formatting originated from a contribution by [@Amanfromearth](https://github.com/Amanfromearth) in [#4](https://github.com/AmatoGiulio/react-native-numeric-text/pull/4). That work established the initial native formatting implementation and API direction, which were later validated and extended against the SwiftUI ground truth before merging.
+
 This project is independent and is not affiliated with Expo, Apple, or `number-flow`.
 
 ## Why numeric text needs its own transition model
