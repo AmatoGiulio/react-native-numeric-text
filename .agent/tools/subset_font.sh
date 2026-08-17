@@ -4,8 +4,8 @@
 # The upstream release is ~710 KB per weight, 6.1 MB for the nine — far too much to ship in a
 # library. This view only ever draws a formatted number, so the subset keeps digits, the separators
 # and signs that NumberFormat emits for Latin-script locales, the currency symbols and Latin
-# letters a money format needs, and the "NaN"/"∞" it falls back to. That lands at ~33 KB per
-# weight, ~300 KB for all nine.
+# letters an ISO currency code needs, and the "NaN"/"∞" it falls back to. The currently committed
+# subset is ~33 KB per weight, ~300 KB for all nine.
 #
 # Locales whose digits are outside this set (ar-EG, hi-IN, …) are handled at runtime, not here:
 # NumericTextView checks hasGlyph on the formatted string and falls back to the system typeface
@@ -36,10 +36,9 @@ UNICODES="$UNICODES,U+0AF1,U+0BF9,U+0E3F,U+17DB,U+20A0-20C0,U+A838,U+FDFC,U+FE69
 UNICODES="$UNICODES,U+FFE0-FFE1,U+FFE5-FFE6"
 UNICODES="$UNICODES,U+0028,U+0029"
 
-# Letters, for `currencyDisplay: 'code'` (`USD 1,234.56`) and `'name'` (`1,234.56 US dollars`).
-# They are the reason this subset is ~33 KB a weight rather than ~11 KB; without them the coverage
-# check in NumericTextView falls the whole line back to the platform font, so a caller asking for
-# a code or a name would silently lose the rounded face the library exists to provide.
+# Letters for `currencyDisplay: 'code'` (`USD 1,234.56`). The committed subset still carries the
+# full ASCII alphabet; trimming the unused lowercase range is a packaging optimization and does not
+# change the v0.1 formatting contract.
 UNICODES="$UNICODES,U+0041-005A,U+0061-007A"
 
 WEIGHTS=(Thin ExtraLight Light Regular Medium SemiBold Bold ExtraBold Black)
