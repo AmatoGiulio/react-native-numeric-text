@@ -271,8 +271,6 @@ export function ReleaseShowcase() {
   const onDone = useCallback(() => setPlaying(false), []);
   const onStep = useCallback(
     (step: ReleaseStep) => {
-      // SharedValue assignment schedules the label transition on the UI thread.
-      // LabelStack is memoized, so value changes in the showcase never render it again.
       activeLabel.value = step.label;
       setState(stateFromStep(step));
     },
@@ -381,13 +379,14 @@ const styles = StyleSheet.create({
   screen: {
     flex: 1,
     alignItems: 'center',
-    justifyContent: 'center',
     paddingHorizontal: 20,
     backgroundColor: '#fbfbf9',
   },
   content: {
+    flex: 1,
     width: '100%',
     alignItems: 'center',
+    justifyContent: 'center',
     transform: [{ translateY: -20 }],
   },
   number: {
@@ -420,10 +419,9 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
   playback: {
-    position: 'absolute',
-    bottom: 42,
-    left: 0,
-    right: 0,
+    width: '100%',
     alignItems: 'center',
+    paddingTop: 12,
+    paddingBottom: 42,
   },
 });
