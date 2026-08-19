@@ -35,6 +35,7 @@ const LABELS = [
   'Accounting',
   'AED · RTL',
   'Rapid updates',
+  'npm install react-native-numeric-text',
 ] as const;
 
 const RELEASE_SEQUENCE: readonly ReleaseStep[] = [
@@ -192,6 +193,14 @@ const RELEASE_SEQUENCE: readonly ReleaseStep[] = [
     hold: 1100,
     label: 8,
   },
+
+  {
+    value: 235.5,
+    locale: 'ar-AE',
+    format: { style: 'currency', currency: 'AED' },
+    hold: 1800,
+    label: 9,
+  },
 ];
 
 function stateFromStep(step: ReleaseStep): DemoState {
@@ -297,6 +306,8 @@ export function ReleaseShowcase() {
     <View style={styles.screen}>
       <StatusBar style="dark" />
 
+      <View pointerEvents="none" style={styles.balanceSlot} />
+
       <View style={styles.content}>
         <NumericText
           value={state.value}
@@ -368,12 +379,15 @@ function AnimatedLabel({
 
   return (
     <Animated.View style={[styles.labelLayer, animatedStyle]}>
-      <Text style={styles.label}>{label}</Text>
+      <Text style={[styles.label, index === LABELS.length - 1 && styles.installLabel]}>
+        {label}
+      </Text>
     </Animated.View>
   );
 }
 
 const INK = '#171719';
+const EDGE_SLOT_HEIGHT = 110;
 
 const styles = StyleSheet.create({
   screen: {
@@ -382,12 +396,15 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     backgroundColor: '#fbfbf9',
   },
+  balanceSlot: {
+    width: '100%',
+    height: EDGE_SLOT_HEIGHT,
+  },
   content: {
     flex: 1,
     width: '100%',
     alignItems: 'center',
     justifyContent: 'center',
-    transform: [{ translateY: -20 }],
   },
   number: {
     color: INK,
@@ -418,10 +435,13 @@ const styles = StyleSheet.create({
     letterSpacing: -0.15,
     textAlign: 'center',
   },
+  installLabel: {
+    color: INK,
+  },
   playback: {
     width: '100%',
+    height: EDGE_SLOT_HEIGHT,
     alignItems: 'center',
-    paddingTop: 12,
-    paddingBottom: 42,
+    justifyContent: 'center',
   },
 });
