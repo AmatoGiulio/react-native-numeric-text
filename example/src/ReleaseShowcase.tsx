@@ -191,7 +191,7 @@ const RELEASE_SEQUENCE: readonly ReleaseStep[] = [
     value: 235.5,
     locale: 'ar-AE',
     format: { style: 'currency', currency: 'AED' },
-    hold: 1100,
+    hold: 900,
     label: 8,
   },
 
@@ -322,6 +322,32 @@ export function ReleaseShowcase() {
     };
   });
 
+  const playbackStyle = useAnimatedStyle(() => {
+    'worklet';
+
+    const hidden = outro.value === 1;
+    return {
+      opacity: withTiming(hidden ? 0 : 1, {
+        duration: hidden ? 220 : 180,
+        easing: Easing.out(Easing.cubic),
+      }),
+      transform: [
+        {
+          translateY: withTiming(hidden ? -10 : 0, {
+            duration: 260,
+            easing: Easing.out(Easing.cubic),
+          }),
+        },
+        {
+          scale: withTiming(hidden ? 0.985 : 1, {
+            duration: 260,
+            easing: Easing.out(Easing.cubic),
+          }),
+        },
+      ],
+    };
+  });
+
   const outroStyle = useAnimatedStyle(() => {
     'worklet';
 
@@ -329,7 +355,7 @@ export function ReleaseShowcase() {
     return {
       opacity: visible
         ? withDelay(
-            150,
+            100,
             withTiming(1, {
               duration: 300,
               easing: Easing.out(Easing.cubic),
@@ -340,7 +366,7 @@ export function ReleaseShowcase() {
         {
           translateY: visible
             ? withDelay(
-                150,
+                100,
                 withTiming(0, {
                   duration: 320,
                   easing: Easing.out(Easing.cubic),
@@ -351,7 +377,7 @@ export function ReleaseShowcase() {
         {
           scale: visible
             ? withDelay(
-                150,
+                100,
                 withTiming(1, {
                   duration: 320,
                   easing: Easing.out(Easing.cubic),
@@ -407,9 +433,9 @@ export function ReleaseShowcase() {
         </Animated.View>
       </View>
 
-      <View style={styles.playback}>
+      <Animated.View style={[styles.playback, playbackStyle]}>
         <ReleaseToggle playing={playing} onCheckedChange={setPlayback} />
-      </View>
+      </Animated.View>
     </View>
   );
 }
