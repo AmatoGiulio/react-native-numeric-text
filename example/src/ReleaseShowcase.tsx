@@ -1,11 +1,18 @@
 import { StatusBar } from 'expo-status-bar';
-import { useCallback, useEffect, useRef, useState } from 'react';
-import { Pressable, StyleSheet, View } from 'react-native';
+import { memo, useCallback, useEffect, useRef, useState } from 'react';
+import { StyleSheet, Text, View } from 'react-native';
+import Animated, {
+  Easing,
+  type SharedValue,
+  useAnimatedStyle,
+  useSharedValue,
+  withTiming,
+} from 'react-native-reanimated';
 import {
   NumericText,
   type NumericTextFormat,
 } from 'react-native-numeric-text';
-import { NativeIconButton } from './native-icon-button';
+import { ReleaseToggle } from './release-toggle';
 
 type DemoState = {
   value: number;
@@ -15,25 +22,38 @@ type DemoState = {
 
 type ReleaseStep = DemoState & {
   hold: number;
+  label: number;
 };
 
-const RELEASE_SEQUENCE: readonly ReleaseStep[] = [
-  // Plain number: establish the grouping carry before formatting enters.
-  { value: 999, locale: 'en-US', format: {}, hold: 650 },
-  { value: 1000, locale: 'en-US', format: {}, hold: 850 },
+const LABELS = [
+  'Number',
+  'USD · symbol',
+  'USD · code',
+  'EUR · de-DE',
+  'JPY · zero decimals',
+  'Percent',
+  'Accounting',
+  'AED · RTL',
+  'Rapid updates',
+] as const;
 
-  // USD prefix symbol, then a format-only transition to the ISO code.
+const RELEASE_SEQUENCE: readonly ReleaseStep[] = [
+  { value: 999, locale: 'en-US', format: {}, hold: 650, label: 0 },
+  { value: 1000, locale: 'en-US', format: {}, hold: 850, label: 0 },
+
   {
     value: 999.99,
     locale: 'en-US',
     format: { style: 'currency', currency: 'USD' },
     hold: 650,
+    label: 1,
   },
   {
     value: 1000,
     locale: 'en-US',
     format: { style: 'currency', currency: 'USD' },
     hold: 850,
+    label: 1,
   },
   {
     value: 1000,
@@ -44,51 +64,54 @@ const RELEASE_SEQUENCE: readonly ReleaseStep[] = [
       currencyDisplay: 'code',
     },
     hold: 800,
+    label: 2,
   },
 
-  // EUR keeps the suffix symbol alive while the locale-specific punctuation changes.
   {
     value: 999.99,
     locale: 'de-DE',
     format: { style: 'currency', currency: 'EUR' },
     hold: 650,
+    label: 3,
   },
   {
     value: 1000,
     locale: 'de-DE',
     format: { style: 'currency', currency: 'EUR' },
     hold: 850,
+    label: 3,
   },
 
-  // JPY exercises a currency whose native default has no fractional digits.
   {
     value: 999,
     locale: 'ja-JP',
     format: { style: 'currency', currency: 'JPY' },
     hold: 650,
+    label: 4,
   },
   {
     value: 1000,
     locale: 'ja-JP',
     format: { style: 'currency', currency: 'JPY' },
     hold: 850,
+    label: 4,
   },
 
-  // Percent multiplies by 100, so 9.99 -> 10 crosses the 999% -> 1,000% boundary.
   {
     value: 9.99,
     locale: 'en-US',
     format: { style: 'percent' },
     hold: 650,
+    label: 5,
   },
   {
     value: 10,
     locale: 'en-US',
     format: { style: 'percent' },
     hold: 850,
+    label: 5,
   },
 
-  // Accounting brackets leave the structure as the value crosses zero.
   {
     value: -999.99,
     locale: 'en-US',
@@ -98,6 +121,7 @@ const RELEASE_SEQUENCE: readonly ReleaseStep[] = [
       currencySign: 'accounting',
     },
     hold: 700,
+    label: 6,
   },
   {
     value: 1000,
@@ -108,61 +132,67 @@ const RELEASE_SEQUENCE: readonly ReleaseStep[] = [
       currencySign: 'accounting',
     },
     hold: 950,
+    label: 6,
   },
 
-  // Finish with an RTL currency and a rapid 85 ms retarget burst.
   {
     value: 1234.5,
     locale: 'ar-AE',
     format: { style: 'currency', currency: 'AED' },
     hold: 700,
+    label: 7,
   },
   {
     value: 1235.5,
     locale: 'ar-AE',
     format: { style: 'currency', currency: 'AED' },
     hold: 850,
+    label: 7,
   },
+
   {
     value: 1234.5,
     locale: 'ar-AE',
     format: { style: 'currency', currency: 'AED' },
     hold: 85,
+    label: 8,
   },
   {
     value: 1235.5,
     locale: 'ar-AE',
     format: { style: 'currency', currency: 'AED' },
     hold: 85,
+    label: 8,
   },
   {
     value: 1234.5,
     locale: 'ar-AE',
     format: { style: 'currency', currency: 'AED' },
     hold: 85,
+    label: 8,
   },
   {
     value: 1235.5,
     locale: 'ar-AE',
     format: { style: 'currency', currency: 'AED' },
     hold: 85,
+    label: 8,
   },
   {
     value: 1234.5,
     locale: 'ar-AE',
     format: { style: 'currency', currency: 'AED' },
     hold: 85,
+    label: 8,
   },
   {
     value: 1235.5,
     locale: 'ar-AE',
     format: { style: 'currency', currency: 'AED' },
     hold: 1100,
+    label: 8,
   },
 ];
-
-const HOLD_DELAY_MS = 350;
-const HOLD_REPEAT_MS = 90;
 
 function stateFromStep(step: ReleaseStep): DemoState {
   return {
@@ -196,7 +226,7 @@ function scheduleOnFrames(
 }
 
 function useReleaseSequence(
-  onStep: (state: DemoState) => void,
+  onStep: (step: ReleaseStep) => void,
   onDone: () => void
 ) {
   const cancel = useRef<(() => void) | null>(null);
@@ -213,10 +243,7 @@ function useReleaseSequence(
     const entries = RELEASE_SEQUENCE.map((step) => {
       const when = at;
       at += step.hold;
-      return {
-        at: when,
-        run: () => onStep(stateFromStep(step)),
-      };
+      return { at: when, run: () => onStep(step) };
     });
 
     entries.push({
@@ -236,66 +263,43 @@ function useReleaseSequence(
 }
 
 export function ReleaseShowcase() {
-  const [state, setState] = useState<DemoState>(() =>
-    stateFromStep(RELEASE_SEQUENCE[0]!)
-  );
+  const first = RELEASE_SEQUENCE[0]!;
+  const [state, setState] = useState<DemoState>(() => stateFromStep(first));
   const [playing, setPlaying] = useState(false);
-  const holdDelay = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const holdInterval = useRef<ReturnType<typeof setInterval> | null>(null);
-
-  const stopHold = useCallback(() => {
-    if (holdDelay.current !== null) clearTimeout(holdDelay.current);
-    if (holdInterval.current !== null) clearInterval(holdInterval.current);
-    holdDelay.current = null;
-    holdInterval.current = null;
-  }, []);
+  const activeLabel = useSharedValue(first.label);
 
   const onDone = useCallback(() => setPlaying(false), []);
-  const onStep = useCallback((next: DemoState) => setState(next), []);
+  const onStep = useCallback(
+    (step: ReleaseStep) => {
+      // SharedValue assignment schedules the label transition on the UI thread.
+      // LabelStack is memoized, so value changes in the showcase never render it again.
+      activeLabel.value = step.label;
+      setState(stateFromStep(step));
+    },
+    [activeLabel]
+  );
   const { play, stop } = useReleaseSequence(onStep, onDone);
 
-  useEffect(() => stopHold, [stopHold]);
+  const setPlayback = useCallback(
+    (nextPlaying: boolean) => {
+      if (nextPlaying === playing) return;
 
-  const togglePlayback = useCallback(() => {
-    stopHold();
-    if (playing) {
-      stop();
-      setPlaying(false);
-      return;
-    }
-
-    setPlaying(true);
-    play();
-  }, [play, playing, stop, stopHold]);
-
-  const startHold = useCallback(
-    (direction: -1 | 1) => {
-      stopHold();
-      if (playing) {
+      if (nextPlaying) {
+        setPlaying(true);
+        play();
+      } else {
         stop();
         setPlaying(false);
       }
-
-      const delta = state.format.style === 'percent' ? 0.01 : 1;
-      const applyDelta = () =>
-        setState((current) => ({
-          ...current,
-          value: current.value + direction * delta,
-        }));
-
-      applyDelta();
-      holdDelay.current = setTimeout(() => {
-        holdInterval.current = setInterval(applyDelta, HOLD_REPEAT_MS);
-      }, HOLD_DELAY_MS);
     },
-    [playing, state.format.style, stop, stopHold]
+    [play, playing, stop]
   );
 
   return (
     <View style={styles.screen}>
       <StatusBar style="dark" />
 
-      <View style={styles.showcase}>
+      <View style={styles.content}>
         <NumericText
           value={state.value}
           locale={state.locale}
@@ -303,61 +307,71 @@ export function ReleaseShowcase() {
           animationDuration={320}
           style={styles.number}
         />
+        <LabelStack activeLabel={activeLabel} />
+      </View>
 
-        <View style={styles.controls}>
-          <IconButton
-            icon="remove"
-            accessibilityLabel="Decrement"
-            onPressIn={() => startHold(-1)}
-            onPressOut={stopHold}
-          />
-          <IconButton
-            icon={playing ? 'stop' : 'play-arrow'}
-            accessibilityLabel={playing ? 'Stop sequence' : 'Play sequence'}
-            primary
-            onPress={togglePlayback}
-          />
-          <IconButton
-            icon="add"
-            accessibilityLabel="Increment"
-            onPressIn={() => startHold(1)}
-            onPressOut={stopHold}
-          />
-        </View>
+      <View style={styles.playback}>
+        <ReleaseToggle playing={playing} onCheckedChange={setPlayback} />
       </View>
     </View>
   );
 }
 
-type IconButtonProps = {
-  icon: 'add' | 'play-arrow' | 'remove' | 'stop';
-  accessibilityLabel: string;
-  primary?: boolean;
-  onPress?: () => void;
-  onPressIn?: () => void;
-  onPressOut?: () => void;
-};
-
-function IconButton({
-  icon,
-  accessibilityLabel,
-  primary = false,
-  onPress,
-  onPressIn,
-  onPressOut,
-}: IconButtonProps) {
+const LabelStack = memo(function LabelStack({
+  activeLabel,
+}: {
+  activeLabel: SharedValue<number>;
+}) {
   return (
-    <Pressable
-      accessibilityRole="button"
-      accessibilityLabel={accessibilityLabel}
-      onPress={onPress}
-      onPressIn={onPressIn}
-      onPressOut={onPressOut}
-      hitSlop={8}
-      style={({ pressed }) => [styles.button, pressed && styles.buttonPressed]}
-    >
-      <NativeIconButton icon={icon} primary={primary} />
-    </Pressable>
+    <View pointerEvents="none" style={styles.labelViewport}>
+      {LABELS.map((label, index) => (
+        <AnimatedLabel
+          key={label}
+          index={index}
+          label={label}
+          activeLabel={activeLabel}
+        />
+      ))}
+    </View>
+  );
+});
+
+function AnimatedLabel({
+  index,
+  label,
+  activeLabel,
+}: {
+  index: number;
+  label: string;
+  activeLabel: SharedValue<number>;
+}) {
+  const animatedStyle = useAnimatedStyle(() => {
+    'worklet';
+
+    const delta = index - activeLabel.value;
+    const active = delta === 0;
+    const targetY = active ? 0 : delta < 0 ? -8 : 8;
+
+    return {
+      opacity: withTiming(active ? 1 : 0, {
+        duration: 190,
+        easing: Easing.out(Easing.cubic),
+      }),
+      transform: [
+        {
+          translateY: withTiming(targetY, {
+            duration: 240,
+            easing: Easing.out(Easing.cubic),
+          }),
+        },
+      ],
+    };
+  }, [index]);
+
+  return (
+    <Animated.View style={[styles.labelLayer, animatedStyle]}>
+      <Text style={styles.label}>{label}</Text>
+    </Animated.View>
   );
 }
 
@@ -371,10 +385,10 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     backgroundColor: '#fbfbf9',
   },
-  showcase: {
+  content: {
     width: '100%',
     alignItems: 'center',
-    gap: 34,
+    transform: [{ translateY: -20 }],
   },
   number: {
     color: INK,
@@ -383,20 +397,33 @@ const styles = StyleSheet.create({
     fontVariant: ['tabular-nums'],
     textAlign: 'center',
   },
-  controls: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 14,
-  },
-  button: {
-    width: 58,
-    height: 58,
+  labelViewport: {
+    width: '100%',
+    height: 26,
+    marginTop: 14,
     alignItems: 'center',
     justifyContent: 'center',
-    borderRadius: 29,
+    overflow: 'hidden',
   },
-  buttonPressed: {
-    opacity: 0.72,
-    transform: [{ scale: 0.96 }],
+  labelLayer: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    alignItems: 'center',
+  },
+  label: {
+    color: '#6f6f73',
+    fontSize: 16,
+    lineHeight: 22,
+    fontWeight: '600',
+    letterSpacing: -0.15,
+    textAlign: 'center',
+  },
+  playback: {
+    position: 'absolute',
+    bottom: 42,
+    left: 0,
+    right: 0,
+    alignItems: 'center',
   },
 });
