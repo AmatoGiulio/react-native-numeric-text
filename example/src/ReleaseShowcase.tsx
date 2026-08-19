@@ -56,7 +56,7 @@ const RELEASE_SEQUENCE: readonly ReleaseStep[] = [
     label: 1,
   },
   {
-    value: 1000,
+    value: 100,
     locale: 'en-US',
     format: {
       style: 'currency',
