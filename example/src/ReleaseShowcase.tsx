@@ -40,87 +40,66 @@ const LABELS = [
 ] as const;
 
 const RELEASE_SEQUENCE: readonly ReleaseStep[] = [
-  // Hook — short and immediately readable.
-  { value: 99, locale: 'en-US', format: {}, hold: 300, label: 0 },
-  { value: 100, locale: 'en-US', format: {}, hold: 450, label: 0 },
+  // Hook — only two values, with enough room to see the carry settle.
+  { value: 99, locale: 'en-US', format: {}, hold: 400, label: 0 },
+  { value: 100, locale: 'en-US', format: {}, hold: 650, label: 0 },
 
-  // USD roll — a real currency counter with a carry through 100.
-  {
-    value: 98.99,
-    locale: 'en-US',
-    format: { style: 'currency', currency: 'USD' },
-    hold: 380,
-    label: 1,
-  },
+  // USD roll — fewer targets, slower cadence. The 99 -> 100 carry stays readable.
   {
     value: 99.99,
     locale: 'en-US',
     format: { style: 'currency', currency: 'USD' },
-    hold: 340,
+    hold: 550,
     label: 1,
   },
   {
     value: 100.99,
     locale: 'en-US',
     format: { style: 'currency', currency: 'USD' },
-    hold: 340,
+    hold: 500,
     label: 1,
   },
   {
     value: 101.99,
     locale: 'en-US',
     format: { style: 'currency', currency: 'USD' },
-    hold: 440,
+    hold: 650,
     label: 1,
   },
 
-  // EUR — negative, zero, positive; symbol and separators move with the locale.
+  // EUR — one strong negative-to-positive transition instead of three quick cuts.
   {
     value: -99.99,
     locale: 'de-DE',
     format: { style: 'currency', currency: 'EUR' },
-    hold: 420,
-    label: 3,
-  },
-  {
-    value: 0,
-    locale: 'de-DE',
-    format: { style: 'currency', currency: 'EUR' },
-    hold: 280,
+    hold: 650,
     label: 3,
   },
   {
     value: 100,
     locale: 'de-DE',
     format: { style: 'currency', currency: 'EUR' },
-    hold: 400,
+    hold: 700,
     label: 3,
   },
 
-  // JPY — no decimals and a clean 999 -> 1,000 carry.
-  {
-    value: 99,
-    locale: 'ja-JP',
-    format: { style: 'currency', currency: 'JPY' },
-    hold: 300,
-    label: 4,
-  },
+  // JPY — zero decimals and a clean 999 -> 1,000 carry.
   {
     value: 999,
     locale: 'ja-JP',
     format: { style: 'currency', currency: 'JPY' },
-    hold: 350,
+    hold: 600,
     label: 4,
   },
   {
     value: 1000,
     locale: 'ja-JP',
     format: { style: 'currency', currency: 'JPY' },
-    hold: 450,
+    hold: 700,
     label: 4,
   },
 
-  // Accounting — one strong negative/positive structural transition.
+  // Accounting — parentheses disappear in one slow, readable structural change.
   {
     value: -99.99,
     locale: 'en-US',
@@ -129,7 +108,7 @@ const RELEASE_SEQUENCE: readonly ReleaseStep[] = [
       currency: 'USD',
       currencySign: 'accounting',
     },
-    hold: 400,
+    hold: 650,
     label: 6,
   },
   {
@@ -140,91 +119,41 @@ const RELEASE_SEQUENCE: readonly ReleaseStep[] = [
       currency: 'USD',
       currencySign: 'accounting',
     },
-    hold: 450,
+    hold: 750,
     label: 6,
   },
 
-  // Crescendo — USD -> EUR -> JPY, accelerating without becoming frantic.
+  // Final cadence — USD -> EUR -> JPY. Still faster than the setup,
+  // but every target remains on screen longer than the 320 ms roll duration.
   {
-    value: -10.99,
+    value: -9.99,
     locale: 'en-US',
     format: { style: 'currency', currency: 'USD' },
-    hold: 350,
+    hold: 550,
     label: 1,
-  },
-  {
-    value: -0.99,
-    locale: 'en-US',
-    format: { style: 'currency', currency: 'USD' },
-    hold: 300,
-    label: 1,
-  },
-  {
-    value: 9.99,
-    locale: 'en-US',
-    format: { style: 'currency', currency: 'USD' },
-    hold: 260,
-    label: 1,
-  },
-  {
-    value: 10.99,
-    locale: 'de-DE',
-    format: { style: 'currency', currency: 'EUR' },
-    hold: 230,
-    label: 3,
   },
   {
     value: 99.99,
     locale: 'de-DE',
     format: { style: 'currency', currency: 'EUR' },
-    hold: 220,
+    hold: 500,
     label: 3,
-  },
-  {
-    value: 100,
-    locale: 'ja-JP',
-    format: { style: 'currency', currency: 'JPY' },
-    hold: 230,
-    label: 4,
-  },
-  {
-    value: 999,
-    locale: 'ja-JP',
-    format: { style: 'currency', currency: 'JPY' },
-    hold: 270,
-    label: 4,
   },
   {
     value: 1000,
     locale: 'ja-JP',
     format: { style: 'currency', currency: 'JPY' },
-    hold: 340,
+    hold: 600,
     label: 4,
   },
 
-  // RTL — just a final accent, not the dominant part of the showcase.
+  // Outro starts at 8.45 s; the whole scheduled sequence still ends at 10.0 s.
   {
-    value: -99.5,
-    locale: 'ar-AE',
-    format: { style: 'currency', currency: 'AED' },
-    hold: 300,
-    label: 7,
-  },
-  {
-    value: 100.5,
-    locale: 'ar-AE',
-    format: { style: 'currency', currency: 'AED' },
-    hold: 300,
-    label: 7,
-  },
-
-  // Outro — the sequence totals exactly 10 seconds including this hold.
-  {
-    value: 100.5,
-    locale: 'ar-AE',
-    format: { style: 'currency', currency: 'AED' },
-    hold: 1900,
-    label: 7,
+    value: 1000,
+    locale: 'ja-JP',
+    format: { style: 'currency', currency: 'JPY' },
+    hold: 1550,
+    label: 4,
     outro: true,
   },
 ];
