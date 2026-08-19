@@ -40,167 +40,191 @@ const LABELS = [
 ] as const;
 
 const RELEASE_SEQUENCE: readonly ReleaseStep[] = [
-  { value: 999, locale: 'en-US', format: {}, hold: 650, label: 0 },
-  { value: 1000, locale: 'en-US', format: {}, hold: 850, label: 0 },
+  // Hook — short and immediately readable.
+  { value: 99, locale: 'en-US', format: {}, hold: 300, label: 0 },
+  { value: 100, locale: 'en-US', format: {}, hold: 450, label: 0 },
 
+  // USD roll — a real currency counter with a carry through 100.
   {
-    value: 999.99,
+    value: 98.99,
     locale: 'en-US',
     format: { style: 'currency', currency: 'USD' },
-    hold: 650,
+    hold: 380,
     label: 1,
   },
   {
-    value: 1000,
+    value: 99.99,
     locale: 'en-US',
     format: { style: 'currency', currency: 'USD' },
-    hold: 850,
+    hold: 340,
     label: 1,
+  },
+  {
+    value: 100.99,
+    locale: 'en-US',
+    format: { style: 'currency', currency: 'USD' },
+    hold: 340,
+    label: 1,
+  },
+  {
+    value: 101.99,
+    locale: 'en-US',
+    format: { style: 'currency', currency: 'USD' },
+    hold: 440,
+    label: 1,
+  },
+
+  // EUR — negative, zero, positive; symbol and separators move with the locale.
+  {
+    value: -99.99,
+    locale: 'de-DE',
+    format: { style: 'currency', currency: 'EUR' },
+    hold: 420,
+    label: 3,
+  },
+  {
+    value: 0,
+    locale: 'de-DE',
+    format: { style: 'currency', currency: 'EUR' },
+    hold: 280,
+    label: 3,
   },
   {
     value: 100,
-    locale: 'en-US',
-    format: {
-      style: 'currency',
-      currency: 'USD',
-      currencyDisplay: 'code',
-    },
-    hold: 800,
-    label: 2,
-  },
-
-  {
-    value: 999.99,
     locale: 'de-DE',
     format: { style: 'currency', currency: 'EUR' },
-    hold: 650,
-    label: 3,
-  },
-  {
-    value: 1000,
-    locale: 'de-DE',
-    format: { style: 'currency', currency: 'EUR' },
-    hold: 850,
+    hold: 400,
     label: 3,
   },
 
+  // JPY — no decimals and a clean 999 -> 1,000 carry.
+  {
+    value: 99,
+    locale: 'ja-JP',
+    format: { style: 'currency', currency: 'JPY' },
+    hold: 300,
+    label: 4,
+  },
   {
     value: 999,
     locale: 'ja-JP',
     format: { style: 'currency', currency: 'JPY' },
-    hold: 650,
+    hold: 350,
     label: 4,
   },
   {
     value: 1000,
     locale: 'ja-JP',
     format: { style: 'currency', currency: 'JPY' },
-    hold: 850,
+    hold: 450,
     label: 4,
   },
 
+  // Accounting — one strong negative/positive structural transition.
+  {
+    value: -99.99,
+    locale: 'en-US',
+    format: {
+      style: 'currency',
+      currency: 'USD',
+      currencySign: 'accounting',
+    },
+    hold: 400,
+    label: 6,
+  },
+  {
+    value: 99.99,
+    locale: 'en-US',
+    format: {
+      style: 'currency',
+      currency: 'USD',
+      currencySign: 'accounting',
+    },
+    hold: 450,
+    label: 6,
+  },
+
+  // Crescendo — USD -> EUR -> JPY, accelerating without becoming frantic.
+  {
+    value: -10.99,
+    locale: 'en-US',
+    format: { style: 'currency', currency: 'USD' },
+    hold: 350,
+    label: 1,
+  },
+  {
+    value: -0.99,
+    locale: 'en-US',
+    format: { style: 'currency', currency: 'USD' },
+    hold: 300,
+    label: 1,
+  },
   {
     value: 9.99,
     locale: 'en-US',
-    format: { style: 'percent' },
-    hold: 650,
-    label: 5,
+    format: { style: 'currency', currency: 'USD' },
+    hold: 260,
+    label: 1,
   },
   {
-    value: 10,
-    locale: 'en-US',
-    format: { style: 'percent' },
-    hold: 850,
-    label: 5,
+    value: 10.99,
+    locale: 'de-DE',
+    format: { style: 'currency', currency: 'EUR' },
+    hold: 230,
+    label: 3,
   },
-
   {
-    value: -999.99,
-    locale: 'en-US',
-    format: {
-      style: 'currency',
-      currency: 'USD',
-      currencySign: 'accounting',
-    },
-    hold: 700,
-    label: 6,
+    value: 99.99,
+    locale: 'de-DE',
+    format: { style: 'currency', currency: 'EUR' },
+    hold: 220,
+    label: 3,
+  },
+  {
+    value: 100,
+    locale: 'ja-JP',
+    format: { style: 'currency', currency: 'JPY' },
+    hold: 230,
+    label: 4,
+  },
+  {
+    value: 999,
+    locale: 'ja-JP',
+    format: { style: 'currency', currency: 'JPY' },
+    hold: 270,
+    label: 4,
   },
   {
     value: 1000,
-    locale: 'en-US',
-    format: {
-      style: 'currency',
-      currency: 'USD',
-      currencySign: 'accounting',
-    },
-    hold: 950,
-    label: 6,
+    locale: 'ja-JP',
+    format: { style: 'currency', currency: 'JPY' },
+    hold: 340,
+    label: 4,
   },
 
+  // RTL — just a final accent, not the dominant part of the showcase.
   {
-    value: 234.5,
+    value: -99.5,
     locale: 'ar-AE',
     format: { style: 'currency', currency: 'AED' },
-    hold: 700,
+    hold: 300,
     label: 7,
   },
   {
-    value: 235.5,
+    value: 100.5,
     locale: 'ar-AE',
     format: { style: 'currency', currency: 'AED' },
-    hold: 850,
+    hold: 300,
     label: 7,
   },
 
+  // Outro — the sequence totals exactly 10 seconds including this hold.
   {
-    value: 234.5,
+    value: 100.5,
     locale: 'ar-AE',
     format: { style: 'currency', currency: 'AED' },
-    hold: 85,
-    label: 8,
-  },
-  {
-    value: 235.5,
-    locale: 'ar-AE',
-    format: { style: 'currency', currency: 'AED' },
-    hold: 85,
-    label: 8,
-  },
-  {
-    value: 234.5,
-    locale: 'ar-AE',
-    format: { style: 'currency', currency: 'AED' },
-    hold: 85,
-    label: 8,
-  },
-  {
-    value: 235.5,
-    locale: 'ar-AE',
-    format: { style: 'currency', currency: 'AED' },
-    hold: 85,
-    label: 8,
-  },
-  {
-    value: 234.5,
-    locale: 'ar-AE',
-    format: { style: 'currency', currency: 'AED' },
-    hold: 85,
-    label: 8,
-  },
-  {
-    value: 235.5,
-    locale: 'ar-AE',
-    format: { style: 'currency', currency: 'AED' },
-    hold: 900,
-    label: 8,
-  },
-
-  {
-    value: 235.5,
-    locale: 'ar-AE',
-    format: { style: 'currency', currency: 'AED' },
-    hold: 1800,
-    label: 8,
+    hold: 1900,
+    label: 7,
     outro: true,
   },
 ];
@@ -302,20 +326,20 @@ export function ReleaseShowcase() {
     const hidden = outro.value === 1;
     return {
       opacity: withTiming(hidden ? 0 : 1, {
-        duration: hidden ? 220 : 180,
-        easing: Easing.out(Easing.cubic),
+        duration: hidden ? 420 : 220,
+        easing: Easing.inOut(Easing.cubic),
       }),
       transform: [
         {
-          translateY: withTiming(hidden ? -10 : 0, {
-            duration: 260,
-            easing: Easing.out(Easing.cubic),
+          translateY: withTiming(hidden ? -6 : 0, {
+            duration: 480,
+            easing: Easing.inOut(Easing.cubic),
           }),
         },
         {
-          scale: withTiming(hidden ? 0.985 : 1, {
-            duration: 260,
-            easing: Easing.out(Easing.cubic),
+          scale: withTiming(hidden ? 0.992 : 1, {
+            duration: 480,
+            easing: Easing.inOut(Easing.cubic),
           }),
         },
       ],
@@ -328,20 +352,20 @@ export function ReleaseShowcase() {
     const hidden = outro.value === 1;
     return {
       opacity: withTiming(hidden ? 0 : 1, {
-        duration: hidden ? 220 : 180,
-        easing: Easing.out(Easing.cubic),
+        duration: hidden ? 420 : 220,
+        easing: Easing.inOut(Easing.cubic),
       }),
       transform: [
         {
-          translateY: withTiming(hidden ? -10 : 0, {
-            duration: 260,
-            easing: Easing.out(Easing.cubic),
+          translateY: withTiming(hidden ? -6 : 0, {
+            duration: 480,
+            easing: Easing.inOut(Easing.cubic),
           }),
         },
         {
-          scale: withTiming(hidden ? 0.985 : 1, {
-            duration: 260,
-            easing: Easing.out(Easing.cubic),
+          scale: withTiming(hidden ? 0.992 : 1, {
+            duration: 480,
+            easing: Easing.inOut(Easing.cubic),
           }),
         },
       ],
@@ -355,35 +379,35 @@ export function ReleaseShowcase() {
     return {
       opacity: visible
         ? withDelay(
-            100,
+            260,
             withTiming(1, {
-              duration: 300,
-              easing: Easing.out(Easing.cubic),
+              duration: 650,
+              easing: Easing.inOut(Easing.cubic),
             })
           )
-        : withTiming(0, { duration: 140 }),
+        : withTiming(0, { duration: 180 }),
       transform: [
         {
           translateY: visible
             ? withDelay(
-                100,
+                260,
                 withTiming(0, {
-                  duration: 320,
-                  easing: Easing.out(Easing.cubic),
+                  duration: 700,
+                  easing: Easing.inOut(Easing.cubic),
                 })
               )
-            : withTiming(10, { duration: 140 }),
+            : withTiming(6, { duration: 180 }),
         },
         {
           scale: visible
             ? withDelay(
-                100,
+                260,
                 withTiming(1, {
-                  duration: 320,
-                  easing: Easing.out(Easing.cubic),
+                  duration: 700,
+                  easing: Easing.inOut(Easing.cubic),
                 })
               )
-            : withTiming(0.985, { duration: 140 }),
+            : withTiming(0.995, { duration: 180 }),
         },
       ],
     };
