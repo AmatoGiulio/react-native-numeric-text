@@ -437,6 +437,7 @@ const styles = StyleSheet.create({
   },
   installLabel: {
     color: INK,
+    fontFamily: 'monospace',
   },
   playback: {
     width: '100%',
