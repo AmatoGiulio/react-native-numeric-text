@@ -6,6 +6,7 @@ import Animated, {
   type SharedValue,
   useAnimatedStyle,
   useSharedValue,
+  withDelay,
   withTiming,
 } from 'react-native-reanimated';
 import {
@@ -23,6 +24,7 @@ type DemoState = {
 type ReleaseStep = DemoState & {
   hold: number;
   label: number;
+  outro?: boolean;
 };
 
 const LABELS = [
@@ -35,7 +37,6 @@ const LABELS = [
   'Accounting',
   'AED · RTL',
   'Rapid updates',
-  'npm install react-native-numeric-text',
 ] as const;
 
 const RELEASE_SEQUENCE: readonly ReleaseStep[] = [
@@ -199,7 +200,8 @@ const RELEASE_SEQUENCE: readonly ReleaseStep[] = [
     locale: 'ar-AE',
     format: { style: 'currency', currency: 'AED' },
     hold: 1800,
-    label: 9,
+    label: 8,
+    outro: true,
   },
 ];
 
@@ -276,22 +278,97 @@ export function ReleaseShowcase() {
   const [state, setState] = useState<DemoState>(() => stateFromStep(first));
   const [playing, setPlaying] = useState(false);
   const activeLabel = useSharedValue(first.label);
+  const outro = useSharedValue(0);
 
   const onDone = useCallback(() => setPlaying(false), []);
   const onStep = useCallback(
     (step: ReleaseStep) => {
+      if (step.outro) {
+        outro.value = 1;
+        return;
+      }
+
+      outro.value = 0;
       activeLabel.value = step.label;
       setState(stateFromStep(step));
     },
-    [activeLabel]
+    [activeLabel, outro]
   );
   const { play, stop } = useReleaseSequence(onStep, onDone);
+
+  const demoSceneStyle = useAnimatedStyle(() => {
+    'worklet';
+
+    const hidden = outro.value === 1;
+    return {
+      opacity: withTiming(hidden ? 0 : 1, {
+        duration: hidden ? 220 : 180,
+        easing: Easing.out(Easing.cubic),
+      }),
+      transform: [
+        {
+          translateY: withTiming(hidden ? -10 : 0, {
+            duration: 260,
+            easing: Easing.out(Easing.cubic),
+          }),
+        },
+        {
+          scale: withTiming(hidden ? 0.985 : 1, {
+            duration: 260,
+            easing: Easing.out(Easing.cubic),
+          }),
+        },
+      ],
+    };
+  });
+
+  const outroStyle = useAnimatedStyle(() => {
+    'worklet';
+
+    const visible = outro.value === 1;
+    return {
+      opacity: visible
+        ? withDelay(
+            150,
+            withTiming(1, {
+              duration: 300,
+              easing: Easing.out(Easing.cubic),
+            })
+          )
+        : withTiming(0, { duration: 140 }),
+      transform: [
+        {
+          translateY: visible
+            ? withDelay(
+                150,
+                withTiming(0, {
+                  duration: 320,
+                  easing: Easing.out(Easing.cubic),
+                })
+              )
+            : withTiming(10, { duration: 140 }),
+        },
+        {
+          scale: visible
+            ? withDelay(
+                150,
+                withTiming(1, {
+                  duration: 320,
+                  easing: Easing.out(Easing.cubic),
+                })
+              )
+            : withTiming(0.985, { duration: 140 }),
+        },
+      ],
+    };
+  });
 
   const setPlayback = useCallback(
     (nextPlaying: boolean) => {
       if (nextPlaying === playing) return;
 
       if (nextPlaying) {
+        outro.value = 0;
         setPlaying(true);
         play();
       } else {
@@ -299,7 +376,7 @@ export function ReleaseShowcase() {
         setPlaying(false);
       }
     },
-    [play, playing, stop]
+    [outro, play, playing, stop]
   );
 
   return (
@@ -309,14 +386,25 @@ export function ReleaseShowcase() {
       <View pointerEvents="none" style={styles.balanceSlot} />
 
       <View style={styles.content}>
-        <NumericText
-          value={state.value}
-          locale={state.locale}
-          format={state.format}
-          animationDuration={320}
-          style={styles.number}
-        />
-        <LabelStack activeLabel={activeLabel} />
+        <Animated.View style={[styles.demoScene, demoSceneStyle]}>
+          <NumericText
+            value={state.value}
+            locale={state.locale}
+            format={state.format}
+            animationDuration={320}
+            style={styles.number}
+          />
+          <LabelStack activeLabel={activeLabel} />
+        </Animated.View>
+
+        <Animated.View
+          pointerEvents="none"
+          style={[styles.outroScene, outroStyle]}
+        >
+          <Text style={styles.installLabel}>
+            npm install react-native-numeric-text
+          </Text>
+        </Animated.View>
       </View>
 
       <View style={styles.playback}>
@@ -379,9 +467,7 @@ function AnimatedLabel({
 
   return (
     <Animated.View style={[styles.labelLayer, animatedStyle]}>
-      <Text style={[styles.label, index === LABELS.length - 1 && styles.installLabel]}>
-        {label}
-      </Text>
+      <Text style={styles.label}>{label}</Text>
     </Animated.View>
   );
 }
@@ -403,6 +489,17 @@ const styles = StyleSheet.create({
   content: {
     flex: 1,
     width: '100%',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  demoScene: {
+    width: '100%',
+    alignItems: 'center',
+  },
+  outroScene: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -436,8 +533,15 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
   installLabel: {
+    maxWidth: '100%',
+    paddingHorizontal: 8,
     color: INK,
     fontFamily: 'monospace',
+    fontSize: 16,
+    lineHeight: 22,
+    fontWeight: '500',
+    letterSpacing: -0.35,
+    textAlign: 'center',
   },
   playback: {
     width: '100%',
