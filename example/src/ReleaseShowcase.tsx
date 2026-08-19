@@ -147,13 +147,29 @@ const RELEASE_SEQUENCE: readonly ReleaseStep[] = [
     label: 4,
   },
 
-  // Outro starts at 8.45 s; the whole scheduled sequence still ends at 10.0 s.
+  // RTL — one final negative-to-positive accent, still slow enough to read.
   {
-    value: 1000,
-    locale: 'ja-JP',
-    format: { style: 'currency', currency: 'JPY' },
-    hold: 1550,
-    label: 4,
+    value: -99.5,
+    locale: 'ar-AE',
+    format: { style: 'currency', currency: 'AED' },
+    hold: 550,
+    label: 7,
+  },
+  {
+    value: 100.5,
+    locale: 'ar-AE',
+    format: { style: 'currency', currency: 'AED' },
+    hold: 650,
+    label: 7,
+  },
+
+  // Outro starts at 9.65 s; the whole scheduled sequence ends at 10.95 s.
+  {
+    value: 100.5,
+    locale: 'ar-AE',
+    format: { style: 'currency', currency: 'AED' },
+    hold: 1300,
+    label: 7,
     outro: true,
   },
 ];
