@@ -1,5 +1,5 @@
-import { Showcase } from './Showcase';
+import { ReleaseShowcase } from './ReleaseShowcase';
 
 export default function App() {
-  return <Showcase />;
+  return <ReleaseShowcase />;
 }
