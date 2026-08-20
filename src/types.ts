@@ -1,4 +1,9 @@
-import type { AccessibilityProps, StyleProp, TextStyle } from 'react-native';
+import type {
+  AccessibilityProps,
+  ColorValue,
+  StyleProp,
+  TextStyle,
+} from 'react-native';
 
 /**
  * How to turn the value into the number that is drawn: a deliberately small subset of
@@ -111,6 +116,13 @@ export type NumericTextProps = NumericTextAccessibilityProps & {
    * applies to the view as usual. Native font size defaults to 48 and color to black.
    */
   style?: StyleProp<TextStyle>;
+
+  /**
+   * Draws the fraction span — the decimal separator, the digits after it, and any
+   * trailing affix — in this colour, leaving the rest of the number in the `style`
+   * colour. Omitted, the whole number is one colour.
+   */
+  fractionColor?: ColorValue;
 
   testID?: string;
 };

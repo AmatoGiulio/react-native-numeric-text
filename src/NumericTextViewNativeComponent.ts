@@ -30,6 +30,7 @@ interface NativeProps extends ViewProps {
   readonly fontWeight?: string;
   readonly fontFamily?: string;
   readonly textColor?: ColorValue;
+  readonly fractionColor?: ColorValue;
 }
 
 export default codegenNativeComponent<NativeProps>('NumericTextView');

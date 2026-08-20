@@ -100,7 +100,7 @@ public final class NumericTextSwiftUIHost: UIView {
   }
 
   // swiftlint:disable:next function_parameter_count
-  @objc(applyValue:direction:reduceMotion:fontSize:fontWeight:fontFamily:textColor:)
+  @objc(applyValue:direction:reduceMotion:fontSize:fontWeight:fontFamily:textColor:fractionColor:)
   public func apply(
     value: Double,
     direction: String,
@@ -108,7 +108,8 @@ public final class NumericTextSwiftUIHost: UIView {
     fontSize: CGFloat,
     fontWeight: String,
     fontFamily: String?,
-    textColor: UIColor?
+    textColor: UIColor?,
+    fractionColor: UIColor?
   ) {
     let nextText = Self.text(value, formatter: formatter)
     let changed = model.text != nextText
@@ -117,6 +118,8 @@ public final class NumericTextSwiftUIHost: UIView {
     model.weight = Self.weight(from: fontWeight)
     model.fontFamily = fontFamily
     model.color = textColor.map(Color.init(uiColor:)) ?? .black
+    model.fractionColor = fractionColor.map(Color.init(uiColor:))
+    model.decimalSeparator = Self.decimalSeparator(of: formatter)
 
     model.countsDown = Self.countsDown(
       direction: direction,
@@ -220,6 +223,14 @@ public final class NumericTextSwiftUIHost: UIView {
     formatter.string(from: NSNumber(value: value)) ?? String(value)
   }
 
+  private static func decimalSeparator(of formatter: NumberFormatter) -> String {
+    let separator =
+      formatter.numberStyle == .currency
+        ? formatter.currencyDecimalSeparator
+        : formatter.decimalSeparator
+    return separator ?? "."
+  }
+
   private static func makeFormatter(_ spec: FormatSpec) -> NumberFormatter {
     let formatter = NumberFormatter()
     formatter.locale = Locale(identifier: spec.locale.isEmpty ? "en-US" : spec.locale)
@@ -320,6 +331,9 @@ private final class NumericTextModel: ObservableObject {
   @Published var weight: Font.Weight = .regular
   @Published var fontFamily: String?
   @Published var color: Color = .black
+  @Published var fractionColor: Color?
+  /// The separator the current format draws, so the fraction span can be found in `text`.
+  @Published var decimalSeparator: String = "."
 }
 
 private struct NumericTextRoot: View {
@@ -362,7 +376,7 @@ private struct NumericTextRoot: View {
   }
 
   var body: some View {
-    Text(model.text)
+    numericText
       .font(font)
       .monospacedDigit()
       .foregroundStyle(model.color)
@@ -371,6 +385,50 @@ private struct NumericTextRoot: View {
       .animation(model.animates ? transitionAnimation : nil, value: model.text)
       .frame(maxWidth: .infinity, maxHeight: .infinity)
       .mask(edgeFadeMask)
+  }
+
+  /// The number as a single `Text`, in one colour or two.
+  ///
+  /// Concatenation matters here. `.numericText()` is closed — SwiftUI rasterises the
+  /// text once per value and animates that raster, with nothing per glyph to reach
+  /// into. But `Text + Text` is still *one* `Text`, so the raster it makes simply has
+  /// two coloured runs in it and the transition is unaffected. Splitting the number
+  /// into two sibling views would not survive: each would rasterise and transition on
+  /// its own, and they would drift apart on any change that moves the decimal point.
+  private var numericText: Text {
+    let text = model.text
+    guard let fractionColor = model.fractionColor,
+          let start = Self.fractionStart(in: text, decimalSeparator: model.decimalSeparator)
+    else {
+      return Text(text)
+    }
+
+    let head = Text(String(text[text.startIndex..<start]))
+    let tail = String(text[start...])
+
+    if #available(iOS 17.0, tvOS 17.0, *) {
+      return head + Text(tail).foregroundStyle(fractionColor)
+    }
+    return head + Text(tail).foregroundColor(fractionColor)
+  }
+
+  /// Where the fraction span begins: the decimal separator, or — when the format carries no
+  /// fraction digits — the trailing affix after the last digit. Nil when the number is all
+  /// integer with nothing following it.
+  ///
+  /// Read from the formatted string rather than from the value, so it lands on the separator the
+  /// locale actually drew.
+  fileprivate static func fractionStart(
+    in text: String,
+    decimalSeparator: String
+  ) -> String.Index? {
+    if let range = text.range(of: decimalSeparator, options: .backwards) {
+      return range.lowerBound
+    }
+
+    guard let lastDigit = text.lastIndex(where: { $0.isNumber }) else { return nil }
+    let afterDigits = text.index(after: lastDigit)
+    return afterDigits < text.endIndex ? afterDigits : nil
   }
 
   private var edgeFadeMask: some View {

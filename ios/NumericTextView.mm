@@ -75,7 +75,8 @@ using namespace facebook::react;
            fontSize:next.fontSize
          fontWeight:RCTNSStringFromString(next.fontWeight)
          fontFamily:RCTNSStringFromString(next.fontFamily)
-          textColor:RCTUIColorFromSharedColor(next.textColor)];
+          textColor:RCTUIColorFromSharedColor(next.textColor)
+      fractionColor:RCTUIColorFromSharedColor(next.fractionColor)];
 
   [super updateProps:props oldProps:oldProps];
 }
