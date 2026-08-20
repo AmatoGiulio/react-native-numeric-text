@@ -104,6 +104,17 @@ class NumericTextView(context: Context) : View(context), Choreographer.FrameCall
   private val preparedById = HashMap<Int, PreparedText>(16)
   private val bitmapPaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
   private var rasterColorFilter = PorterDuffColorFilter(numericTextColor, PorterDuff.Mode.SRC_IN)
+
+  /**
+   * Optional second tint, for the fraction span.
+   *
+   * The raster is drawn white and tinted at composite time, so a colour is a property of the draw
+   * rather than of the bitmap. A second one therefore costs nothing but choosing a different filter
+   * per slice — and because every draw goes through [drawRolling], settled and transitioning frames
+   * pick it up alike. Null draws the whole number in [numericTextColor].
+   */
+  private var numericFractionColor: Int? = null
+  private var fractionColorFilter: PorterDuffColorFilter? = null
   private var lastDesiredWidth = -1
 
   // Render caches
@@ -117,6 +128,17 @@ class NumericTextView(context: Context) : View(context), Choreographer.FrameCall
   init {
     clipToOutline = true
     recalcTextPaint()
+  }
+
+  private fun colorFilterFor(key: String): PorterDuffColorFilter =
+    if (TransitionLogic.isFractionKey(key)) fractionColorFilter ?: rasterColorFilter
+    else rasterColorFilter
+
+  internal fun setFractionColor(value: Int) {
+    if (numericFractionColor == value) return
+    numericFractionColor = value
+    fractionColorFilter = PorterDuffColorFilter(value, PorterDuff.Mode.SRC_IN)
+    invalidate()
   }
 
   private fun hHeadroom(): Float = textHeightPx * 0.36f + 4f
@@ -276,7 +298,7 @@ class NumericTextView(context: Context) : View(context), Choreographer.FrameCall
     )
 
     bitmapPaint.alpha = alpha
-    bitmapPaint.colorFilter = rasterColorFilter
+    bitmapPaint.colorFilter = colorFilterFor(sample.key)
     bitmapPaint.maskFilter =
       if (sample.stable || sample.blurLengthPx < BLUR_MIN_PX) {
         null
@@ -321,7 +343,7 @@ class NumericTextView(context: Context) : View(context), Choreographer.FrameCall
     val localBaseline = margin + raster.baseline
 
     val cacheKey =
-      "${paintGeneration}_${numericTextColor}_${sample.rasterId}_${sample.key}_${sample.renderId}_${nodeW}_${nodeH}"
+      "${paintGeneration}_${numericTextColor}_${numericFractionColor}_${sample.rasterId}_${sample.key}_${sample.renderId}_${nodeW}_${nodeH}"
     activeGlyphNodeKeys.add(cacheKey)
 
     var node = glyphNodeCache[cacheKey]
@@ -333,7 +355,7 @@ class NumericTextView(context: Context) : View(context), Choreographer.FrameCall
       val recording = node.beginRecording()
       bitmapPaint.alpha = 255
       bitmapPaint.maskFilter = null
-      bitmapPaint.colorFilter = rasterColorFilter
+      bitmapPaint.colorFilter = colorFilterFor(sample.key)
       recording.drawBitmap(
         raster.bitmap,
         source,

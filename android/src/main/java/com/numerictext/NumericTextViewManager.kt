@@ -140,6 +140,11 @@ class NumericTextViewManager : SimpleViewManager<NumericTextView>(),
     pending(view)?.textColor = color ?: android.graphics.Color.BLACK
   }
 
+  @ReactProp(name = "fractionColor")
+  override fun setFractionColor(view: NumericTextView?, color: Int?) {
+    pending(view)?.fractionColor = color
+  }
+
   override fun onAfterUpdateTransaction(view: NumericTextView) {
     super.onAfterUpdateTransaction(view)
     val props = pendingByView.remove(view) ?: return
@@ -156,6 +161,7 @@ class NumericTextViewManager : SimpleViewManager<NumericTextView>(),
     props.fontWeight?.let(view::setFontWeight)
     props.fontFamily?.let(view::setFontFamily)
     props.textColor?.let(view::setTextColor)
+    props.fractionColor?.let(view::setFractionColor)
 
     if (formatChanged) {
       val transitionValue = finalValue
@@ -201,6 +207,7 @@ class NumericTextViewManager : SimpleViewManager<NumericTextView>(),
     var fontWeight: String? = null,
     var fontFamily: String? = null,
     var textColor: Int? = null,
+    var fractionColor: Int? = null,
   ) {
     fun resolveFormat(base: NumericFormatSpec): NumericFormatSpec = base.copy(
       locale = locale ?: base.locale,

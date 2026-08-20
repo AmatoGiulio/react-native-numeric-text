@@ -38,6 +38,16 @@ object TransitionLogic {
   )
 
   /**
+   * Whether a slot key belongs to the fraction span: the decimal separator (`DEC:.`), the digits
+   * after it (`F0`, `F1`, ...) and any trailing affix (`X0`, ...).
+   *
+   * This is the span [NumericTextView] tints with `fractionColor`. It lives here because it reads
+   * the key encoding [layoutKeyedSlots] assigns.
+   */
+  internal fun isFractionKey(key: String): Boolean =
+    key.startsWith("F") || key.startsWith("DEC") || key.startsWith("X")
+
+  /**
    * Integer digits keep logical identity from the left; fractions from the decimal point. Affix
    * identity, however, is derived from shaped visual geometry rather than logical string order.
    * That distinction matters for bidi formats: an AED affix can live after the digits logically but
