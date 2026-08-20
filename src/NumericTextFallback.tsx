@@ -1,4 +1,4 @@
-import { memo } from 'react';
+import { memo, useState } from 'react';
 import { Text } from 'react-native';
 import { accessibilityPropsOf } from './accessibilityProps';
 import {
@@ -7,17 +7,47 @@ import {
   resolveFormat,
   splitFractionSpan,
 } from './numberFormat';
-import type { NumericTextProps } from './types';
+import { requireReanimated } from './optionalReanimated';
+import { isSharedValue } from './sharedValue';
+import type { NumericTextProps, NumericTextSharedValue } from './types';
 
 /** Static fallback for platforms without the native transition renderer. */
 function NumericTextFallbackImpl(props: NumericTextProps) {
-  const {
-    value,
-    locale = DEFAULT_LOCALE,
-    style,
-    testID,
-    fractionColor,
-  } = props;
+  const { value } = props;
+
+  return isSharedValue(value) ? (
+    <SharedValueFallback {...props} value={value} />
+  ) : (
+    <StaticFallback {...props} value={value} />
+  );
+}
+
+/**
+ * There is no transition to drive here, so the shared value is mirrored onto the JS thread and
+ * rendered as an ordinary number. This costs a render per change, which is exactly what the native
+ * path exists to avoid — but a platform drawing static text has nothing to spend it on.
+ */
+function SharedValueFallback(
+  props: NumericTextProps & { value: NumericTextSharedValue }
+) {
+  const { value } = props;
+  const { runOnJS, useAnimatedReaction } = requireReanimated();
+  const [current, setCurrent] = useState(() => value.value);
+
+  useAnimatedReaction(
+    () => value.value,
+    (next) => {
+      runOnJS(setCurrent)(next);
+    },
+    [value]
+  );
+
+  return <StaticFallback {...props} value={current} />;
+}
+
+/** One number, in one colour or two — the fraction span in `fractionColor` when it is set. */
+function StaticFallback(props: NumericTextProps & { value: number }) {
+  const { value, locale = DEFAULT_LOCALE, style, testID, fractionColor } = props;
   const format = resolveFormat(props);
   const accessibility = accessibilityPropsOf(props);
 

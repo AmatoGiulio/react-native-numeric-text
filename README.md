@@ -94,6 +94,10 @@ yarn add react-native-numeric-text
 
 The package autolinks through React Native. No manual Android font linking is required.
 
+There is one optional peer dependency, `react-native-reanimated` (3 or 4), needed only to pass a
+shared value as the `value` prop. Nothing imports it otherwise; installing it is not required to use
+this library.
+
 For iOS, install pods as usual after adding the dependency:
 
 ```sh
@@ -121,6 +125,61 @@ export function Balance({ value }: { value: number }) {
 ```
 
 The first value is rendered immediately. Later `value` changes transition natively.
+
+## Shared values
+
+`value` also takes a Reanimated shared value. The number it carries is written into the native view
+from the UI thread, so a value driven by a gesture, a spring, or a timing reaches the renderer
+without crossing to JavaScript and without re-rendering anything.
+
+```tsx
+import { Pressable } from 'react-native';
+import { NumericText } from 'react-native-numeric-text';
+import { useSharedValue, withTiming } from 'react-native-reanimated';
+
+export function Balance() {
+  const amount = useSharedValue(1240.5);
+
+  return (
+    <Pressable onPress={() => (amount.value = withTiming(0, { duration: 2600 }))}>
+      <NumericText value={amount} currency="USD" style={{ fontSize: 48 }} />
+    </Pressable>
+  );
+}
+```
+
+A `DerivedValue` works the same way, so a number can be composed out of other shared values before
+it is drawn.
+
+`react-native-reanimated` is an **optional** peer dependency. It is required nowhere in the module
+graph and is loaded only when a shared value is actually passed, so apps that pass plain numbers do
+not need it installed.
+
+### What it costs, and what it does not
+
+A shared value that moves every frame is a number that changes every frame, and the renderer treats
+it as one: the digits roll continuously rather than restarting a transition per commit. This is the
+case the Android engine was measured against — see [Parity model](#parity-model) — not a mode
+grafted on afterwards.
+
+What does change is where the layout box comes from. Under Fabric this view is sized by a minimum
+box computed in JavaScript, and a shared value never reaches JavaScript to be measured. So the box
+is precomputed instead: JS formats one widest sample per integer-digit count, measures each once,
+and the UI thread indexes that table with the value it already holds. The box is therefore exact
+from the first frame, at the cost of reserving the width of the widest number of its digit count
+rather than the width of the exact number on screen — a number with fewer fraction digits than the
+format allows sits in a slightly wider box than the same number passed as a prop. It grows
+immediately and shrinks only once the transition drawing the wider number has finished, exactly as
+the plain path does.
+
+### One or the other, for the life of the component
+
+A number and a shared value are rendered by different components, so switching a `value` from one to
+the other unmounts the native view and mounts a new one: whatever was in flight is dropped rather
+than transitioned. In development this logs a warning. Pick one per component.
+
+On platforms without the native renderer, the shared value is mirrored into React state and drawn as
+static text; there is no transition there to drive.
 
 ## Formatting is part of the transition
 
@@ -221,7 +280,7 @@ During rapid updates, automatic direction is resolved against the value the rend
 
 | Prop | Type | Default | Description |
 |---|---|---|---|
-| `value` | `number` | required | Number to display. The first render does not animate. |
+| `value` | `number \| SharedValue<number>` | required | Number to display. The first render does not animate. A shared value is driven from the UI thread; see [Shared values](#shared-values). |
 | `locale` | `string` | `'en-US'` | BCP-47 locale used for native number formatting. |
 | `format` | `NumericTextFormat` | `{}` | How to shape the number. See below. |
 | `currency` | `string` | none | Shorthand for `format={{ style: 'currency', currency }}`. `format` wins where the two overlap. |
@@ -376,6 +435,9 @@ This matters for counters with press-and-hold controls, live balances, scores, t
 The repository includes an `example/` application used both as a public showcase and as a development harness.
 
 The public screen is intentionally minimal: one number, two controls, and a deterministic demo sequence. A separate lab remains available for deeper validation without exposing diagnostic UI in recordings or screenshots.
+
+`example/src/SharedValueLab.tsx` drives the same component from a Reanimated shared value and
+prints React's render count beside it: the number rolls, the count does not move.
 
 The example application is part of the repository but intentionally excluded from the published npm package.
 

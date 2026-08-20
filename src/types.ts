@@ -55,6 +55,18 @@ export type NumericTextFormat = {
   maximumSignificantDigits?: number;
 };
 
+/**
+ * A Reanimated `SharedValue<number>` (or `DerivedValue<number>`), described structurally.
+ *
+ * The shape is declared here rather than imported so the published types do not require
+ * `react-native-reanimated` to be installed. Reanimated's own `SharedValue<number>` and
+ * `DerivedValue<number>` both satisfy it.
+ */
+export type NumericTextSharedValue = { readonly value: number };
+
+/** What [NumericTextProps.value] accepts: a plain number, or a shared value driving it natively. */
+export type NumericTextValue = number | NumericTextSharedValue;
+
 export type NumericTextAccessibilityProps = Pick<
   AccessibilityProps,
   | 'accessible'
@@ -75,8 +87,14 @@ export type NumericTextAccessibilityProps = Pick<
  * does: each digit column rolls on its own spring and rapid changes retain their motion.
  */
 export type NumericTextProps = NumericTextAccessibilityProps & {
-  /** The number to display. Changing it animates; the first render does not. */
-  value: number;
+  /**
+   * The number to display. Changing it animates; the first render does not.
+   *
+   * A Reanimated shared value is driven straight from the UI thread: the number it carries reaches
+   * the native renderer without a React re-render, so it can be fed by a gesture, a spring, or any
+   * other animation without the JS thread in the loop. Needs `react-native-reanimated` installed.
+   */
+  value: NumericTextValue;
 
   /**
    * BCP-47 tag deciding grouping and decimal marks. Defaults to `'en-US'` rather than the device

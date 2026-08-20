@@ -1,4 +1,5 @@
 import { memo, useEffect, useRef, useState } from 'react';
+import { NumericTextAnimatedView } from './NumericTextAnimatedView';
 import NumericTextViewNativeComponent from './NumericTextViewNativeComponent';
 import { accessibilityPropsOf } from './accessibilityProps';
 import { measureBox, widest, type Box } from './measureBox';
@@ -9,6 +10,7 @@ import {
   resolveFormat,
 } from './numberFormat';
 import { resolveTextStyle } from './resolveTextStyle';
+import { isSharedValue } from './sharedValue';
 import type { NumericTextProps } from './types';
 
 /**
@@ -19,6 +21,37 @@ import type { NumericTextProps } from './types';
  * structure where it draws it. JS reproduces the format only to reserve a safe layout box.
  */
 function NumericTextViewImpl(props: NumericTextProps) {
+  const { value } = props;
+  useValueKindWarning(value);
+
+  return isSharedValue(value) ? (
+    <NumericTextAnimatedView {...props} value={value} />
+  ) : (
+    <NumericTextPlainView {...props} value={value} />
+  );
+}
+
+/**
+ * Whether the value arrived as a number or as a shared value decides which component renders it,
+ * and swapping component type unmounts the native view — the number restarts rather than
+ * transitions. Nothing can be done about it from here, but it should not be silent.
+ */
+function useValueKindWarning(value: NumericTextProps['value']): void {
+  const shared = isSharedValue(value);
+  const previous = useRef(shared);
+  const changed = previous.current !== shared;
+  previous.current = shared;
+
+  if (__DEV__ && changed) {
+    console.warn(
+      '[NumericText] `value` changed between a number and a shared value. The native view is ' +
+        'recreated when it does, and the number in flight is dropped. Pick one for the lifetime ' +
+        'of the component.'
+    );
+  }
+}
+
+function NumericTextPlainView(props: NumericTextProps & { value: number }) {
   const {
     value,
     locale = DEFAULT_LOCALE,
