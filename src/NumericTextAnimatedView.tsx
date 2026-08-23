@@ -132,6 +132,7 @@ export function NumericTextAnimatedView(props: AnimatedNumericTextProps) {
       fontWeight={text.fontWeight}
       fontFamily={text.fontFamily}
       textColor={text.textColor}
+      fractionColor={props.fractionColor}
       testID={testID}
       style={[style, box]}
     />
