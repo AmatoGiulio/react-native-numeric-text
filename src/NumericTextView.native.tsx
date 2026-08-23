@@ -50,6 +50,7 @@ function NumericTextViewImpl(props: NumericTextProps) {
       fontWeight={text.fontWeight}
       fontFamily={text.fontFamily}
       textColor={text.textColor}
+      fractionColor={props.fractionColor}
       testID={testID}
       style={[style, box]}
     />

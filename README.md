@@ -232,6 +232,7 @@ During rapid updates, automatic direction is resolved against the value the rend
 | `minimumFractionDigits` | `number` | none | Shorthand for the same field of `format`. |
 | `maximumFractionDigits` | `number` | none | Shorthand for the same field of `format`. |
 | `style` | `StyleProp<TextStyle>` | none | Text/view style. `fontSize`, `fontWeight`, `fontFamily`, and `color` are forwarded to the native renderer. |
+| `fractionColor` | `ColorValue` | none | Second colour for the fraction span. See [Two-colour amounts](#two-colour-amounts). |
 | `testID` | `string` | none | React Native test identifier. |
 
 When `fontSize` or `color` are omitted, the native defaults are `48` and black.
@@ -297,6 +298,29 @@ Fast input is a first-class case rather than a stress test added after the rende
 When a value changes again during an active transition, the renderer keeps the relevant outgoing and incoming history and retargets toward the new formatted value. This avoids collapsing rapid input into a sequence of disconnected fades or restarting the entire line on every update.
 
 The result is intended for real controls where a user may tap repeatedly, hold a button, or reverse direction while motion is still active.
+
+## Two-colour amounts
+
+A balance is often drawn with its decimals dimmed, so the figure that matters reads first. `fractionColor` colours the **fraction span** — the decimal separator, the digits after it, and any trailing affix — leaving the rest in the `style` colour.
+
+```tsx
+<NumericText
+  value={balance}
+  currency="USD"
+  style={{ fontSize: 50, color: '#FFFFFF' }}
+  fractionColor="#8A9BA8"
+/>
+// $1,234.56  ->  "$1,234" white, ".56" grey
+```
+
+Omit it and the number is one colour, exactly as before.
+
+The span is read from the formatted string rather than from the value, so it lands on the separator the locale actually drew — `1.234,56 €` dims `,56 €`. A format with no fraction digits dims only a trailing affix, if there is one.
+
+Both renderers keep the transition intact rather than working around it:
+
+- **Android** draws the line into one white raster and tints it at composite time, so a colour is a property of the draw, not of the bitmap. The second colour is a second `PorterDuffColorFilter`, chosen per keyed slice. Settled and transitioning frames go through the same draw path, so both pick it up.
+- **iOS** concatenates two `Text` runs. This matters: `.numericText()` is closed — SwiftUI rasterises the text once per value and animates that raster, with nothing per glyph to reach into. But `Text + Text` is still *one* `Text`, so its raster simply carries two coloured runs and the transition is untouched. Two sibling views would not survive; each would rasterise and transition on its own, and they would drift apart on any change that moves the decimal point.
 
 ## Typography
 

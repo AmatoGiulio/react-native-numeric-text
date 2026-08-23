@@ -140,6 +140,18 @@ class NumericTextViewManager : SimpleViewManager<NumericTextView>(),
     pending(view)?.textColor = color ?: android.graphics.Color.BLACK
   }
 
+  @ReactProp(name = "fractionColor")
+  override fun setFractionColor(view: NumericTextView?, color: Int?) {
+    // React calls a setter only for props that changed this transaction, and delivers a removed
+    // colour prop as null — the same null a caller would pass to clear it. Record that the prop was
+    // received (distinct from "untouched this transaction") so removal reaches the View, where a
+    // null restores the fraction span to the main colour.
+    pending(view)?.apply {
+      fractionColor = color
+      fractionColorReceived = true
+    }
+  }
+
   override fun onAfterUpdateTransaction(view: NumericTextView) {
     super.onAfterUpdateTransaction(view)
     val props = pendingByView.remove(view) ?: return
@@ -156,6 +168,7 @@ class NumericTextViewManager : SimpleViewManager<NumericTextView>(),
     props.fontWeight?.let(view::setFontWeight)
     props.fontFamily?.let(view::setFontFamily)
     props.textColor?.let(view::setTextColor)
+    if (props.fractionColorReceived) view.setFractionColor(props.fractionColor)
 
     if (formatChanged) {
       val transitionValue = finalValue
@@ -201,6 +214,8 @@ class NumericTextViewManager : SimpleViewManager<NumericTextView>(),
     var fontWeight: String? = null,
     var fontFamily: String? = null,
     var textColor: Int? = null,
+    var fractionColor: Int? = null,
+    var fractionColorReceived: Boolean = false,
   ) {
     fun resolveFormat(base: NumericFormatSpec): NumericFormatSpec = base.copy(
       locale = locale ?: base.locale,
