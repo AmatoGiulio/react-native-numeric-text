@@ -55,7 +55,13 @@ function SharedValueFallback(
 
 /** One number, in one colour or two — the fraction span in `fractionColor` when it is set. */
 function StaticFallback(props: NumericTextProps & { value: number }) {
-  const { value, locale = DEFAULT_LOCALE, style, testID, fractionColor } = props;
+  const {
+    value,
+    locale = DEFAULT_LOCALE,
+    style,
+    testID,
+    fractionColor,
+  } = props;
   const format = resolveFormat(props);
   const accessibility = accessibilityPropsOf(props);
 
