@@ -64,8 +64,9 @@ function load(): ReanimatedApi | null {
   }
 
   // `createAnimatedComponent` is both a named export and a member of the default export; older
-  // versions only carried the latter. `runOnJS` moved to `react-native-worklets` as `scheduleOnRN`
-  // and is still re-exported here, so the move is absorbed rather than waited for.
+  // versions only carried the latter. `runOnJS` moved to `react-native-worklets` in Reanimated 4;
+  // `scheduleOnRN()` finds it there and normalizes its shape, so the move is absorbed rather than
+  // waited for.
   const createAnimatedComponent =
     reanimated.createAnimatedComponent ??
     reanimated.default?.createAnimatedComponent;
@@ -96,14 +97,32 @@ function load(): ReanimatedApi | null {
   };
 }
 
-/** Reanimated 4's `runOnJS` lives in `react-native-worklets` under its new name. */
+/**
+ * Reanimated 4's `runOnJS` lives in `react-native-worklets`, where it is also exposed under the new
+ * name `scheduleOnRN`. The two do NOT share a shape: `runOnJS(fn)` is curried and returns a caller,
+ * while `scheduleOnRN(fn, ...args)` takes the function and its arguments together and schedules
+ * immediately. This library calls the value as `runOnJS(fn)(...args)`, so a raw `scheduleOnRN` in
+ * that slot would try to invoke the `void` it returns. When only `scheduleOnRN` is present it is
+ * wrapped back into the curried shape. (`runOnJS` is exercised only on the web fallback, where there
+ * is no worklet thread boundary, so the wrapper runs inline.)
+ */
 function scheduleOnRN(): ReanimatedApi['runOnJS'] | undefined {
   try {
     const worklets = require('react-native-worklets') as {
       runOnJS?: ReanimatedApi['runOnJS'];
-      scheduleOnRN?: ReanimatedApi['runOnJS'];
+      scheduleOnRN?: <A extends unknown[]>(
+        fn: (...args: A) => void,
+        ...args: A
+      ) => void;
     };
-    return worklets.runOnJS ?? worklets.scheduleOnRN;
+    if (worklets.runOnJS) return worklets.runOnJS;
+    const scheduled = worklets.scheduleOnRN;
+    if (scheduled) {
+      return <A extends unknown[]>(fn: (...args: A) => void) =>
+        (...args: A) =>
+          scheduled(fn, ...args);
+    }
+    return undefined;
   } catch {
     return undefined;
   }

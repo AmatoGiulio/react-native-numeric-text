@@ -106,9 +106,12 @@ describe('boxWidth', () => {
       { style: 'currency', currency: 'USD', currencyDisplay: 'code' },
       { style: 'currency', currency: 'USD', currencySign: 'accounting' },
     ];
+    // Kept within the 21-integer-digit table: percent multiplies by 100, so the largest bases here
+    // stay at or under 19 digits and land inside the table after scaling.
     const values = [
-      0, 0.5, 1, 9, 9.99, 42, 99.95, 100, 999.6, 1000, 12345.678, 999999.99,
-      1234567890.12, -1, -9.99, -1234.5, -1000000,
+      0, 0.5, 1, 9, 9.99, 9.995, 42, 99.95, 99.995, 100, 999.6, 999.995, 1000,
+      9999999.995, 12345.678, 999999.99, 1234567890.12, 1e16, 1e17,
+      120000000000000000, -1, -9.99, -9.995, -1234.5, -1000000, -1e17,
     ];
 
     for (const locale of ['en-US', 'de-DE', 'fr-FR', 'hi-IN', 'ar-EG']) {
@@ -131,5 +134,39 @@ describe('boxWidth', () => {
     const usd = { style: 'currency' as const, currency: 'USD' };
     expect(widthFor(1234.5, usd)).toBe(exactWidth(1234.5, usd));
     expect(widthFor(-1234.5, usd)).toBe(exactWidth(-1234.5, usd));
+  });
+
+  // The float trap: 9.995 * 100 is 999.4999… so a naive round drops to 9.99, but the formatter
+  // rounds the decimal string and draws 10.00 — two integer digits, a wider box.
+  it('counts the digit a half-boundary rounds up into, past float error', () => {
+    const usd = { style: 'currency' as const, currency: 'USD' };
+    expect(widthFor(9.995, usd)).toBe(exactWidth(10, usd));
+    expect(widthFor(9.995, usd)).toBeGreaterThan(widthFor(9.99, usd));
+    // and the plain 2-fraction case
+    const two = { minimumFractionDigits: 2, maximumFractionDigits: 2 };
+    expect(widthFor(9.995, two)).toBe(widthFor(10, two));
+    expect(widthFor(9999999.995, two)).toBe(widthFor(10000000, two));
+  });
+
+  it('rounds significant digits the way the formatter does', () => {
+    const sig3 = { maximumSignificantDigits: 3, minimumSignificantDigits: 3 };
+    // 9.995 to 3 significant figures is 10.0 — two integer digits.
+    expect(widthFor(9.995, sig3)).toBe(exactWidth(9.995, sig3));
+    expect(widthFor(99.95, sig3)).toBe(exactWidth(99.95, sig3));
+    expect(widthFor(999.5, sig3)).toBe(exactWidth(999.5, sig3));
+  });
+
+  // Past 15 digits the sample is padded, and Indian locales group the high-order digits by two.
+  it('reserves Indian grouping for very large numbers', () => {
+    const big = [1e16, 1e17, 1e18, 1e20, 12000000000000000, 999900000000000000];
+    for (const value of big) {
+      expect(widthFor(value, {}, 'hi-IN')).toBeGreaterThanOrEqual(
+        exactWidth(value, {}, 'hi-IN')
+      );
+    }
+    // and Indian grouping really is wider than Latin at this size (more separators)
+    expect(widthFor(1e18, {}, 'hi-IN')).toBeGreaterThan(
+      widthFor(1e18, {}, 'en-US')
+    );
   });
 });

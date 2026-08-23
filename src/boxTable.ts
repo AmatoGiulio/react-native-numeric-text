@@ -23,9 +23,6 @@ const MAX_INTEGER_DIGITS = 21;
 /** Digits a double carries exactly. Past this the sample is padded rather than computed. */
 const SAFE_DIGITS = 15;
 
-/** Digits between grouping separators, for the padding path only. */
-const GROUP_SIZE = 3;
-
 /** Fraction digits assumed when the runtime cannot resolve the format's own default. */
 const DEFAULT_DECIMAL_FRACTION_DIGITS = 3;
 const DEFAULT_CURRENCY_FRACTION_DIGITS = 2;
@@ -56,32 +53,80 @@ type Rounding = { fractionDigits: number; significantDigits: number };
  */
 export function boxWidth(value: number, table: BoxTable): number {
   'worklet';
-  const scaled = value * table.scale;
-  const negative = scaled < 0 || (scaled === 0 && 1 / scaled < 0);
-  let magnitude = Math.abs(scaled);
-  if (!Number.isFinite(magnitude)) magnitude = 0;
+  const negative = value < 0 || (value === 0 && 1 / value < 0);
+  const abs = Math.abs(value);
 
-  if (table.significantDigits > 0 && magnitude > 0) {
-    const unit = Math.pow(
-      10,
-      table.significantDigits - 1 - Math.floor(Math.log10(magnitude))
-    );
-    magnitude = Math.round(magnitude * unit) / unit;
-  } else if (table.fractionDigits > 0) {
-    const unit = Math.pow(10, table.fractionDigits);
-    magnitude = Math.round(magnitude * unit) / unit;
+  // How many integer digits the formatter draws — counted AFTER rounding, because rounding is what
+  // moves the boundary. The rounding has to match ICU/Intl exactly: `9.995` at two fraction digits
+  // formats to `10.00`, not `9.99`, so the row must be the two-integer-digit one or the number
+  // clips. Neither `Math.round(m * 100)` nor `m.toFixed(2)` agrees — the double nearest 9.995 is
+  // 9.9949…, and both round it down — while Intl rounds the number's *shortest decimal string* with
+  // half-away-from-zero. So the rounding is reproduced on that string here, digit by digit.
+  let digits: number;
+  const raw = abs.toString();
+  if (!Number.isFinite(abs) || abs === 0 || raw.indexOf('e') >= 0) {
+    // Zero, a magnitude past 1e21, or a fraction below 1e-6 where `toString` turns exponential —
+    // all outside the range the table resolves per digit. Count the truncated integer part; a huge
+    // magnitude is clamped to the last row below, and anything sub-integer has one integer digit.
+    let magnitude = abs * table.scale;
+    if (!Number.isFinite(magnitude)) magnitude = 0;
+    digits = 1;
+    let remaining = Math.trunc(magnitude);
+    while (remaining >= 10) {
+      remaining = Math.floor(remaining / 10);
+      digits += 1;
+    }
   } else {
-    magnitude = Math.round(magnitude);
+    // Percent multiplies by 100 before formatting. Doing that in float would reintroduce exactly the
+    // error the string trick removes (`9.995 * 100` is `999.4999…`), so the scale — always a power
+    // of ten — is applied by shifting the decimal point along the digit string instead.
+    const shift = table.scale > 1 ? Math.round(Math.log10(table.scale)) : 0;
+    const dot = raw.indexOf('.');
+    let intStr = dot < 0 ? raw : raw.slice(0, dot);
+    let fracStr = dot < 0 ? '' : raw.slice(dot + 1);
+    if (shift > 0) {
+      if (fracStr.length >= shift) {
+        intStr += fracStr.slice(0, shift);
+        fracStr = fracStr.slice(shift);
+      } else {
+        intStr += fracStr + '0'.repeat(shift - fracStr.length);
+        fracStr = '';
+      }
+    }
+
+    let intLen = intStr.length;
+    const glyphs = (intStr + fracStr).split('');
+
+    // Index of the first digit rounding discards.
+    let cut: number;
+    if (table.significantDigits > 0) {
+      let firstSig = 0;
+      while (firstSig < glyphs.length && glyphs[firstSig] === '0')
+        firstSig += 1;
+      cut = firstSig + table.significantDigits;
+    } else {
+      cut = intLen + table.fractionDigits;
+    }
+
+    if (cut < glyphs.length && glyphs[cut]! >= '5') {
+      let carry = 1;
+      for (let i = cut - 1; i >= 0 && carry > 0; i -= 1) {
+        const d = glyphs[i]!.charCodeAt(0) - 48 + carry;
+        glyphs[i] = String.fromCharCode((d % 10) + 48);
+        carry = d >= 10 ? 1 : 0;
+      }
+      if (carry > 0) {
+        glyphs.unshift('1');
+        intLen += 1;
+      }
+    }
+
+    let lead = 0;
+    while (lead < intLen - 1 && glyphs[lead] === '0') lead += 1;
+    digits = intLen - lead;
   }
 
-  // Counted by division rather than `log10` so no rounding of the logarithm can drop a digit, and
-  // rather than by string length so a magnitude past 1e21 does not come back as `1e+21`.
-  let digits = 1;
-  let remaining = Math.trunc(magnitude);
-  while (remaining >= 10 && digits < MAX_INTEGER_DIGITS) {
-    remaining = Math.floor(remaining / 10);
-    digits += 1;
-  }
+  if (digits > MAX_INTEGER_DIGITS) digits = MAX_INTEGER_DIGITS;
   if (digits < table.minimumIntegerDigits) digits = table.minimumIntegerDigits;
 
   const row = negative ? table.negative : table.positive;
@@ -123,6 +168,7 @@ function build(
   fontSize: number | undefined
 ): BoxTable {
   const rounding = resolveRounding(locale, normalized);
+  const shape = groupingShape(locale);
   const scale = normalized.style === 'percent' ? 100 : 1;
   const positive: number[] = [0];
   const negative: number[] = [0];
@@ -130,13 +176,13 @@ function build(
   for (let digits = 1; digits <= MAX_INTEGER_DIGITS; digits += 1) {
     positive.push(
       measureBox(
-        sample(digits, false, locale, normalized, rounding, scale),
+        sample(digits, false, locale, normalized, rounding, scale, shape),
         fontSize
       ).minWidth
     );
     negative.push(
       measureBox(
-        sample(digits, true, locale, normalized, rounding, scale),
+        sample(digits, true, locale, normalized, rounding, scale, shape),
         fontSize
       ).minWidth
     );
@@ -170,7 +216,8 @@ function sample(
   locale: string,
   normalized: NumericTextFormat,
   rounding: Rounding,
-  scale: number
+  scale: number,
+  shape: GroupingShape
 ): string {
   const integerDigits = Math.min(digits, SAFE_DIGITS);
   const fractionRoom = SAFE_DIGITS - integerDigits;
@@ -192,16 +239,78 @@ function sample(
 
   const missingInteger = digits - integerDigits;
   const missingFraction = wantedFraction - fractionDigits;
+  // The separators the extra integer digits introduce. Counted from the locale's own grouping shape
+  // rather than assumed to be one per three digits: past 15 digits the double can no longer be
+  // formatted directly, and Indian locales group the high-order digits by two (12,34,56,789), so a
+  // fixed /3 reserved too few separators and clipped very large numbers.
   const missingGroups =
     normalized.useGrouping === false
       ? 0
-      : Math.floor(missingInteger / GROUP_SIZE);
+      : separatorCount(digits, shape) - separatorCount(integerDigits, shape);
 
+  // The padded glyphs must be the locale's own: `ar-EG` draws Arabic-Indic digits and its own group
+  // mark, and appending ASCII `8`/`,` there measured a width neither the real number nor the row it
+  // indexes has.
   return (
     text +
-    '8'.repeat(missingInteger + missingFraction) +
-    ','.repeat(missingGroups)
+    shape.eight.repeat(missingInteger + missingFraction) +
+    shape.group.repeat(missingGroups)
   );
+}
+
+type GroupingShape = {
+  primary: number;
+  secondary: number;
+  /** The locale's digit `8`, the widest tabular digit and the one the samples are built from. */
+  eight: string;
+  /** The locale's grouping separator. */
+  group: string;
+};
+
+/** Grouping separators in a number with [n] integer digits, given the locale's grouping shape. */
+function separatorCount(n: number, shape: GroupingShape): number {
+  if (n <= shape.primary) return 0;
+  return 1 + Math.floor((n - shape.primary - 1) / shape.secondary);
+}
+
+/**
+ * The locale's grouping shape and the glyphs the padded samples are built from.
+ *
+ * `primary`/`secondary` are the size of the rightmost group and of the repeating groups above it:
+ * most locales repeat one size (1,000,000) but Indian locales group the thousands and then by two
+ * (10,00,000). `eight` and `group` are the locale's digit `8` and grouping mark, so a sample padded
+ * past 15 digits carries the same glyphs — and the same width — the real number would.
+ */
+function groupingShape(locale: string): GroupingShape {
+  const fallback: GroupingShape = {
+    primary: 3,
+    secondary: 3,
+    eight: '8',
+    group: ',',
+  };
+  try {
+    const format = new Intl.NumberFormat(locale, {
+      useGrouping: true,
+      maximumFractionDigits: 0,
+    });
+    const runs: number[] = [];
+    let group = fallback.group;
+    for (const part of format.formatToParts(11111111111)) {
+      if (part.type === 'integer') runs.push(part.value.length);
+      else if (part.type === 'group') group = part.value;
+    }
+    const eight = format
+      .formatToParts(8)
+      .find((part) => part.type === 'integer');
+    return {
+      primary: runs.length ? runs[runs.length - 1]! : 3,
+      secondary: runs.length >= 2 ? runs[runs.length - 2]! : (runs[0] ?? 3),
+      eight: eight ? eight.value : fallback.eight,
+      group,
+    };
+  } catch {
+    return fallback;
+  }
 }
 
 /**

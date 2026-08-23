@@ -1,4 +1,4 @@
-import { memo, useState } from 'react';
+import { memo, useLayoutEffect, useState } from 'react';
 import { Text } from 'react-native';
 import { accessibilityPropsOf } from './accessibilityProps';
 import {
@@ -32,7 +32,15 @@ function SharedValueFallback(
 ) {
   const { value } = props;
   const { runOnJS, useAnimatedReaction } = requireReanimated();
-  const [current, setCurrent] = useState(() => value.value);
+  const [current, setCurrent] = useState(0);
+
+  // The shared value is mirrored onto JS state from outside render — reading `.value` during render
+  // is a side-effect Reanimated documents as one to avoid. A layout effect seeds the first value
+  // before paint, and the reaction keeps it in step. This path is web-only static text, where the
+  // reaction runs on the JS thread.
+  useLayoutEffect(() => {
+    setCurrent(value.value);
+  }, [value]);
 
   useAnimatedReaction(
     () => value.value,

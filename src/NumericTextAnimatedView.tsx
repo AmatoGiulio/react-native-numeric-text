@@ -1,4 +1,4 @@
-import { useState, type ComponentProps, type ComponentType } from 'react';
+import { type ComponentProps, type ComponentType } from 'react';
 import NumericTextViewNativeComponent from './NumericTextViewNativeComponent';
 import { accessibilityPropsOf } from './accessibilityProps';
 import { boxTable, boxWidth } from './boxTable';
@@ -29,6 +29,9 @@ import type { NumericTextProps, NumericTextSharedValue } from './types';
 type AnimatedNumericTextProps = NumericTextProps & {
   value: NumericTextSharedValue;
 };
+
+/** `width` before the reaction has filled it. A real box width from `boxWidth` is never negative. */
+const UNSEEDED_WIDTH = -1;
 
 type NativeProps = ComponentProps<typeof NumericTextViewNativeComponent>;
 
@@ -77,11 +80,11 @@ export function NumericTextAnimatedView(props: AnimatedNumericTextProps) {
   const holdMs = Math.max(animationDuration, 500) + 400;
   const minHeight = table.minHeight;
 
-  // Reading a shared value during a component's *first* render is the sanctioned way to seed state
-  // from it, and is the one read Reanimated does not warn about. It buys an exact box on the first
-  // frame instead of a frame at zero width while the UI thread catches up.
-  const [initialWidth] = useState(() => boxWidth(value.value, table));
-  const width = useSharedValue(initialWidth);
+  // The box is driven entirely from the UI thread — the shared value is never read during render,
+  // which Reanimated documents as a side-effect to avoid. `width` starts unseeded; until the
+  // reaction fills it, the style below computes the exact box from `value` on the UI thread, so the
+  // first frame is exact without a JS-thread read and without a zero-width flash.
+  const width = useSharedValue(UNSEEDED_WIDTH);
 
   const animatedProps = useAnimatedProps<Partial<NativeProps>>(
     () => ({ value: value.value }),
@@ -90,10 +93,13 @@ export function NumericTextAnimatedView(props: AnimatedNumericTextProps) {
 
   // The same rule the JS path applies in `useShrinkHeldBox`: grow at once, shrink only after the
   // transition that is still drawing the wider number has had time to finish. A zero-length timing
-  // behind a delay is a step, not an animation; the box must not slide.
+  // behind a delay is a step, not an animation; the box must not slide. The first reaction seeds the
+  // held width from the width just before this change (`previous`), so even a first-change shrink
+  // holds against the right floor instead of the unseeded sentinel.
   useAnimatedReaction(
     () => boxWidth(value.value, table),
-    (next) => {
+    (next, previous) => {
+      if (width.value < 0) width.value = previous ?? next;
       if (next >= width.value) {
         width.value = next;
       } else {
@@ -103,10 +109,13 @@ export function NumericTextAnimatedView(props: AnimatedNumericTextProps) {
     [value, table, holdMs]
   );
 
-  const box = useAnimatedStyle(
-    () => ({ minWidth: width.value, minHeight }),
-    [minHeight]
-  );
+  const box = useAnimatedStyle(() => {
+    const seeded = width.value;
+    return {
+      minWidth: seeded >= 0 ? seeded : boxWidth(value.value, table),
+      minHeight,
+    };
+  }, [minHeight, value, table]);
 
   const Animated = animatedNativeComponent(reanimated);
 
