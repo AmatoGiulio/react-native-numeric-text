@@ -9,10 +9,7 @@ import Animated, {
   withDelay,
   withTiming,
 } from 'react-native-reanimated';
-import {
-  NumericText,
-  type NumericTextFormat,
-} from 'react-native-numeric-text';
+import { NumericText, type NumericTextFormat } from 'react-native-numeric-text';
 import { ReleaseToggle } from './release-toggle';
 
 type DemoState = {
