@@ -134,10 +134,13 @@ class NumericTextView(context: Context) : View(context), Choreographer.FrameCall
     if (TransitionLogic.isFractionKey(key)) fractionColorFilter ?: rasterColorFilter
     else rasterColorFilter
 
-  internal fun setFractionColor(value: Int) {
+  internal fun setFractionColor(value: Int?) {
     if (numericFractionColor == value) return
     numericFractionColor = value
-    fractionColorFilter = PorterDuffColorFilter(value, PorterDuff.Mode.SRC_IN)
+    // Null clears the second tint: [colorFilterFor] then falls back to [rasterColorFilter], so the
+    // fraction span is drawn in the main colour again. The RenderNode cache keys on
+    // [numericFractionColor], so cached slices re-render on the next frame without an explicit purge.
+    fractionColorFilter = value?.let { PorterDuffColorFilter(it, PorterDuff.Mode.SRC_IN) }
     invalidate()
   }
 

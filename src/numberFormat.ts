@@ -253,3 +253,51 @@ export function formatNumber(
     }
   }
 }
+
+/**
+ * Splits the formatted number into the leading part and the fraction span the native renderers
+ * tint with `fractionColor`: the decimal separator, the digits after it, and any trailing affix.
+ *
+ * This mirrors iOS `fractionStart` and Android `isFractionKey` so the web fallback colours the
+ * exact same run. `formatToParts` gives the split by field rather than by scanning characters, so a
+ * separator drawn inside a trailing currency symbol (`ar-AE` renders AED as `د.إ.`) is never
+ * mistaken for the decimal. When the runtime lacks `formatToParts`, the whole number is the head.
+ */
+export function splitFractionSpan(
+  value: number,
+  locale: string,
+  format: NumericTextFormat
+): { head: string; fraction: string } {
+  const normalized = normalizeFormat(format);
+  let parts: Intl.NumberFormatPart[];
+  try {
+    parts = new Intl.NumberFormat(
+      locale,
+      intlOptions(normalized)
+    ).formatToParts(value);
+  } catch {
+    return { head: formatNumber(value, locale, normalized), fraction: '' };
+  }
+
+  let splitIndex = parts.findIndex((part) => part.type === 'decimal');
+  if (splitIndex < 0) {
+    // No fraction digits: the span is the trailing affix after the last digit, if any.
+    let lastDigit = -1;
+    parts.forEach((part, index) => {
+      if (part.type === 'integer' || part.type === 'fraction')
+        lastDigit = index;
+    });
+    splitIndex =
+      lastDigit >= 0 && lastDigit + 1 < parts.length
+        ? lastDigit + 1
+        : parts.length;
+  }
+
+  let head = '';
+  let fraction = '';
+  parts.forEach((part, index) => {
+    if (index < splitIndex) head += part.value;
+    else fraction += part.value;
+  });
+  return { head, fraction };
+}

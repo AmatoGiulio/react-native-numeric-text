@@ -6,6 +6,7 @@ import {
   nativeFormatProps,
   normalizeFormat,
   resolveFormat,
+  splitFractionSpan,
 } from '../numberFormat';
 
 describe('resolveFormat', () => {
@@ -237,5 +238,71 @@ describe('nativeFormatProps', () => {
     });
     expect(props.minimumFractionDigits).toBe(100);
     expect(props.maximumFractionDigits).toBe(100);
+  });
+});
+
+describe('splitFractionSpan', () => {
+  const join = (value: number, locale: string, format = {}) => {
+    const { head, fraction } = splitFractionSpan(value, locale, format);
+    return { head, fraction, whole: head + fraction };
+  };
+
+  it('splits at the decimal separator', () => {
+    expect(join(1234.56, 'en-US')).toMatchObject({
+      head: '1,234',
+      fraction: '.56',
+    });
+  });
+
+  it('leaves an all-integer number entirely in the head', () => {
+    expect(join(1234, 'en-US')).toMatchObject({ head: '1,234', fraction: '' });
+  });
+
+  it('colours a trailing currency symbol along with the fraction', () => {
+    const { head, fraction } = splitFractionSpan(1234.56, 'de-DE', {
+      style: 'currency',
+      currency: 'EUR',
+    });
+    expect(head).toBe('1.234');
+    expect(fraction).toBe(',56 €');
+  });
+
+  it('never lands on a separator drawn inside a trailing currency symbol', () => {
+    // ar-AE renders AED as "د.إ." — a symbol that contains the decimal character. The split must
+    // stay on the real decimal between the digits, colouring the whole fraction span, not just the
+    // last glyph.
+    const { head, fraction } = splitFractionSpan(1234.56, 'ar-AE', {
+      style: 'currency',
+      currency: 'AED',
+    });
+    expect(head).toContain('234');
+    expect(head).not.toContain('د.إ.');
+    expect(fraction.startsWith('.') || fraction.startsWith('٫')).toBe(true);
+    expect(fraction).toContain('د.إ.');
+  });
+
+  it('treats a trailing code affix as the span when there are no fraction digits', () => {
+    const { head, fraction } = splitFractionSpan(1234, 'en-US', {
+      style: 'currency',
+      currency: 'USD',
+      currencyDisplay: 'code',
+      maximumFractionDigits: 0,
+      minimumFractionDigits: 0,
+    });
+    expect(head).toBe('USD 1,234');
+    expect(fraction).toBe('');
+  });
+
+  it('recombines to the same string formatNumber produces', () => {
+    const cases: Array<[number, string, object]> = [
+      [9.995, 'en-US', { style: 'currency', currency: 'USD' }],
+      [1234567.89, 'hi-IN', {}],
+      [0.5, 'en-US', { style: 'percent' }],
+    ];
+    for (const [value, locale, format] of cases) {
+      expect(join(value, locale, format).whole).toBe(
+        formatNumber(value, locale, format)
+      );
+    }
   });
 });

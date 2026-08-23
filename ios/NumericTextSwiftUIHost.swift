@@ -418,15 +418,24 @@ private struct NumericTextRoot: View {
   ///
   /// Read from the formatted string rather than from the value, so it lands on the separator the
   /// locale actually drew.
+  ///
+  /// The separator is only looked for *inside* the numeric span — from the first digit to the last.
+  /// A trailing currency symbol can itself contain the separator character (`ar-AE` draws AED as
+  /// `د.إ.`), and a `.backwards` search over the whole string would land on that dot and colour only
+  /// the last glyph. Confining the search to where digits actually are keeps it on the real decimal.
   fileprivate static func fractionStart(
     in text: String,
     decimalSeparator: String
   ) -> String.Index? {
-    if let range = text.range(of: decimalSeparator, options: .backwards) {
+    guard let firstDigit = text.firstIndex(where: { $0.isNumber }),
+          let lastDigit = text.lastIndex(where: { $0.isNumber })
+    else { return nil }
+
+    let numericSpan = firstDigit..<text.index(after: lastDigit)
+    if let range = text.range(of: decimalSeparator, options: .backwards, range: numericSpan) {
       return range.lowerBound
     }
 
-    guard let lastDigit = text.lastIndex(where: { $0.isNumber }) else { return nil }
     let afterDigits = text.index(after: lastDigit)
     return afterDigits < text.endIndex ? afterDigits : nil
   }
