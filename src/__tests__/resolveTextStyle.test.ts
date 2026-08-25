@@ -47,6 +47,7 @@ describe('resolveTextStyle', () => {
         fontWeight: undefined,
         fontFamily: undefined,
         textColor: undefined,
+        textAlign: undefined,
       });
     }
   });
@@ -61,7 +62,20 @@ describe('resolveTextStyle', () => {
       'fontFamily',
       'fontSize',
       'fontWeight',
+      'textAlign',
       'textColor',
     ]);
+  });
+
+  it('keeps the three alignments the renderer positions by, and drops the rest', () => {
+    expect(resolveTextStyle({ textAlign: 'left' }).textAlign).toBe('left');
+    expect(resolveTextStyle({ textAlign: 'center' }).textAlign).toBe('center');
+    expect(resolveTextStyle({ textAlign: 'right' }).textAlign).toBe('right');
+    // `auto`/`justify` fall through to the renderer's own default (center).
+    expect(resolveTextStyle({ textAlign: 'auto' }).textAlign).toBeUndefined();
+    expect(
+      resolveTextStyle({ textAlign: 'justify' }).textAlign
+    ).toBeUndefined();
+    expect(resolveTextStyle({}).textAlign).toBeUndefined();
   });
 });

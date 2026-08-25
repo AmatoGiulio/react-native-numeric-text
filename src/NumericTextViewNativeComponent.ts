@@ -31,6 +31,8 @@ interface NativeProps extends ViewProps {
   readonly fontFamily?: string;
   readonly textColor?: ColorValue;
   readonly fractionColor?: ColorValue;
+  /** `'left' | 'center' | 'right'`. Empty/absent means the renderer default, `'center'`. */
+  readonly textAlign?: string;
 }
 
 export default codegenNativeComponent<NativeProps>('NumericTextView');

@@ -100,7 +100,7 @@ public final class NumericTextSwiftUIHost: UIView {
   }
 
   // swiftlint:disable:next function_parameter_count
-  @objc(applyValue:direction:reduceMotion:fontSize:fontWeight:fontFamily:textColor:fractionColor:)
+  @objc(applyValue:direction:reduceMotion:fontSize:fontWeight:fontFamily:textColor:fractionColor:textAlign:)
   public func apply(
     value: Double,
     direction: String,
@@ -109,7 +109,8 @@ public final class NumericTextSwiftUIHost: UIView {
     fontWeight: String,
     fontFamily: String?,
     textColor: UIColor?,
-    fractionColor: UIColor?
+    fractionColor: UIColor?,
+    textAlign: String
   ) {
     let nextText = Self.text(value, formatter: formatter)
     let changed = model.text != nextText
@@ -120,6 +121,7 @@ public final class NumericTextSwiftUIHost: UIView {
     model.color = textColor.map(Color.init(uiColor:)) ?? .black
     model.fractionColor = fractionColor.map(Color.init(uiColor:))
     model.decimalSeparator = Self.decimalSeparator(of: formatter)
+    model.textAlign = textAlign.isEmpty ? "center" : textAlign
 
     model.countsDown = Self.countsDown(
       direction: direction,
@@ -334,6 +336,9 @@ private final class NumericTextModel: ObservableObject {
   @Published var fractionColor: Color?
   /// The separator the current format draws, so the fraction span can be found in `text`.
   @Published var decimalSeparator: String = "."
+  /// `left` / `center` / `right`. How the number sits in its frame; `center` is the default and
+  /// matches the original behaviour.
+  @Published var textAlign: String = "center"
 }
 
 private struct NumericTextRoot: View {
@@ -379,37 +384,47 @@ private struct NumericTextRoot: View {
     numericText
       .font(font)
       .monospacedDigit()
-      .foregroundStyle(model.color)
       .numericTextTransition(countsDown: model.countsDown)
       .debugSliceProbe()
       .animation(model.animates ? transitionAnimation : nil, value: model.text)
-      .frame(maxWidth: .infinity, maxHeight: .infinity)
+      .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: frameAlignment)
       .mask(edgeFadeMask)
   }
 
-  /// The number as a single `Text`, in one colour or two.
+  /// How the number sits in its frame. `center` (the default) keeps its middle fixed as it grows and
+  /// shrinks; `left`/`right` keep an edge fixed instead. Standard SwiftUI alignment — nothing else in
+  /// the tree changes.
+  private var frameAlignment: Alignment {
+    switch model.textAlign {
+    case "left": return .leading
+    case "right": return .trailing
+    default: return .center
+    }
+  }
+
+  /// The number as one `Text`, in one colour or two.
   ///
-  /// Concatenation matters here. `.numericText()` is closed — SwiftUI rasterises the
-  /// text once per value and animates that raster, with nothing per glyph to reach
-  /// into. But `Text + Text` is still *one* `Text`, so the raster it makes simply has
-  /// two coloured runs in it and the transition is unaffected. Splitting the number
-  /// into two sibling views would not survive: each would rasterise and transition on
-  /// its own, and they would drift apart on any change that moves the decimal point.
+  /// The whole colour lives inside a single `AttributedString`, and nothing above applies a
+  /// `foregroundStyle`. That is the point of this shape: `.numericText()` rolls the glyphs of one
+  /// `Text`, and keeping the text a single run — with the colour carried as an attribute rather than
+  /// as an outer style over concatenated pieces — is what lets the coloured fraction roll with the
+  /// rest instead of cross-fading on its own.
   private var numericText: Text {
     let text = model.text
     guard let fractionColor = model.fractionColor,
           let start = Self.fractionStart(in: text, decimalSeparator: model.decimalSeparator)
     else {
-      return Text(text)
+      var whole = AttributedString(text)
+      whole.foregroundColor = model.color
+      return Text(whole)
     }
 
-    let head = Text(String(text[text.startIndex..<start]))
-    let tail = String(text[start...])
-
-    if #available(iOS 17.0, tvOS 17.0, *) {
-      return head + Text(tail).foregroundStyle(fractionColor)
-    }
-    return head + Text(tail).foregroundColor(fractionColor)
+    var head = AttributedString(String(text[text.startIndex..<start]))
+    head.foregroundColor = model.color
+    var tail = AttributedString(String(text[start...]))
+    tail.foregroundColor = fractionColor
+    head.append(tail)
+    return Text(head)
   }
 
   /// Where the fraction span begins: the decimal separator, or — when the format carries no

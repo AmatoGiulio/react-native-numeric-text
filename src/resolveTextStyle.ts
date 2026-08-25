@@ -11,6 +11,8 @@ export type ResolvedTextStyle = {
   fontWeight?: string;
   fontFamily?: string;
   textColor?: ColorValue;
+  /** `'left' | 'center' | 'right'`, or undefined for the renderer's default (`'center'`). */
+  textAlign?: string;
 };
 
 /**
@@ -38,7 +40,7 @@ export function resolveTextStyle(
   const flat = StyleSheet.flatten(style) as TextStyle | undefined;
   if (!flat) return {};
 
-  const { fontSize, fontWeight, fontFamily, color } = flat;
+  const { fontSize, fontWeight, fontFamily, color, textAlign } = flat;
 
   return {
     fontSize: typeof fontSize === 'number' ? fontSize : undefined,
@@ -50,5 +52,11 @@ export function resolveTextStyle(
           : undefined,
     fontFamily: typeof fontFamily === 'string' ? fontFamily : undefined,
     textColor: color ?? undefined,
+    // Only the three the renderer positions by. `auto`/`justify` fall through to its own default,
+    // which is `center` — the number grows and shrinks about its middle unless told otherwise.
+    textAlign:
+      textAlign === 'left' || textAlign === 'right' || textAlign === 'center'
+        ? textAlign
+        : undefined,
   };
 }

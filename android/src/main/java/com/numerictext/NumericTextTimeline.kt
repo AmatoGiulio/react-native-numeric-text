@@ -34,6 +34,10 @@ internal class NumericRollEngine {
   companion object {
     private var nextEntryId = 0
 
+    const val ALIGN_CENTER = 0
+    const val ALIGN_LEFT = 1
+    const val ALIGN_RIGHT = 2
+
     const val BUILD_ID = "V0.1-RC3-RELEASE-SURFACE-2026-08-11"
 
     private const val STACK_OFFSET = 0.3950f
@@ -156,6 +160,18 @@ internal class NumericRollEngine {
   private var lastDirection = 1
   private var targetRasterId = 0
   private var maxBlurLengthPx = 1f
+
+  /**
+   * Which edge a column's horizontal position is measured from. `CENTER` is the default and the only
+   * mode the parity work uses — [xRel] under it is byte-identical to before this existed. `LEFT` and
+   * `RIGHT` shift the whole reflow onto that edge instead, so an aligned number keeps that edge fixed
+   * through a transition. Nothing else in the engine reads it; `pinnedX` inherits it through [xRel].
+   */
+  private var alignMode = ALIGN_CENTER
+
+  fun setAlignMode(mode: Int) {
+    alignMode = mode
+  }
 
   var targetText: String = ""
     private set
@@ -1157,6 +1173,9 @@ internal class NumericRollEngine {
     return true
   }
 
-  private fun xRel(slot: KeyedSlot): Float =
-    slot.centerFromLeft - slot.totalWidth / 2f
+  private fun xRel(slot: KeyedSlot): Float = when (alignMode) {
+    ALIGN_LEFT -> slot.centerFromLeft
+    ALIGN_RIGHT -> slot.centerFromLeft - slot.totalWidth
+    else -> slot.centerFromLeft - slot.totalWidth / 2f
+  }
 }

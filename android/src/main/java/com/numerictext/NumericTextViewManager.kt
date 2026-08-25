@@ -140,6 +140,11 @@ class NumericTextViewManager : SimpleViewManager<NumericTextView>(),
     pending(view)?.textColor = color ?: android.graphics.Color.BLACK
   }
 
+  @ReactProp(name = "textAlign")
+  override fun setTextAlign(view: NumericTextView?, value: String?) {
+    pending(view)?.textAlign = value ?: "center"
+  }
+
   @ReactProp(name = "fractionColor")
   override fun setFractionColor(view: NumericTextView?, color: Int?) {
     // React calls a setter only for props that changed this transaction, and delivers a removed
@@ -168,6 +173,7 @@ class NumericTextViewManager : SimpleViewManager<NumericTextView>(),
     props.fontWeight?.let(view::setFontWeight)
     props.fontFamily?.let(view::setFontFamily)
     props.textColor?.let(view::setTextColor)
+    props.textAlign?.let(view::setTextAlign)
     if (props.fractionColorReceived) view.setFractionColor(props.fractionColor)
 
     if (formatChanged) {
@@ -214,6 +220,7 @@ class NumericTextViewManager : SimpleViewManager<NumericTextView>(),
     var fontWeight: String? = null,
     var fontFamily: String? = null,
     var textColor: Int? = null,
+    var textAlign: String? = null,
     var fractionColor: Int? = null,
     var fractionColorReceived: Boolean = false,
   ) {

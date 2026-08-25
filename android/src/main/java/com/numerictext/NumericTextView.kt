@@ -60,6 +60,7 @@ class NumericTextView(context: Context) : View(context), Choreographer.FrameCall
   var numericFontWeight: String = "normal"; private set
   var numericFontFamily: String = NumericTextFonts.BUNDLED; private set
   var numericTextColor: Int = Color.BLACK; private set
+  var numericTextAlign: String = "center"; private set
 
   // Persistent motion
   private val engine = NumericRollEngine()
@@ -238,9 +239,22 @@ class NumericTextView(context: Context) : View(context), Choreographer.FrameCall
     NumericTextFrameRecorder.capture(this)
   }
 
+  /**
+   * The x every glyph is drawn about — a sample's own offset is added to it. The engine already
+   * measures those offsets from the aligned edge (see [NumericRollEngine] `alignMode`), so the anchor
+   * is simply that edge: the view's middle for `center`, or the padding+headroom edge for
+   * `left`/`right`. Because every line — the one arriving and the one leaving — is measured from the
+   * same edge, they all keep that edge fixed for the whole transition; nothing drifts or jumps.
+   */
+  private fun anchorX(): Float = when (numericTextAlign) {
+    "left" -> paddingLeft + hHeadroom()
+    "right" -> width - paddingRight - hHeadroom()
+    else -> width / 2f
+  }
+
   private fun drawRolling(canvas: Canvas) {
     val baseline = baselineY(height / 2f)
-    val centreX = width / 2f
+    val centreX = anchorX()
     val hardwareNodes = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && canvas.isHardwareAccelerated
 
     val ordered = engine.samples().sortedBy { it.role.ordinal }
@@ -801,6 +815,28 @@ class NumericTextView(context: Context) : View(context), Choreographer.FrameCall
     rasterColorFilter = PorterDuffColorFilter(value, PorterDuff.Mode.SRC_IN)
     clearRenderCaches()
     invalidate()
+  }
+
+  fun setTextAlign(value: String) {
+    if (value == numericTextAlign) return
+    numericTextAlign = value
+    engine.setAlignMode(alignModeOf(value))
+    // Re-place the settled columns in the new alignment space. Mid-flight changes (rare) take effect
+    // on the next commit rather than snapping the motion in progress.
+    if (hasSettledOnce && !engine.isRunning) {
+      val prepared = preparedTextOf(settledText)
+      engine.reset(
+        prepared.layout, settledText, textHeightPx, prepared.raster.id, appleBlurLengthPx(),
+      )
+    }
+    requestLayout()
+    invalidate()
+  }
+
+  private fun alignModeOf(value: String): Int = when (value) {
+    "left" -> NumericRollEngine.ALIGN_LEFT
+    "right" -> NumericRollEngine.ALIGN_RIGHT
+    else -> NumericRollEngine.ALIGN_CENTER
   }
 
   companion object {

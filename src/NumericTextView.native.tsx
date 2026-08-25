@@ -84,6 +84,7 @@ function NumericTextPlainView(props: NumericTextProps & { value: number }) {
       fontFamily={text.fontFamily}
       textColor={text.textColor}
       fractionColor={props.fractionColor}
+      textAlign={text.textAlign}
       testID={testID}
       style={[style, box]}
     />
