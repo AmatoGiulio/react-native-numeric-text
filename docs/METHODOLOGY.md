@@ -8,6 +8,12 @@ This document exists so the process can be reproduced (for future parity work ag
 closed-source animation) and so the final parameter set is traceable to a measurement rather
 than to taste.
 
+> **Where the referenced files live.** This is a research record. The material it cites — the
+> ground-truth recordings under `artifacts/`, the measurement and fitting scripts under
+> `.agent/tools/`, the iteration log, and the reference iOS screen used for capture — is kept on the
+> [`research/engine-derivation`](https://github.com/AmatoGiulio/react-native-numeric-text/tree/research/engine-derivation)
+> branch, not on `main`. Paths below are relative to that branch.
+
 ---
 
 ## 1. Problem
@@ -306,6 +312,7 @@ Kept on purpose — this is the part that saves time next time.
 
 ---
 
-*Companion files: `.agent/PARITY_ROADMAP.md` (iteration-by-iteration log with the measured
-numbers), `.agent/NUMERIC_TEXT_ALGORITHM.md` (algorithm spec), `example/src/sequence.ts`
-(the deterministic test sequence).*
+*Companion files: `example/src/sequence.ts` (the deterministic test sequence, on `main`);
+`.agent/PARITY_ROADMAP.md` (iteration-by-iteration log), `.agent/NUMERIC_TEXT_ALGORITHM.md`
+(algorithm spec), and `.agent/TRANSITION_MODEL.md` (the per-glyph measurement) on the
+`research/engine-derivation` branch.*

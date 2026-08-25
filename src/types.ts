@@ -130,8 +130,11 @@ export type NumericTextProps = NumericTextAccessibilityProps & {
   useGrouping?: boolean;
 
   /**
-   * `fontSize`, `fontWeight`, `fontFamily` and `color` are handed to the native renderer; the rest
-   * applies to the view as usual. Native font size defaults to 48 and color to black.
+   * `fontSize`, `fontWeight`, `fontFamily`, `color` and `textAlign` are handed to the native
+   * renderer; the rest applies to the view as usual. Native font size defaults to 48, color to
+   * black, and alignment to `center`. Only `'left' | 'center' | 'right'` are honoured for
+   * `textAlign`; it pins that edge so the number keeps it fixed through the transition instead of
+   * growing about its centre.
    */
   style?: StyleProp<TextStyle>;
 

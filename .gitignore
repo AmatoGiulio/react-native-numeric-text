@@ -89,17 +89,12 @@ nitrogen/
 docs/tune/
 example/screen-*.mp4
 
-# Ground-truth recordings. The iOS reference sets are kept on disk but never committed —
-# they are hundreds of MB of raw alpha planes. Only their extracted reference.json is tracked.
-artifacts/**/*.bin
-artifacts/**/*.png
-artifacts/**/*.mp4
-
-# A fit round leaves three Android captures behind and each is regenerable by re-running it, so
-# only the iOS reference sets are worth carrying. Without this every round shows up as untracked
-# noise in `git status` and the real changes get lost in it.
-artifacts/*
-!artifacts/gt_ios_*
+# Research material — the full engine derivation (ground-truth recordings, the agent workspace,
+# and local captures) lives on the research/engine-derivation branch, not on main. These stay on
+# disk locally but are not tracked here.
+artifacts/
+.agent/
+captures/
 
 # Local package/archive artifacts
 *.tgz
