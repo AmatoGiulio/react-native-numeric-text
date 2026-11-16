@@ -506,7 +506,8 @@ internal class NumericRollEngine {
   }
 
   fun step(dtSeconds: Float): Boolean {
-    val dt = dtSeconds.coerceAtMost(0.04f)
+    // A frame time that steps backwards would run the Euler springs below in reverse.
+    val dt = dtSeconds.coerceIn(0f, 0.04f)
     val nowNanos = System.nanoTime()
     var active = false
 
@@ -994,6 +995,11 @@ internal class NumericRollEngine {
           entry.bVelocity = 0f
         }
         moving = true
+        // Same for blur: NaN passes coerceIn and throws in the view's blur lookup.
+        if (!entry.b.isFinite() || !entry.bVelocity.isFinite()) {
+          entry.b = entry.blurTarget
+          entry.bVelocity = 0f
+        }
       } else {
         entry.b = entry.blurTarget
         entry.bVelocity = 0f
@@ -1012,6 +1018,11 @@ internal class NumericRollEngine {
             (2f * STACK_ALPHA_DAMPING * localAlphaClock * entry.alphaVelocity)) * dt
         entry.alpha += entry.alphaVelocity * dt
         moving = true
+        // A non-finite alpha reaches the view as NaN, and roundToInt(NaN) throws in onDraw.
+        if (!entry.alpha.isFinite() || !entry.alphaVelocity.isFinite()) {
+          entry.alpha = entry.alphaTarget
+          entry.alphaVelocity = 0f
+        }
       } else {
         entry.alpha = entry.alphaTarget
         entry.alphaVelocity = 0f
