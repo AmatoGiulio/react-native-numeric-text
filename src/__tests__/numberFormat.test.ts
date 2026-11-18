@@ -1,6 +1,7 @@
 import { describe, expect, it } from '@jest/globals';
 import {
   DIGITS_UNSET,
+  clearFormatCachesForTests,
   formatNumber,
   intlOptions,
   nativeFormatProps,
@@ -304,5 +305,62 @@ describe('splitFractionSpan', () => {
         formatNumber(value, locale, format)
       );
     }
+  });
+});
+
+describe('formatNumber caching', () => {
+  const formats = [
+    {},
+    { useGrouping: false },
+    resolveFormat({ currency: 'USD' }),
+    resolveFormat({ currency: 'EUR' }),
+    { style: 'percent' as const, maximumFractionDigits: 1 },
+    { minimumSignificantDigits: 3, maximumSignificantDigits: 5 },
+  ];
+  const values = [0, -0, 1, -1, 0.5, 1234.5678, -98765.4321, 1e21, NaN];
+  const locales = ['en-US', 'de-DE', 'ar-EG', 'hi-IN'];
+
+  it('returns exactly what toLocaleString returns, cold and warm', () => {
+    clearFormatCachesForTests();
+    for (let pass = 0; pass < 2; pass++) {
+      for (const locale of locales) {
+        for (const format of formats) {
+          for (const value of values) {
+            expect(formatNumber(value, locale, format)).toBe(
+              value.toLocaleString(locale, intlOptions(format))
+            );
+          }
+        }
+      }
+    }
+  });
+
+  it('keeps -0 apart from 0', () => {
+    clearFormatCachesForTests();
+    expect(formatNumber(0, 'en-US', {})).toBe('0');
+    expect(formatNumber(-0, 'en-US', {})).toBe('-0');
+    expect(formatNumber(0, 'en-US', {})).toBe('0');
+  });
+
+  it('still falls back when the locale is invalid', () => {
+    clearFormatCachesForTests();
+    // The same chain as before the cache: the bare toLocaleString(locale) also rejects this tag, so
+    // the default locale formats it.
+    const expected = (1234.5).toLocaleString('en-US');
+    expect(formatNumber(1234.5, 'not a locale!', {})).toBe(expected);
+    expect(formatNumber(1234.5, 'not a locale!', {})).toBe(expected);
+  });
+
+  it('stays correct after the caches evict', () => {
+    clearFormatCachesForTests();
+    for (let i = 0; i < 400; i++) {
+      const format = { minimumFractionDigits: i % 40 };
+      expect(formatNumber(i / 7, 'en-US', format)).toBe(
+        (i / 7).toLocaleString('en-US', intlOptions(format))
+      );
+    }
+    expect(formatNumber(1 / 7, 'en-US', { minimumFractionDigits: 1 })).toBe(
+      (1 / 7).toLocaleString('en-US', intlOptions({ minimumFractionDigits: 1 }))
+    );
   });
 });

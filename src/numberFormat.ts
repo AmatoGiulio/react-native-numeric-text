@@ -237,21 +237,98 @@ export function nativeFormatProps(
   };
 }
 
+/**
+ * Bounded caches for the formatting a re-render repeats: a counter toggling between two values
+ * formats the same handful of strings with the same options over and over, and building an ICU
+ * formatter is the expensive part of that. Both maps evict in least-recently-used order.
+ */
+const MAX_CACHED_FORMATTERS = 32;
+const MAX_CACHED_OUTPUTS = 128;
+
+/** `null` records that this locale and these options make `Intl.NumberFormat` throw. */
+const formatterCache = new Map<string, Intl.NumberFormat | null>();
+const outputCache = new Map<string, string>();
+
+function touch<V>(cache: Map<string, V>, key: string, value: V, limit: number) {
+  cache.delete(key);
+  cache.set(key, value);
+  if (cache.size > limit) {
+    const oldest = cache.keys().next().value;
+    if (oldest !== undefined) cache.delete(oldest);
+  }
+}
+
+function formatterKey(locale: string, options: Intl.NumberFormatOptions) {
+  // intlOptions builds its object in a fixed key order, so equal options stringify equally.
+  return `${locale}\u0000${JSON.stringify(options)}`;
+}
+
+/**
+ * The cached `Intl.NumberFormat` for these options, or `null` when constructing one throws (an
+ * invalid locale, or a runtime without `Intl`). `toLocaleString(locale, options)` is specified as
+ * exactly this formatter's `format`, so callers get the same string either way.
+ */
+function cachedFormatter(
+  key: string,
+  locale: string,
+  options: Intl.NumberFormatOptions
+): Intl.NumberFormat | null {
+  let formatter = formatterCache.get(key);
+  if (formatter === undefined) {
+    try {
+      formatter = new Intl.NumberFormat(locale, options);
+    } catch {
+      formatter = null;
+    }
+  }
+  touch(formatterCache, key, formatter, MAX_CACHED_FORMATTERS);
+  return formatter;
+}
+
+/** A map key for a number that keeps `-0` apart from `0`, which `Intl` formats differently. */
+function valueKey(value: number): string {
+  return Object.is(value, -0) ? '-0' : String(value);
+}
+
 export function formatNumber(
   value: number,
   locale: string,
   format: NumericTextFormat
 ): string {
-  const normalized = normalizeFormat(format);
-  try {
-    return value.toLocaleString(locale, intlOptions(normalized));
-  } catch {
+  const options = intlOptions(format);
+  const key = formatterKey(locale, options);
+  const outputKey = `${key}\u0001${valueKey(value)}`;
+
+  const cached = outputCache.get(outputKey);
+  if (cached !== undefined) {
+    touch(outputCache, outputKey, cached, MAX_CACHED_OUTPUTS);
+    return cached;
+  }
+
+  const formatter = cachedFormatter(key, locale, options);
+  let text: string;
+  if (formatter) {
+    text = formatter.format(value);
+  } else {
     try {
-      return value.toLocaleString(locale);
+      text = value.toLocaleString(locale, options);
     } catch {
-      return value.toLocaleString(DEFAULT_LOCALE);
+      try {
+        text = value.toLocaleString(locale);
+      } catch {
+        text = value.toLocaleString(DEFAULT_LOCALE);
+      }
     }
   }
+
+  touch(outputCache, outputKey, text, MAX_CACHED_OUTPUTS);
+  return text;
+}
+
+/** Test-only: empties the formatting caches. */
+export function clearFormatCachesForTests(): void {
+  formatterCache.clear();
+  outputCache.clear();
 }
 
 /**
@@ -269,12 +346,16 @@ export function splitFractionSpan(
   format: NumericTextFormat
 ): { head: string; fraction: string } {
   const normalized = normalizeFormat(format);
+  const options = intlOptions(normalized);
   let parts: Intl.NumberFormatPart[];
   try {
-    parts = new Intl.NumberFormat(
+    const formatter = cachedFormatter(
+      formatterKey(locale, options),
       locale,
-      intlOptions(normalized)
-    ).formatToParts(value);
+      options
+    );
+    if (!formatter) throw new Error('no formatter');
+    parts = formatter.formatToParts(value);
   } catch {
     return { head: formatNumber(value, locale, normalized), fraction: '' };
   }
