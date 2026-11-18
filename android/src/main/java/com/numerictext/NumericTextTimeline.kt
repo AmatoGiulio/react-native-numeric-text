@@ -153,6 +153,12 @@ internal class NumericRollEngine {
     fun goalStop(): Int = pending.lastOrNull()?.stop ?: target
   }
 
+  /**
+   * The clock pending stops are scheduled and committed against. Production reads the monotonic
+   * system clock; tests replace it to drive the wave delays deterministically.
+   */
+  internal var clockNanos: () -> Long = { System.nanoTime() }
+
   private val columns = LinkedHashMap<String, Column>()
   private var targetLayout: List<KeyedSlot> = emptyList()
   private var lineHeightPx = 1f
@@ -250,7 +256,7 @@ internal class NumericRollEngine {
     targetRasterId = rasterId
     targetLayout = layout
 
-    val eventNanos = System.nanoTime()
+    val eventNanos = clockNanos()
     val incomingByKey = layout.associateBy { it.key }
 
     val structuralEnterKeys = HashSet<String>()
@@ -524,7 +530,7 @@ internal class NumericRollEngine {
   fun step(dtSeconds: Float): Boolean {
     // A frame time that steps backwards would run the Euler springs below in reverse.
     val dt = dtSeconds.coerceIn(0f, 0.04f)
-    val nowNanos = System.nanoTime()
+    val nowNanos = clockNanos()
     var active = false
 
     val response = (RESPONSE_SECONDS * durationScale).coerceIn(
@@ -726,30 +732,31 @@ internal class NumericRollEngine {
     -direction.toFloat() * (1f + (STACK_FLIP_BORN - 1f) * flipRaw)
 
   private fun emitStack(column: Column, out: MutableList<GlyphSample>) {
-    val count = column.entries.size
+    val entries = column.entries
+    val count = entries.size
     if (count == 0) return
 
-    val raw = FloatArray(count)
+    // One pass for the stack's total presence and how many entries are visible on their own; the
+    // emit pass below recomputes each presence instead of keeping a per-frame array of them.
     var total = 0f
+    var visibleCount = 0
 
     for (i in 0 until count) {
-      val presence = max(0f, column.entries[i].alpha)
-      raw[i] = presence
-      total += presence
+      val entryAlpha = entries[i].alpha
+      total += max(0f, entryAlpha)
+      if (entryAlpha > RENDER_ALPHA_EPSILON) visibleCount++
     }
 
     val norm = if (total > STACK_ALPHA_CEILING) STACK_ALPHA_CEILING / total else 1f
 
     for (i in 0 until count) {
-      val alpha = raw[i] * norm
+      val entry = entries[i]
+      val alpha = max(0f, entry.alpha) * norm
       if (alpha <= RENDER_ALPHA_EPSILON) continue
 
-      val entry = column.entries[i]
       val distance = min(1f, abs(entry.q))
-      val hasOtherVisibleEntry =
-        column.entries.indices.any { j ->
-          j != i && column.entries[j].alpha > RENDER_ALPHA_EPSILON
-        }
+      val selfVisible = if (entry.alpha > RENDER_ALPHA_EPSILON) 1 else 0
+      val hasOtherVisibleEntry = visibleCount - selfVisible > 0
       val settled =
         i == count - 1 &&
           !hasOtherVisibleEntry &&
@@ -970,9 +977,11 @@ internal class NumericRollEngine {
     val blurClockBase =
       (2.0 * Math.PI / max(0.05f, STACK_BLUR_RESPONSE_SECONDS * base)).toFloat()
 
-    for (entry in column.entries) {
+    val entries = column.entries
+    for (index in 0 until entries.size) {
+      val entry = entries[index]
       val moveScale = appleTimeScale / geometryRush
-      val moveResult = integrateSpringExact(
+      integrateSpringExact(
         value = entry.p,
         velocity = entry.velocity,
         target = entry.posTarget,
@@ -982,8 +991,8 @@ internal class NumericRollEngine {
         timeScale = moveScale,
         dt = dt,
       )
-      entry.p = moveResult.value
-      entry.velocity = moveResult.velocity
+      entry.p = springValue
+      entry.velocity = springVelocity
 
       val moveActive =
         abs(entry.posTarget - entry.p) > POSITION_EPSILON ||
@@ -1045,7 +1054,7 @@ internal class NumericRollEngine {
       }
 
       val effectScale = appleTimeScale / geometryRush
-      val scaleResult = integrateSpringExact(
+      integrateSpringExact(
         value = entry.q,
         velocity = entry.qVelocity,
         target = entry.target,
@@ -1055,8 +1064,8 @@ internal class NumericRollEngine {
         timeScale = effectScale,
         dt = dt,
       )
-      entry.q = scaleResult.value
-      entry.qVelocity = scaleResult.velocity
+      entry.q = springValue
+      entry.qVelocity = springVelocity
 
       val scaleActive =
         abs(entry.target - entry.q) > POSITION_EPSILON ||
@@ -1069,15 +1078,19 @@ internal class NumericRollEngine {
       }
     }
 
-    if (column.entries.size > 1) {
-      val keep = column.entries.takeLast(2)
-      column.entries.retainAll { it in keep || it.alpha > ENTRY_CULL_ALPHA }
+    // Cull faded ghosts, always keeping the last two entries. Walking down from the third-to-last
+    // removes in place and keeps the survivors in order, with no per-frame list copies.
+    for (index in entries.size - 3 downTo 0) {
+      if (entries[index].alpha <= ENTRY_CULL_ALPHA) entries.removeAt(index)
     }
 
     return moving
   }
 
-  private data class SpringResult(val value: Float, val velocity: Float)
+  // integrateSpringExact writes its result here instead of allocating a result object per spring per
+  // frame. Read both immediately after the call: the next call overwrites them.
+  private var springValue = 0f
+  private var springVelocity = 0f
 
   private fun integrateSpringExact(
     value: Float,
@@ -1088,10 +1101,14 @@ internal class NumericRollEngine {
     damping: Float,
     timeScale: Float,
     dt: Float,
-  ): SpringResult {
+  ) {
     val scale = max(1e-4f, timeScale).toDouble()
     val h = dt.toDouble()
-    if (h <= 0.0) return SpringResult(value, velocity)
+    if (h <= 0.0) {
+      springValue = value
+      springVelocity = velocity
+      return
+    }
 
     val m = mass.toDouble()
     val k = stiffness.toDouble() / (scale * scale)
@@ -1140,7 +1157,8 @@ internal class NumericRollEngine {
       }
     }
 
-    return SpringResult((target + y).toFloat(), v.toFloat())
+    springValue = (target + y).toFloat()
+    springVelocity = v.toFloat()
   }
 
   private fun stepCrowd(column: Column, dt: Float): Boolean {
@@ -1169,7 +1187,7 @@ internal class NumericRollEngine {
       return false
     }
 
-    val result = integrateSpringExact(
+    integrateSpringExact(
       value = column.x,
       velocity = column.xVelocity,
       target = column.targetX,
@@ -1179,8 +1197,8 @@ internal class NumericRollEngine {
       timeScale = appleTimeScale,
       dt = dt,
     )
-    column.x = result.value
-    column.xVelocity = result.velocity
+    column.x = springValue
+    column.xVelocity = springVelocity
     return true
   }
 

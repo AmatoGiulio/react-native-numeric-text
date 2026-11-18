@@ -257,22 +257,29 @@ class NumericTextView(context: Context) : View(context), Choreographer.FrameCall
     val centreX = anchorX()
     val hardwareNodes = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && canvas.isHardwareAccelerated
 
-    val ordered = engine.samples().sortedBy { it.role.ordinal }
+    val samples = engine.samples()
 
     if (hardwareNodes) activeGlyphNodeKeys.clear()
 
-    for (sample in ordered) {
-      val alpha = (sample.alpha * 255f).roundToInt().coerceIn(0, 255)
-      if (alpha <= 0) continue
+    // Draw by role (ANCHOR, then ENTER, then EXIT), keeping engine order within a role: the order a
+    // stable sort by role gave, without sorting a fresh list every frame.
+    for (role in GLYPH_ROLES) {
+      for (index in 0 until samples.size) {
+        val sample = samples[index]
+        if (sample.role != role) continue
 
-      val prepared = preparedById[sample.rasterId] ?: continue
-      val slice = prepared.raster.slice(sample.key) ?: continue
-      val x = centreX + sample.x
+        val alpha = (sample.alpha * 255f).roundToInt().coerceIn(0, 255)
+        if (alpha <= 0) continue
 
-      if (hardwareNodes) {
-        drawRasterNode(canvas, sample, prepared.raster, slice, x, baseline, alpha)
-      } else {
-        drawRasterSoftware(canvas, sample, prepared.raster, slice, x, baseline, alpha)
+        val prepared = preparedById[sample.rasterId] ?: continue
+        val slice = prepared.raster.slice(sample.key) ?: continue
+        val x = centreX + sample.x
+
+        if (hardwareNodes) {
+          drawRasterNode(canvas, sample, prepared.raster, slice, x, baseline, alpha)
+        } else {
+          drawRasterSoftware(canvas, sample, prepared.raster, slice, x, baseline, alpha)
+        }
       }
     }
 
@@ -429,7 +436,8 @@ class NumericTextView(context: Context) : View(context), Choreographer.FrameCall
     val dt = (frameTimeNanos - lastFrameNanos) / 1_000_000_000f
     lastFrameNanos = frameTimeNanos
     val active = engine.step(dt)
-    prunePreparedTextCache()
+    // No raster pruning here: every new value prunes when it is set, and finishMotion() prunes once
+    // the roll settles, so the cache stays bounded without walking it on every frame.
     invalidate()
 
     if (active) {
@@ -841,6 +849,8 @@ class NumericTextView(context: Context) : View(context), Choreographer.FrameCall
 
   companion object {
     private const val RASTER_CACHE_TARGET = 12
+
+    private val GLYPH_ROLES = NumericRollEngine.GlyphRole.values()
 
     /** Relative interpretation: packed byte 32 / 128 = 0.25 of the text line height. */
     private const val APPLE_RELATIVE_BLUR = 0.25f
