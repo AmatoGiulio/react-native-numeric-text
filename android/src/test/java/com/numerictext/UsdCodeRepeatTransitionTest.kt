@@ -1,10 +1,30 @@
 package com.numerictext
 
-import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class UsdCodeRepeatTransitionTest {
+
+  // A fake clock, so the format wave's delays elapse exactly as each test says.
+  private var now = 1_000_000_000L
+
+  private fun engine() = NumericRollEngine().also { it.clockNanos = { now } }
+
+  private fun NumericRollEngine.run(ms: Long, frames: Int) {
+    repeat(frames) {
+      now += ms * 1_000_000L
+      step(ms / 1000f)
+    }
+  }
+
+  /** The letter's strongest glyph is opaque and at rest, i.e. it reads as settled on screen. */
+  private fun letterLooksSettled(samples: List<NumericRollEngine.GlyphSample>, key: String): Boolean {
+    val glyph = samples.filter { it.key == key }.maxByOrNull { it.alpha } ?: return false
+    return glyph.alpha >= 0.99f && glyph.blurLengthPx < 1f && kotlin.math.abs(glyph.offsetY) < 1f
+  }
+
+  private fun letterIsRolling(samples: List<NumericRollEngine.GlyphSample>, key: String): Boolean =
+    samples.any { it.key == key && !it.stable && (it.blurLengthPx > 0f || it.offsetY != 0f) }
 
   private fun slot(
     key: String,
@@ -46,7 +66,7 @@ class UsdCodeRepeatTransitionTest {
       )
     val positive = negative.filterNot { it.key == "S" }
 
-    val engine = NumericRollEngine()
+    val engine = engine()
     engine.reset(
       layout = negative,
       text = "USD 1-",
@@ -65,20 +85,15 @@ class UsdCodeRepeatTransitionTest {
       blurLengthPx = 50f,
     )
 
-    repeat(25) {
-      Thread.sleep(20L)
-      engine.step(0.020f)
-    }
+    // 540 ms in: the letters read as settled, and the sign's outgoing ghost is still on screen.
+    engine.run(20L, 27)
 
     val beforeReturn = engine.samples()
     for (key in listOf("P2", "P1", "P0")) {
-      val letter = beforeReturn.single { it.key == key }
-      assertTrue("$key should be settled before the second transition", letter.stable)
+      assertTrue("$key should look settled before the second transition", letterLooksSettled(beforeReturn, key))
     }
-    assertEquals(
-      NumericRollEngine.GlyphRole.EXIT,
-      beforeReturn.first { it.key == "S" }.role,
-    )
+    val ghost = beforeReturn.single { it.key == "S" }
+    assertTrue("the old sign should still be fading out", ghost.alpha in 0.001f..0.1f)
 
     // This is a second USD sign transition. The old '-' is still a fading EXIT. It must be
     // available for reversal without being counted as active topology; otherwise formatGeometrySplit
@@ -93,19 +108,13 @@ class UsdCodeRepeatTransitionTest {
       blurLengthPx = 50f,
     )
 
-    repeat(11) {
-      Thread.sleep(20L)
-      engine.step(0.020f)
-    }
+    engine.run(20L, 12)
 
     val duringReturn = engine.samples()
     for (key in listOf("P2", "P1", "P0")) {
-      val letterSamples = duringReturn.filter { it.key == key }
       assertTrue(
         "$key must re-enter the unified format roll on every sign transition",
-        letterSamples.any {
-          !it.stable && (it.blurLengthPx > 0f || it.offsetY != 0f)
-        },
+        letterIsRolling(duringReturn, key),
       )
     }
   }
@@ -128,7 +137,7 @@ class UsdCodeRepeatTransitionTest {
         slot("I0", "9", TokenKind.DIGIT, 110f),
       )
 
-    val engine = NumericRollEngine()
+    val engine = engine()
     engine.reset(
       layout = positive,
       text = "USD 1",
@@ -152,15 +161,14 @@ class UsdCodeRepeatTransitionTest {
     // reversal rather than a canonical fresh start.
     var reachedWindow = false
     for (step in 0 until 80) {
-      Thread.sleep(20L)
-      engine.step(0.020f)
+      engine.run(20L, 1)
       val samples = engine.samples()
-      val usdSettled =
-        listOf("P2", "P1", "P0").all { key ->
-          val visible = samples.filter { it.key == key }
-          visible.size == 1 && visible.single().stable
-        }
-      if (engine.isRunning && usdSettled) {
+      // The negative value must have arrived: the sign and the new digit fully in, the letters still.
+      val arrived =
+        samples.any { it.key == "S" && it.ch == "-" && it.alpha >= 0.99f } &&
+          samples.filter { it.key == "I0" }.maxByOrNull { it.alpha }?.ch == "9"
+      val usdSettled = listOf("P2", "P1", "P0").all { letterLooksSettled(samples, it) }
+      if (engine.isRunning && arrived && usdSettled) {
         reachedWindow = true
         break
       }
@@ -177,19 +185,13 @@ class UsdCodeRepeatTransitionTest {
       blurLengthPx = 50f,
     )
 
-    repeat(9) {
-      Thread.sleep(20L)
-      engine.step(0.020f)
-    }
+    engine.run(20L, 12)
 
     val duringPositiveReturn = engine.samples()
     for (key in listOf("P2", "P1", "P0")) {
-      val letterSamples = duringPositiveReturn.filter { it.key == key }
       assertTrue(
         "$key must roll again instead of reusing the just-superseded current glyph",
-        letterSamples.any {
-          !it.stable && (it.blurLengthPx > 0f || it.offsetY != 0f)
-        },
+        letterIsRolling(duringPositiveReturn, key),
       )
     }
   }

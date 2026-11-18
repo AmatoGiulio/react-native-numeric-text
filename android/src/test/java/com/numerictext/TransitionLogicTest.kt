@@ -249,8 +249,17 @@ class NumericRollEngineTest {
     )
   }
 
+  // Engines built by clocked() read this fake clock, which advance() moves with every frame, so a
+  // format change's onset delay elapses exactly. Plain engines keep the system clock.
+  private var now = 1_000_000_000L
+
+  private fun clocked() = NumericRollEngine().also { it.clockNanos = { now } }
+
   private fun advance(engine: NumericRollEngine, frames: Int = 1) {
-    repeat(frames) { engine.step(0.01f) }
+    repeat(frames) {
+      now += 10_000_000L
+      engine.step(0.01f)
+    }
   }
 
   private fun slot(
@@ -346,10 +355,13 @@ class NumericRollEngineTest {
       newSlots.single { it.char == "€" }.key,
     )
 
-    val engine = NumericRollEngine()
+    // A changed affix is a format change: it waits FORMAT_ROLL_ONSET_SECONDS (70 ms), plus its place in
+    // the wave (half of WAVE_TOTAL_SECONDS with two changing columns, 75 ms). A few frames past that
+    // 145 ms, both glyphs are mid-roll in the same column.
+    val engine = clocked()
     reset(engine, "\$1")
     target(engine, "€1", direction = 1, rasterId = 2)
-    advance(engine)
+    advance(engine, frames = 18)
 
     val samples = engine.samples().filter { it.key == "P0" }
     assertTrue(samples.any { it.ch == "€" })
