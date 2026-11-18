@@ -23,14 +23,17 @@ class BackwardsFrameTimeTest {
   private fun snapshot(engine: NumericRollEngine): List<String> =
     engine.samples().map { "${it.key}:${it.ch}:${it.alpha}:${it.blurLengthPx}" }
 
+  // A fake clock moved 20 ms per frame, so the first digit's wave delay elapses on schedule.
+  private var now = 1_000_000_000L
+
   private fun step(engine: NumericRollEngine, dt: Float) {
-    Thread.sleep(20L)
+    now += 20_000_000L
     engine.step(dt)
   }
 
   @Test
   fun backwardsFrameTime_holdsTheRollInPlace() {
-    val engine = NumericRollEngine()
+    val engine = NumericRollEngine().also { it.clockNanos = { now } }
     engine.reset(
       layout = listOf(digit("I1", "1", 10f), digit("I0", "2", 30f)),
       text = "12",
@@ -49,8 +52,7 @@ class BackwardsFrameTimeTest {
     )
 
     // Run until the first digit is mid-roll: both "1" and "3" are on screen. Its change is due
-    // 75 ms after setTarget (half of WAVE_TOTAL_SECONDS for two changing digits), and step() reads
-    // that against System.nanoTime(), so five 20 ms sleeps are needed to be past it on any machine.
+    // 75 ms after setTarget (half of WAVE_TOTAL_SECONDS for two changing digits).
     repeat(5) { step(engine, 0.016f) }
     val midRoll = snapshot(engine)
     assertTrue("3 should be entering", engine.samples().any { it.key == "I1" && it.ch == "3" })

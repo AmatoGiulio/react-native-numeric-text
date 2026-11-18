@@ -6,6 +6,35 @@ import org.junit.Test
 
 class FormatGeometryPinTest {
 
+  // The engine schedules format waves against its clock. A fake one makes every delay exact: time
+  // only moves when a test says so, never because the machine running it was slow or fast.
+  private var now = 1_000_000_000L
+
+  private fun engine() = NumericRollEngine().also { it.clockNanos = { now } }
+
+  private fun elapse(ms: Long) {
+    now += ms * 1_000_000L
+  }
+
+  /** Advances the clock and the engine together, one frame of [ms] at a time. */
+  private fun NumericRollEngine.run(ms: Long, frames: Int) {
+    repeat(frames) {
+      elapse(ms)
+      step(ms / 1000f)
+    }
+  }
+
+  /**
+   * The screen shows exactly [layout], every glyph fully opaque and at rest, whether or not the
+   * engine has let go yet.
+   */
+  private fun visuallySettledOn(
+    samples: List<NumericRollEngine.GlyphSample>,
+    layout: List<KeyedSlot>,
+  ): Boolean =
+    samples.map { it.key to it.ch }.toSet() == layout.map { it.key to it.char }.toSet() &&
+      samples.all { it.alpha >= 0.99f && it.blurLengthPx < 1f && kotlin.math.abs(it.offsetY) < 1f }
+
   private fun slot(
     key: String,
     char: String,
@@ -48,7 +77,7 @@ class FormatGeometryPinTest {
         slot("X0", "€", TokenKind.OTHER, center = 90f),
       )
 
-    val engine = NumericRollEngine()
+    val engine = engine()
     engine.reset(
       layout = oldFormat,
       text = "$1",
@@ -66,7 +95,7 @@ class FormatGeometryPinTest {
       blurLengthPx = 50f,
     )
 
-    Thread.sleep(220L)
+    elapse(220L)
     engine.step(0.01f)
 
     val pinnedEuro = engine.samples().first { it.ch == "€" }
@@ -109,7 +138,7 @@ class FormatGeometryPinTest {
         slot("I0", "0", TokenKind.DIGIT, center = 80f),
       )
 
-    val engine = NumericRollEngine()
+    val engine = engine()
     engine.reset(
       layout = negative,
       text = "-U9",
@@ -130,35 +159,28 @@ class FormatGeometryPinTest {
       )
     }
 
-    fun finishUntilVisuallySettledButStillRunning(): Boolean {
-      Thread.sleep(240L)
+    // The engine stays running for a while after the glyphs look still, because faded ghosts are still
+    // converging. Each transition below starts inside that window, the one the USD recording hit.
+    fun finishUntilVisuallySettledButStillRunning(layout: List<KeyedSlot>): Boolean {
       repeat(120) {
-        engine.step(0.016f)
-        val samples = engine.samples()
-        if (
-          engine.isRunning &&
-            samples.isNotEmpty() &&
-            samples.all { it.stable && it.alpha >= 0.99f }
-        ) {
-          return true
-        }
+        engine.run(16L, 1)
+        if (engine.isRunning && visuallySettledOn(engine.samples(), layout)) return true
       }
       return false
     }
 
     target(positive, "U0", direction = 1, rasterId = 2)
-    assertTrue(finishUntilVisuallySettledButStillRunning())
+    assertTrue(finishUntilVisuallySettledButStillRunning(positive))
 
     target(negative, "-U9", direction = -1, rasterId = 3)
-    assertTrue(finishUntilVisuallySettledButStillRunning())
+    assertTrue(finishUntilVisuallySettledButStillRunning(negative))
 
     // This is the second A -> B transition from the USD recording. The previous frame is already
     // visually settled, so hidden historical entries must be collapsed before scheduling the new
     // per-glyph wave. U therefore receives a fresh old/new roll instead of remaining as a static
     // full-opacity anchor while only the digit changes.
     target(positive, "U0", direction = 1, rasterId = 4)
-    Thread.sleep(130L)
-    engine.step(0.016f)
+    engine.run(16L, 8)
 
     val uSamples = engine.samples().filter { it.key == "P0" && it.ch == "U" }
     assertTrue(uSamples.size >= 2)
@@ -179,7 +201,7 @@ class FormatGeometryPinTest {
         slot("I0", "0", TokenKind.DIGIT, center = 80f),
       )
 
-    val engine = NumericRollEngine()
+    val engine = engine()
     engine.reset(
       layout = negative,
       text = "-U9",
@@ -207,7 +229,7 @@ class FormatGeometryPinTest {
     target(positive, "U0", direction = 1, rasterId = 4)
     target(negative, "-U9", direction = -1, rasterId = 5)
 
-    Thread.sleep(260L)
+    elapse(260L)
     engine.step(0.016f)
 
     val samples = engine.samples()
@@ -232,7 +254,7 @@ class FormatGeometryPinTest {
         slot("I0", "0", TokenKind.DIGIT, center = 80f),
       )
 
-    val engine = NumericRollEngine()
+    val engine = engine()
     engine.reset(
       layout = negative,
       text = "-U9",
@@ -252,10 +274,11 @@ class FormatGeometryPinTest {
     )
 
     // The sign is the first visual event in this fixture; after the format onset it has committed to
-    // EXIT while the rest of the wave is still in flight.
-    Thread.sleep(130L)
-    engine.step(0.016f)
-    assertEquals(NumericRollEngine.GlyphRole.EXIT, engine.samples().first { it.key == "S" }.role)
+    // leaving and is fading out while the rest of the wave is still in flight.
+    engine.run(10L, 13)
+    val leaving = engine.samples().single { it.key == "S" }
+    assertTrue("the sign should be fading out", leaving.alpha < 0.9f)
+    assertTrue("the sign should be moving away", leaving.offsetY > 0f)
 
     engine.setTarget(
       layout = negative,
@@ -266,10 +289,19 @@ class FormatGeometryPinTest {
       rasterId = 3,
       blurLengthPx = 50f,
     )
-    engine.step(0.016f)
 
-    val sign = engine.samples().first { it.key == "S" && it.ch == "-" }
-    assertEquals(NumericRollEngine.GlyphRole.ENTER, sign.role)
-    assertTrue(sign.blurLengthPx > 0f || sign.offsetY != 0f)
+    // Reversing must bring that same outgoing glyph back, never drop it and spawn a fresh one.
+    var lowest = leaving.alpha
+    repeat(40) {
+      engine.run(10L, 1)
+      val sign = engine.samples().filter { it.key == "S" }
+      assertEquals("the sign must stay on screen through the reversal", 1, sign.size)
+      assertEquals("-", sign.single().ch)
+      assertEquals("the outgoing sign must be revived, not replaced", leaving.renderId, sign.single().renderId)
+      lowest = minOf(lowest, sign.single().alpha)
+    }
+    val returned = engine.samples().single { it.key == "S" }
+    assertTrue("the sign kept fading for a moment before turning back", lowest < leaving.alpha)
+    assertTrue("the sign should be back to nearly full opacity", returned.alpha > 0.9f)
   }
 }

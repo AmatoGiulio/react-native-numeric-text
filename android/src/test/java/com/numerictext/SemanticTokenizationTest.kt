@@ -55,8 +55,8 @@ class SemanticTokenizationTest {
     val slots = keyed(text, ',', '.', spans)
 
     assertUniqueKeys(slots)
-    assertEquals(1, slots.count { it.kind == TokenKind.DECIMAL_SEPARATOR })
-    assertEquals(1, slots.count { it.char == "." && it.kind == TokenKind.OTHER })
+    assertEquals(1, slots.count { it.semanticKind == TokenKind.DECIMAL_SEPARATOR })
+    assertEquals(1, slots.count { it.char == "." && it.semanticKind == TokenKind.OTHER })
     assertEquals(",", slots.single { it.key == "G3:," }.char)
   }
 
@@ -73,8 +73,8 @@ class SemanticTokenizationTest {
     val slots = keyed(text, ',', '.', spans)
 
     assertUniqueKeys(slots)
-    assertEquals(1, slots.count { it.kind == TokenKind.DECIMAL_SEPARATOR })
-    assertEquals(2, slots.count { it.char == "." && it.kind == TokenKind.OTHER })
+    assertEquals(1, slots.count { it.semanticKind == TokenKind.DECIMAL_SEPARATOR })
+    assertEquals(2, slots.count { it.char == "." && it.semanticKind == TokenKind.OTHER })
   }
 
   @Test
@@ -89,7 +89,7 @@ class SemanticTokenizationTest {
     val slots = keyed(text, '.', ',', spans)
 
     assertUniqueKeys(slots)
-    assertEquals(1, slots.count { it.kind == TokenKind.SIGN })
-    assertEquals(1, slots.count { it.char == "-" && it.kind == TokenKind.OTHER })
+    assertEquals(1, slots.count { it.semanticKind == TokenKind.SIGN })
+    assertEquals(1, slots.count { it.char == "-" && it.semanticKind == TokenKind.OTHER })
   }
 }
