@@ -48,8 +48,10 @@ class BackwardsFrameTimeTest {
       blurLengthPx = 50f,
     )
 
-    // Run until the first digit is mid-roll: both "1" and "3" are on screen.
-    repeat(3) { step(engine, 0.016f) }
+    // Run until the first digit is mid-roll: both "1" and "3" are on screen. Its change is due
+    // 75 ms after setTarget (half of WAVE_TOTAL_SECONDS for two changing digits), and step() reads
+    // that against System.nanoTime(), so five 20 ms sleeps are needed to be past it on any machine.
+    repeat(5) { step(engine, 0.016f) }
     val midRoll = snapshot(engine)
     assertTrue("3 should be entering", engine.samples().any { it.key == "I1" && it.ch == "3" })
 
